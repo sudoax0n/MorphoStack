@@ -11,6 +11,7 @@ morphostack doctor
 morphostack init
 morphostack inspect path\to\stack.tif
 morphostack analyze path\to\stack.tif --threshold 100 --out metrics.csv
+morphostack serve
 mst doctor
 ```
 
@@ -44,6 +45,18 @@ To run the current headless analysis pipeline and export per-frame metrics:
 ```
 
 Add `--mesh` to assemble contour masks and include marching-cubes 3D surface area and volume in the CSV.
+
+To start the local backend for the future web UI:
+
+```bash
+.\.venv\Scripts\morphostack serve
+```
+
+Current API endpoints:
+
+- `GET /health`
+- `POST /inspect`
+- `POST /analyze`
 
 ## Architecture Direction
 

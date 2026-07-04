@@ -57,6 +57,9 @@ def build_parser() -> argparse.ArgumentParser:
         default="analysis,api",
         help="Comma-separated optional dependency groups to install. Default: analysis,api.",
     )
+    serve = subparsers.add_parser("serve", help="Run the local FastAPI backend.")
+    serve.add_argument("--host", default="127.0.0.1", help="Bind host. Default: 127.0.0.1.")
+    serve.add_argument("--port", default=8000, type=int, help="Bind port. Default: 8000.")
     inspect = subparsers.add_parser(
         "inspect",
         help="Load an image stack and print basic metadata.",
@@ -106,6 +109,9 @@ def main(argv: list[str] | None = None) -> int:
             voxel_y=args.voxel_y,
             voxel_z=args.voxel_z,
         )
+
+    if args.command == "serve":
+        return run_serve(host=args.host, port=args.port)
 
     if args.command == "analyze":
         return run_analyze(
@@ -258,6 +264,17 @@ def run_analyze(
         print(f"3D surface area: {analysis.mesh.surface_area_um2:g} um^2")
         print(f"3D volume: {analysis.mesh.volume_um3:g} um^3")
     print(f"CSV: {output_path}")
+    return 0
+
+
+def run_serve(*, host: str, port: int) -> int:
+    try:
+        import uvicorn
+    except Exception as exc:
+        print(f"Failed to start API server: uvicorn is required ({exc})")
+        return 1
+
+    uvicorn.run("morphostack.api:app", host=host, port=port)
     return 0
 
 
