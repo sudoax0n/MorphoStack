@@ -58,6 +58,14 @@ Current API endpoints:
 - `POST /inspect`
 - `POST /analyze`
 
+To start the browser UI during development:
+
+```bash
+cd apps\web
+npm install
+npm run dev
+```
+
 ## Architecture Direction
 
 - Python core package for scientific analysis.

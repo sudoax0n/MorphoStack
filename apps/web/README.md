@@ -1,6 +1,21 @@
-# MorphoStack Web App
+# MorphoStack Web
 
-Reserved for the future Vite frontend.
+Local browser UI for the MorphoStack FastAPI backend.
 
-The first implementation milestone is the Python CLI and diagnostics layer.
+## Development
+
+Start the backend from the repository root:
+
+```bash
+.\.venv\Scripts\morphostack serve
+```
+
+Start the frontend from this folder:
+
+```bash
+npm install
+npm run dev
+```
+
+Vite proxies `/api/*` requests to `http://127.0.0.1:8000`.
 
