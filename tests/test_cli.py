@@ -41,6 +41,50 @@ def test_init_can_skip_dependency_install(monkeypatch, capsys):
     assert "Skipped dependency installation" in out
 
 
+def test_project_init_writes_settings_file(tmp_path, capsys):
+    project_path = tmp_path / "morphostack.project.json"
+
+    result = main(
+        [
+            "project",
+            "init",
+            "--out",
+            str(project_path),
+            "--profile",
+            "rbc",
+            "--threshold",
+            "100",
+            "--voxel-x",
+            "0.1",
+            "--voxel-y",
+            "0.2",
+            "--voxel-z",
+            "0.5",
+            "--roi",
+            "1",
+            "7",
+            "2",
+            "8",
+            "--fallback-contours",
+            "--sweep-start",
+            "50",
+            "--sweep-stop",
+            "150",
+            "--sweep-step",
+            "25",
+        ]
+    )
+
+    assert result == 0
+    out = capsys.readouterr().out
+    assert "MorphoStack Project Created" in out
+    payload = json.loads(project_path.read_text(encoding="utf-8"))
+    assert payload["profile"] == "rbc"
+    assert payload["threshold"] == 100
+    assert payload["prefer_opencv"] is False
+    assert payload["sweep"] == {"start": 50, "stop": 150, "step": 25}
+
+
 def test_dev_check_reports_ready(monkeypatch, capsys):
     monkeypatch.setattr(cli_main_module, "dev_prerequisite_issues", lambda _: [])
 
@@ -89,6 +133,12 @@ def test_analyze_requires_complete_voxel_override(capsys):
     assert main(["analyze", "sample.tif", "--threshold", "100", "--out", "out.csv", "--voxel-x", "1.0"]) == 2
     out = capsys.readouterr().out
     assert "requires --voxel-x, --voxel-y, and --voxel-z" in out
+
+
+def test_analyze_requires_threshold_without_project(capsys):
+    assert main(["analyze", "sample.tif", "--out", "out.csv"]) == 2
+    out = capsys.readouterr().out
+    assert "threshold is required" in out
 
 
 def test_threshold_requires_complete_voxel_override(capsys):
@@ -178,6 +228,37 @@ def test_sweep_writes_summary_from_synthetic_tiff(tmp_path, capsys):
     assert "250.0,vesicle,2,0,0.0" in csv_text
 
 
+def test_sweep_uses_project_defaults_from_synthetic_tiff(tmp_path, capsys):
+    tifffile = pytest.importorskip("tifffile")
+    stack = np.zeros((2, 8, 8), dtype=np.uint8)
+    stack[:, 2:5, 1:4] = 200
+    input_path = tmp_path / "stack.tif"
+    output_path = tmp_path / "sweep.csv"
+    project_path = tmp_path / "morphostack.project.json"
+    tifffile.imwrite(input_path, stack, photometric="minisblack")
+    project_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "profile": "rbc",
+                "voxel_size": {"x_um": 1.0, "y_um": 1.0, "z_um": 1.0},
+                "prefer_opencv": False,
+                "sweep": {"start": 50, "stop": 250, "step": 100},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = main(["sweep", str(input_path), "--out", str(output_path), "--project", str(project_path)])
+
+    assert result == 0
+    out = capsys.readouterr().out
+    assert "Profile: rbc" in out
+    assert "Thresholds: 3" in out
+    csv_text = output_path.read_text(encoding="utf-8")
+    assert "50.0,rbc,2,2,1.0" in csv_text
+
+
 def test_analyze_writes_csv_from_synthetic_tiff(tmp_path, capsys):
     tifffile = pytest.importorskip("tifffile")
     stack = np.zeros((2, 8, 8), dtype=np.uint8)
@@ -222,6 +303,40 @@ def test_analyze_writes_csv_from_synthetic_tiff(tmp_path, capsys):
     csv_text = output_path.read_text(encoding="utf-8")
     assert "frame_index,threshold,profile,method,has_contour" in csv_text
     assert "0,100.0,vesicle,fallback,True" in csv_text
+
+
+def test_analyze_uses_project_defaults_from_synthetic_tiff(tmp_path, capsys):
+    tifffile = pytest.importorskip("tifffile")
+    stack = np.zeros((2, 8, 8), dtype=np.uint8)
+    stack[:, 2:5, 1:4] = 200
+    input_path = tmp_path / "stack.tif"
+    output_path = tmp_path / "metrics.csv"
+    project_path = tmp_path / "morphostack.project.json"
+    tifffile.imwrite(input_path, stack, photometric="minisblack")
+    project_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "profile": "rbc",
+                "threshold": 100,
+                "voxel_size": {"x_um": 1.0, "y_um": 1.0, "z_um": 1.0},
+                "prefer_opencv": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = main(["analyze", str(input_path), "--out", str(output_path), "--project", str(project_path)])
+
+    assert result == 0
+    out = capsys.readouterr().out
+    assert "Profile: rbc" in out
+    assert "Voxel source: override" in out
+    manifest = json.loads(output_path.with_suffix(".csv.manifest.json").read_text(encoding="utf-8"))
+    assert manifest["profile"] == "rbc"
+    assert manifest["threshold"] == 100
+    csv_text = output_path.read_text(encoding="utf-8")
+    assert "0,100.0,rbc,fallback,True" in csv_text
 
 
 def test_analyze_can_write_mesh_summary_from_synthetic_tiff(tmp_path, capsys):

@@ -16,7 +16,9 @@ from morphostack import __version__
 from morphostack.cli.system_info import collect_diagnostics, format_diagnostics
 from morphostack.core import (
     PROFILE_CHOICES,
+    ProjectSettings,
     RectROI,
+    SweepSettings,
     VoxelSize,
     analyze_stack,
     analysis_manifest,
@@ -29,12 +31,14 @@ from morphostack.core import (
     compare_metric_csv,
     format_validation_report,
     load_image_stack,
+    load_project_settings,
     suggest_threshold,
     threshold_sweep,
     threshold_values,
     write_analysis_csv,
     write_analysis_manifest_json,
     write_batch_summary_csv,
+    write_project_settings,
     write_threshold_sweep_csv,
 )
 
@@ -84,6 +88,30 @@ def build_parser() -> argparse.ArgumentParser:
         default="analysis,api",
         help="Comma-separated optional dependency groups to install. Default: analysis,api.",
     )
+    project = subparsers.add_parser("project", help="Create and inspect MorphoStack project settings.")
+    project_subparsers = project.add_subparsers(dest="project_command")
+    project_init = project_subparsers.add_parser("init", help="Write a reusable project settings JSON file.")
+    project_init.add_argument("--out", default="morphostack.project.json", help="Project settings output path.")
+    project_init.add_argument(
+        "--profile",
+        choices=PROFILE_CHOICES,
+        default="vesicle",
+        help="Default analysis profile. Default: vesicle.",
+    )
+    project_init.add_argument("--threshold", type=float, help="Default analysis threshold.")
+    project_init.add_argument("--voxel-x", type=float, help="Default X voxel size in micrometers.")
+    project_init.add_argument("--voxel-y", type=float, help="Default Y voxel size in micrometers.")
+    project_init.add_argument("--voxel-z", type=float, help="Default Z voxel size in micrometers.")
+    project_init.add_argument("--roi", nargs=4, type=int, metavar=("XMIN", "XMAX", "YMIN", "YMAX"))
+    project_init.add_argument("--mesh", action="store_true", help="Default to 3D mesh measurements.")
+    project_init.add_argument(
+        "--fallback-contours",
+        action="store_true",
+        help="Default to dependency-light fallback contours.",
+    )
+    project_init.add_argument("--sweep-start", type=float, help="Default threshold sweep start.")
+    project_init.add_argument("--sweep-stop", type=float, help="Default threshold sweep stop.")
+    project_init.add_argument("--sweep-step", type=float, help="Default threshold sweep step.")
     serve = subparsers.add_parser("serve", help="Run the local FastAPI backend.")
     serve.add_argument("--host", default="127.0.0.1", help="Bind host. Default: 127.0.0.1.")
     serve.add_argument("--port", default=8000, type=int, help="Bind port. Default: 8000.")
@@ -101,6 +129,7 @@ def build_parser() -> argparse.ArgumentParser:
     inspect.add_argument("--voxel-x", type=float, help="Override X voxel size in micrometers.")
     inspect.add_argument("--voxel-y", type=float, help="Override Y voxel size in micrometers.")
     inspect.add_argument("--voxel-z", type=float, help="Override Z voxel size in micrometers.")
+    inspect.add_argument("--project", help="Project settings JSON path.")
     threshold = subparsers.add_parser(
         "threshold",
         help="Suggest an intensity threshold for an image stack.",
@@ -116,46 +145,54 @@ def build_parser() -> argparse.ArgumentParser:
     threshold.add_argument("--voxel-y", type=float, help="Override Y voxel size in micrometers.")
     threshold.add_argument("--voxel-z", type=float, help="Override Z voxel size in micrometers.")
     threshold.add_argument("--roi", nargs=4, type=int, metavar=("XMIN", "XMAX", "YMIN", "YMAX"))
+    threshold.add_argument("--project", help="Project settings JSON path.")
     sweep = subparsers.add_parser(
         "sweep",
         help="Run the analysis pipeline across a range of thresholds and write summary CSV rows.",
     )
     sweep.add_argument("path", help="Path to a .tif, .tiff, or .czi file.")
-    sweep.add_argument("--start", type=float, required=True, help="First threshold to analyze.")
-    sweep.add_argument("--stop", type=float, required=True, help="Last threshold to analyze.")
-    sweep.add_argument("--step", type=float, required=True, help="Threshold increment.")
+    sweep.add_argument("--start", type=float, help="First threshold to analyze.")
+    sweep.add_argument("--stop", type=float, help="Last threshold to analyze.")
+    sweep.add_argument("--step", type=float, help="Threshold increment.")
     sweep.add_argument("--out", required=True, help="Sweep summary CSV output path.")
     sweep.add_argument(
         "--profile",
         choices=PROFILE_CHOICES,
-        default="vesicle",
-        help="Analysis profile. Default: vesicle.",
+        default=None,
+        help="Analysis profile. Default: project profile or vesicle.",
     )
     sweep.add_argument("--voxel-x", type=float, help="Override X voxel size in micrometers.")
     sweep.add_argument("--voxel-y", type=float, help="Override Y voxel size in micrometers.")
     sweep.add_argument("--voxel-z", type=float, help="Override Z voxel size in micrometers.")
     sweep.add_argument("--roi", nargs=4, type=int, metavar=("XMIN", "XMAX", "YMIN", "YMAX"))
+    sweep.add_argument("--project", help="Project settings JSON path.")
     sweep.add_argument(
         "--mesh",
+        dest="include_mesh",
         action="store_true",
+        default=None,
         help="Compute 3D surface area/volume for each threshold.",
     )
+    sweep.add_argument("--no-mesh", dest="include_mesh", action="store_false", help="Do not compute 3D mesh measurements.")
     sweep.add_argument(
         "--fallback-contours",
+        dest="fallback_contours",
         action="store_true",
+        default=None,
         help="Use dependency-light rectangular fallback contours instead of OpenCV contours.",
     )
+    sweep.add_argument("--opencv-contours", dest="fallback_contours", action="store_false", help="Use OpenCV contours when available.")
     analyze = subparsers.add_parser(
         "analyze",
         help="Run headless threshold analysis on an image stack and write CSV metrics.",
     )
     analyze.add_argument("path", help="Path to a .tif, .tiff, or .czi file.")
-    analyze.add_argument("--threshold", type=float, required=True, help="Global intensity threshold.")
+    analyze.add_argument("--threshold", type=float, help="Global intensity threshold.")
     analyze.add_argument(
         "--profile",
         choices=PROFILE_CHOICES,
-        default="vesicle",
-        help="Analysis profile. Default: vesicle.",
+        default=None,
+        help="Analysis profile. Default: project profile or vesicle.",
     )
     analyze.add_argument("--out", required=True, help="CSV output path.")
     analyze.add_argument("--voxel-x", type=float, help="Override X voxel size in micrometers.")
@@ -164,45 +201,59 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.add_argument("--roi", nargs=4, type=int, metavar=("XMIN", "XMAX", "YMIN", "YMAX"))
     analyze.add_argument("--manifest", help="Manifest JSON output path. Default: <csv>.manifest.json.")
     analyze.add_argument("--no-manifest", action="store_true", help="Do not write a manifest JSON sidecar.")
+    analyze.add_argument("--project", help="Project settings JSON path.")
     analyze.add_argument(
         "--mesh",
+        dest="include_mesh",
         action="store_true",
+        default=None,
         help="Assemble contour masks and compute 3D surface area/volume.",
     )
+    analyze.add_argument("--no-mesh", dest="include_mesh", action="store_false", help="Do not compute 3D mesh measurements.")
     analyze.add_argument(
         "--fallback-contours",
+        dest="fallback_contours",
         action="store_true",
+        default=None,
         help="Use dependency-light rectangular fallback contours instead of OpenCV contours.",
     )
+    analyze.add_argument("--opencv-contours", dest="fallback_contours", action="store_false", help="Use OpenCV contours when available.")
     batch = subparsers.add_parser(
         "batch",
         help="Analyze every supported stack in a directory and write one summary CSV.",
     )
     batch.add_argument("directory", help="Directory containing .tif, .tiff, or .czi stacks.")
-    batch.add_argument("--threshold", type=float, required=True, help="Global intensity threshold.")
+    batch.add_argument("--threshold", type=float, help="Global intensity threshold.")
     batch.add_argument("--out", required=True, help="Batch summary CSV output path.")
     batch.add_argument("--recursive", action="store_true", help="Search subdirectories too.")
     batch.add_argument("--metrics-dir", help="Optional directory for per-stack frame CSV files.")
     batch.add_argument(
         "--profile",
         choices=PROFILE_CHOICES,
-        default="vesicle",
-        help="Analysis profile. Default: vesicle.",
+        default=None,
+        help="Analysis profile. Default: project profile or vesicle.",
     )
     batch.add_argument("--voxel-x", type=float, help="Override X voxel size in micrometers.")
     batch.add_argument("--voxel-y", type=float, help="Override Y voxel size in micrometers.")
     batch.add_argument("--voxel-z", type=float, help="Override Z voxel size in micrometers.")
     batch.add_argument("--roi", nargs=4, type=int, metavar=("XMIN", "XMAX", "YMIN", "YMAX"))
+    batch.add_argument("--project", help="Project settings JSON path.")
     batch.add_argument(
         "--mesh",
+        dest="include_mesh",
         action="store_true",
+        default=None,
         help="Compute 3D surface area/volume for each stack.",
     )
+    batch.add_argument("--no-mesh", dest="include_mesh", action="store_false", help="Do not compute 3D mesh measurements.")
     batch.add_argument(
         "--fallback-contours",
+        dest="fallback_contours",
         action="store_true",
+        default=None,
         help="Use dependency-light rectangular fallback contours instead of OpenCV contours.",
     )
+    batch.add_argument("--opencv-contours", dest="fallback_contours", action="store_false", help="Use OpenCV contours when available.")
     validate = subparsers.add_parser(
         "validate",
         help="Compare two MorphoStack CSV exports within a numeric tolerance.",
@@ -238,12 +289,32 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "init":
         return run_init(yes=args.yes, extras=args.extras)
 
+    if args.command == "project":
+        if args.project_command == "init":
+            return run_project_init(
+                out=args.out,
+                profile=args.profile,
+                threshold=args.threshold,
+                voxel_x=args.voxel_x,
+                voxel_y=args.voxel_y,
+                voxel_z=args.voxel_z,
+                roi=args.roi,
+                include_mesh=args.mesh,
+                prefer_opencv=not args.fallback_contours,
+                sweep_start=args.sweep_start,
+                sweep_stop=args.sweep_stop,
+                sweep_step=args.sweep_step,
+            )
+        print("Specify a project command, for example: morphostack project init")
+        return 2
+
     if args.command == "inspect":
         return run_inspect(
             path=args.path,
             voxel_x=args.voxel_x,
             voxel_y=args.voxel_y,
             voxel_z=args.voxel_z,
+            project=args.project,
         )
 
     if args.command == "serve":
@@ -257,6 +328,7 @@ def main(argv: list[str] | None = None) -> int:
             voxel_y=args.voxel_y,
             voxel_z=args.voxel_z,
             roi=args.roi,
+            project=args.project,
         )
 
     if args.command == "dev":
@@ -280,8 +352,9 @@ def main(argv: list[str] | None = None) -> int:
             roi=args.roi,
             manifest=args.manifest,
             write_manifest=not args.no_manifest,
-            prefer_opencv=not args.fallback_contours,
-            include_mesh=args.mesh,
+            prefer_opencv=prefer_opencv_from_flag(args.fallback_contours),
+            include_mesh=args.include_mesh,
+            project=args.project,
         )
 
     if args.command == "sweep":
@@ -296,8 +369,9 @@ def main(argv: list[str] | None = None) -> int:
             voxel_y=args.voxel_y,
             voxel_z=args.voxel_z,
             roi=args.roi,
-            prefer_opencv=not args.fallback_contours,
-            include_mesh=args.mesh,
+            prefer_opencv=prefer_opencv_from_flag(args.fallback_contours),
+            include_mesh=args.include_mesh,
+            project=args.project,
         )
 
     if args.command == "batch":
@@ -312,8 +386,9 @@ def main(argv: list[str] | None = None) -> int:
             voxel_y=args.voxel_y,
             voxel_z=args.voxel_z,
             roi=args.roi,
-            prefer_opencv=not args.fallback_contours,
-            include_mesh=args.mesh,
+            prefer_opencv=prefer_opencv_from_flag(args.fallback_contours),
+            include_mesh=args.include_mesh,
+            project=args.project,
         )
 
     if args.command == "validate":
@@ -388,14 +463,16 @@ def run_inspect(
     voxel_x: float | None = None,
     voxel_y: float | None = None,
     voxel_z: float | None = None,
+    project: str | None = None,
 ) -> int:
-    if any(value is not None for value in (voxel_x, voxel_y, voxel_z)):
-        if None in (voxel_x, voxel_y, voxel_z):
-            print("Voxel override requires --voxel-x, --voxel-y, and --voxel-z together.")
-            return 2
-        voxel_override = VoxelSize(voxel_x, voxel_y, voxel_z)
-    else:
-        voxel_override = None
+    project_settings = load_project_for_command(project)
+    if isinstance(project_settings, int):
+        return project_settings
+    voxel_override_result = resolve_voxel_override(project_settings, voxel_x, voxel_y, voxel_z)
+    if voxel_override_result == "partial":
+        print("Voxel override requires --voxel-x, --voxel-y, and --voxel-z together.")
+        return 2
+    voxel_override = voxel_override_result
 
     try:
         stack = load_image_stack(path, voxel_override=voxel_override)
@@ -418,39 +495,100 @@ def run_inspect(
     return 0
 
 
+def run_project_init(
+    *,
+    out: str,
+    profile: str,
+    threshold: float | None = None,
+    voxel_x: float | None = None,
+    voxel_y: float | None = None,
+    voxel_z: float | None = None,
+    roi: list[int] | None = None,
+    include_mesh: bool = False,
+    prefer_opencv: bool = True,
+    sweep_start: float | None = None,
+    sweep_stop: float | None = None,
+    sweep_step: float | None = None,
+) -> int:
+    voxel_override_result = build_voxel_override(voxel_x, voxel_y, voxel_z)
+    if voxel_override_result == "partial":
+        print("Voxel override requires --voxel-x, --voxel-y, and --voxel-z together.")
+        return 2
+
+    sweep_values = (sweep_start, sweep_stop, sweep_step)
+    if any(value is not None for value in sweep_values) and any(value is None for value in sweep_values):
+        print("Sweep defaults require --sweep-start, --sweep-stop, and --sweep-step together.")
+        return 2
+
+    try:
+        settings = ProjectSettings(
+            profile=profile,
+            threshold=threshold,
+            voxel_size=voxel_override_result if isinstance(voxel_override_result, VoxelSize) else None,
+            roi=RectROI(*roi) if roi is not None else None,
+            include_mesh=include_mesh,
+            prefer_opencv=prefer_opencv,
+            sweep=SweepSettings(start=sweep_start, stop=sweep_stop, step=sweep_step),
+        )
+        output_path = Path(out)
+        write_project_settings(settings, output_path)
+    except Exception as exc:
+        print(f"Failed to write project settings: {exc}")
+        return 1
+
+    print("MorphoStack Project Created")
+    print("===========================")
+    print(f"Project: {output_path}")
+    print(f"Profile: {profile}")
+    if threshold is not None:
+        print(f"Threshold: {threshold:g}")
+    return 0
+
+
 def run_analyze(
     *,
     path: str,
-    threshold: float,
+    threshold: float | None,
     out: str,
-    profile: str = "vesicle",
+    profile: str | None = None,
     voxel_x: float | None = None,
     voxel_y: float | None = None,
     voxel_z: float | None = None,
     roi: list[int] | None = None,
     manifest: str | None = None,
     write_manifest: bool = True,
-    prefer_opencv: bool = True,
-    include_mesh: bool = False,
+    prefer_opencv: bool | None = None,
+    include_mesh: bool | None = None,
+    project: str | None = None,
 ) -> int:
-    voxel_override_result = build_voxel_override(voxel_x, voxel_y, voxel_z)
+    project_settings = load_project_for_command(project)
+    if isinstance(project_settings, int):
+        return project_settings
+    resolved_threshold = resolve_threshold(project_settings, threshold)
+    if resolved_threshold is None:
+        print("Analysis threshold is required. Pass --threshold or set threshold in --project.")
+        return 2
+    resolved_profile = resolve_profile(project_settings, profile)
+    resolved_mesh = resolve_bool(include_mesh, project_settings.include_mesh, False)
+    resolved_prefer_opencv = resolve_bool(prefer_opencv, project_settings.prefer_opencv, True)
+    voxel_override_result = resolve_voxel_override(project_settings, voxel_x, voxel_y, voxel_z)
     if voxel_override_result == "partial":
         print("Voxel override requires --voxel-x, --voxel-y, and --voxel-z together.")
         return 2
     voxel_override = voxel_override_result
 
-    rect_roi = RectROI(*roi) if roi is not None else None
+    rect_roi = resolve_roi(project_settings, roi)
 
     try:
         stack = load_image_stack(path, voxel_override=voxel_override)
         analysis = analyze_stack(
             stack.grayscale,
-            thresholds=threshold,
+            thresholds=resolved_threshold,
             voxel_size=stack.voxel_size,
             roi=rect_roi,
-            profile=profile,
-            prefer_opencv=prefer_opencv,
-            include_mesh=include_mesh,
+            profile=resolved_profile,
+            prefer_opencv=resolved_prefer_opencv,
+            include_mesh=resolved_mesh,
         )
         warnings = analysis_run_warnings(analysis, voxel_source=stack.voxel_source)
         summary = analysis_summary(analysis)
@@ -465,10 +603,10 @@ def run_analyze(
                 analysis_manifest(
                     analysis,
                     source_path=str(stack.source_path),
-                    threshold=threshold,
+                    threshold=resolved_threshold,
                     roi=roi_to_payload(rect_roi),
-                    include_mesh=include_mesh,
-                    prefer_opencv=prefer_opencv,
+                    include_mesh=resolved_mesh,
+                    prefer_opencv=resolved_prefer_opencv,
                     voxel_source=stack.voxel_source,
                 ),
                 manifest_path,
@@ -513,13 +651,17 @@ def run_threshold(
     voxel_y: float | None = None,
     voxel_z: float | None = None,
     roi: list[int] | None = None,
+    project: str | None = None,
 ) -> int:
-    voxel_override_result = build_voxel_override(voxel_x, voxel_y, voxel_z)
+    project_settings = load_project_for_command(project)
+    if isinstance(project_settings, int):
+        return project_settings
+    voxel_override_result = resolve_voxel_override(project_settings, voxel_x, voxel_y, voxel_z)
     if voxel_override_result == "partial":
         print("Voxel override requires --voxel-x, --voxel-y, and --voxel-z together.")
         return 2
     voxel_override = voxel_override_result
-    rect_roi = RectROI(*roi) if roi is not None else None
+    rect_roi = resolve_roi(project_settings, roi)
 
     try:
         stack = load_image_stack(path, voxel_override=voxel_override)
@@ -548,24 +690,37 @@ def run_threshold(
 def run_sweep(
     *,
     path: str,
-    start: float,
-    stop: float,
-    step: float,
+    start: float | None,
+    stop: float | None,
+    step: float | None,
     out: str,
-    profile: str = "vesicle",
+    profile: str | None = None,
     voxel_x: float | None = None,
     voxel_y: float | None = None,
     voxel_z: float | None = None,
     roi: list[int] | None = None,
-    prefer_opencv: bool = True,
-    include_mesh: bool = False,
+    prefer_opencv: bool | None = None,
+    include_mesh: bool | None = None,
+    project: str | None = None,
 ) -> int:
-    voxel_override_result = build_voxel_override(voxel_x, voxel_y, voxel_z)
+    project_settings = load_project_for_command(project)
+    if isinstance(project_settings, int):
+        return project_settings
+    start = start if start is not None else project_settings.sweep.start
+    stop = stop if stop is not None else project_settings.sweep.stop
+    step = step if step is not None else project_settings.sweep.step
+    if None in (start, stop, step):
+        print("Sweep requires --start, --stop, and --step or sweep defaults in --project.")
+        return 2
+    resolved_profile = resolve_profile(project_settings, profile)
+    resolved_mesh = resolve_bool(include_mesh, project_settings.include_mesh, False)
+    resolved_prefer_opencv = resolve_bool(prefer_opencv, project_settings.prefer_opencv, True)
+    voxel_override_result = resolve_voxel_override(project_settings, voxel_x, voxel_y, voxel_z)
     if voxel_override_result == "partial":
         print("Voxel override requires --voxel-x, --voxel-y, and --voxel-z together.")
         return 2
     voxel_override = voxel_override_result
-    rect_roi = RectROI(*roi) if roi is not None else None
+    rect_roi = resolve_roi(project_settings, roi)
 
     try:
         thresholds = threshold_values(start, stop, step)
@@ -575,9 +730,9 @@ def run_sweep(
             thresholds=thresholds,
             voxel_size=stack.voxel_size,
             roi=rect_roi,
-            profile=profile,
-            prefer_opencv=prefer_opencv,
-            include_mesh=include_mesh,
+            profile=resolved_profile,
+            prefer_opencv=resolved_prefer_opencv,
+            include_mesh=resolved_mesh,
             voxel_source=stack.voxel_source,
         )
         output_path = Path(out)
@@ -591,7 +746,7 @@ def run_sweep(
     print("MorphoStack Threshold Sweep Complete")
     print("====================================")
     print(f"Source: {stack.source_path}")
-    print(f"Profile: {profile}")
+    print(f"Profile: {resolved_profile}")
     print(f"Thresholds: {len(results)}")
     print(f"Voxel source: {stack.voxel_source}")
     if best is not None:
@@ -605,24 +760,35 @@ def run_sweep(
 def run_batch(
     *,
     directory: str,
-    threshold: float,
+    threshold: float | None,
     out: str,
     recursive: bool = False,
     metrics_dir: str | None = None,
-    profile: str = "vesicle",
+    profile: str | None = None,
     voxel_x: float | None = None,
     voxel_y: float | None = None,
     voxel_z: float | None = None,
     roi: list[int] | None = None,
-    prefer_opencv: bool = True,
-    include_mesh: bool = False,
+    prefer_opencv: bool | None = None,
+    include_mesh: bool | None = None,
+    project: str | None = None,
 ) -> int:
-    voxel_override_result = build_voxel_override(voxel_x, voxel_y, voxel_z)
+    project_settings = load_project_for_command(project)
+    if isinstance(project_settings, int):
+        return project_settings
+    resolved_threshold = resolve_threshold(project_settings, threshold)
+    if resolved_threshold is None:
+        print("Batch threshold is required. Pass --threshold or set threshold in --project.")
+        return 2
+    resolved_profile = resolve_profile(project_settings, profile)
+    resolved_mesh = resolve_bool(include_mesh, project_settings.include_mesh, False)
+    resolved_prefer_opencv = resolve_bool(prefer_opencv, project_settings.prefer_opencv, True)
+    voxel_override_result = resolve_voxel_override(project_settings, voxel_x, voxel_y, voxel_z)
     if voxel_override_result == "partial":
         print("Voxel override requires --voxel-x, --voxel-y, and --voxel-z together.")
         return 2
     voxel_override = voxel_override_result
-    rect_roi = RectROI(*roi) if roi is not None else None
+    rect_roi = resolve_roi(project_settings, roi)
     input_dir = Path(directory)
     if not input_dir.is_dir():
         print(f"Batch directory does not exist: {input_dir}")
@@ -646,18 +812,18 @@ def run_batch(
             stack = load_image_stack(stack_path, voxel_override=voxel_override)
             analysis = analyze_stack(
                 stack.grayscale,
-                thresholds=threshold,
+                thresholds=resolved_threshold,
                 voxel_size=stack.voxel_size,
                 roi=rect_roi,
-                profile=profile,
-                prefer_opencv=prefer_opencv,
-                include_mesh=include_mesh,
+                profile=resolved_profile,
+                prefer_opencv=resolved_prefer_opencv,
+                include_mesh=resolved_mesh,
             )
             rows.append(
                 analysis_summary_row(
                     analysis,
                     source_path=str(stack.source_path),
-                    threshold=threshold,
+                    threshold=resolved_threshold,
                     voxel_source=stack.voxel_source,
                 )
             )
@@ -842,6 +1008,57 @@ def stop_processes(processes: list[subprocess.Popen[bytes]]) -> None:
                 process.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 process.kill()
+
+
+def load_project_for_command(project: str | None) -> ProjectSettings | int:
+    if project is None:
+        return ProjectSettings()
+    try:
+        return load_project_settings(project)
+    except Exception as exc:
+        print(f"Failed to load project settings: {exc}")
+        return 1
+
+
+def resolve_threshold(settings: ProjectSettings, threshold: float | None) -> float | None:
+    return threshold if threshold is not None else settings.threshold
+
+
+def resolve_profile(settings: ProjectSettings, profile: str | None) -> str:
+    return profile or settings.profile or "vesicle"
+
+
+def resolve_bool(command_value: bool | None, project_value: bool | None, default: bool) -> bool:
+    if command_value is not None:
+        return command_value
+    if project_value is not None:
+        return project_value
+    return default
+
+
+def prefer_opencv_from_flag(fallback_contours: bool | None) -> bool | None:
+    if fallback_contours is None:
+        return None
+    return not fallback_contours
+
+
+def resolve_roi(settings: ProjectSettings, roi: list[int] | None) -> RectROI | None:
+    if roi is not None:
+        return RectROI(*roi)
+    return settings.roi
+
+
+def resolve_voxel_override(
+    settings: ProjectSettings,
+    voxel_x: float | None,
+    voxel_y: float | None,
+    voxel_z: float | None,
+) -> VoxelSize | None | str:
+    command_value = build_voxel_override(voxel_x, voxel_y, voxel_z)
+    if command_value is not None:
+        return command_value
+    return settings.voxel_size
+
 
 def build_voxel_override(
     voxel_x: float | None,

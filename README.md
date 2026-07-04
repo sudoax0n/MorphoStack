@@ -9,6 +9,7 @@ The first milestone is intentionally small: prove the project structure, command
 ```bash
 morphostack doctor
 morphostack init
+morphostack project init --out morphostack.project.json
 morphostack inspect path\to\stack.tif
 morphostack threshold path\to\stack.tif
 morphostack sweep path\to\stack.tif --start 50 --stop 200 --step 10 --out sweep.csv
@@ -44,6 +45,16 @@ To inspect a stack after installing analysis dependencies:
 .\.venv\Scripts\morphostack inspect path\to\stack.tif --voxel-x 0.1 --voxel-y 0.1 --voxel-z 0.5
 ```
 
+To create a reusable project settings file for a dataset or experiment:
+
+```bash
+.\.venv\Scripts\morphostack project init --out morphostack.project.json --profile rbc --threshold 100 --voxel-x 0.1 --voxel-y 0.1 --voxel-z 0.5 --fallback-contours --sweep-start 50 --sweep-stop 200 --sweep-step 10
+```
+
+The project file is plain JSON. `analyze`, `batch`, `threshold`, `sweep`, and
+`inspect` can read it with `--project morphostack.project.json`. Explicit
+command-line flags override project defaults.
+
 To suggest a starting threshold before analysis:
 
 ```bash
@@ -63,6 +74,13 @@ To run the current headless analysis pipeline and export per-frame metrics:
 
 ```bash
 .\.venv\Scripts\morphostack analyze path\to\stack.tif --threshold 100 --out metrics.csv --voxel-x 0.1 --voxel-y 0.1 --voxel-z 0.5
+```
+
+With a project file, the same command can reuse stored threshold, profile,
+voxel size, ROI, mesh, and contour settings:
+
+```bash
+.\.venv\Scripts\morphostack analyze path\to\stack.tif --out metrics.csv --project morphostack.project.json
 ```
 
 Use `--profile vesicle` or `--profile rbc` to record the biological analysis
@@ -173,6 +191,7 @@ No GitHub remote is configured yet.
 - Load files non-interactively; voxel sizes must come from metadata, defaults, or explicit caller overrides.
 - Store physical spacing as micrometers through `VoxelSize`.
 - Record whether voxel spacing came from metadata, a user override, or defaults.
+- Use project settings JSON when a dataset needs reproducible CLI defaults.
 - Use `vx * vy` for areas and anisotropic segment lengths for perimeters.
 - Keep shape descriptors unit-consistent; solidity must compare physical area
   with physical convex-hull area.
