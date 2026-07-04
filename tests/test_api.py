@@ -31,6 +31,10 @@ def stack_upload_bytes() -> bytes:
     return buffer.getvalue()
 
 
+def metric_csv_bytes(area_um2: float) -> bytes:
+    return f"frame_index,area_um2\n0,{area_um2}\n".encode("utf-8")
+
+
 def test_health(client):
     response = client.get("/health")
 
@@ -256,6 +260,41 @@ def test_upload_batch_analyze_returns_summary_rows(client):
     assert payload["rows"][0]["voxel_source"] == "override"
     assert payload["rows"][0]["area_um2_mean"] == 9.0
     assert payload["rows"][0]["deformation_index_mean"] == 0.0
+
+
+def test_upload_validate_csv_passes_matching_metrics(client):
+    response = client.post(
+        "/upload/validate",
+        files={
+            "expected_file": ("expected.csv", metric_csv_bytes(9.0), "text/csv"),
+            "actual_file": ("actual.csv", metric_csv_bytes(9.000001), "text/csv"),
+        },
+        data={"tolerance": "0.00001"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["passed"] is True
+    assert payload["compared_rows"] == 1
+    assert payload["compared_cells"] == 1
+    assert payload["differences"] == []
+
+
+def test_upload_validate_csv_reports_differences(client):
+    response = client.post(
+        "/upload/validate",
+        files={
+            "expected_file": ("expected.csv", metric_csv_bytes(9.0), "text/csv"),
+            "actual_file": ("actual.csv", metric_csv_bytes(10.0), "text/csv"),
+        },
+        data={"columns": "area_um2"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["passed"] is False
+    assert payload["differences"][0]["column"] == "area_um2"
+    assert payload["differences"][0]["delta"] == 1.0
 
 
 def test_upload_analyze_partial_roi_returns_400(client):

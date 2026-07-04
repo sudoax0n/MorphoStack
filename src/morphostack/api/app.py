@@ -22,6 +22,7 @@ from morphostack.core import (
     analysis_run_warnings,
     analysis_summary,
     analysis_summary_row,
+    compare_metric_csv,
     failed_analysis_summary_row,
     load_image_stack,
     suggest_threshold,
@@ -361,6 +362,36 @@ def create_app() -> FastAPI:
             "rows": rows,
         }
 
+    @app.post("/upload/validate")
+    def upload_validate_csv(
+        expected_file: Annotated[UploadFile, File()],
+        actual_file: Annotated[UploadFile, File()],
+        tolerance: Annotated[float, Form()] = 1e-6,
+        columns: Annotated[str | None, Form()] = None,
+        key_column: Annotated[str, Form()] = "frame_index",
+    ) -> dict[str, object]:
+        expected_path = save_upload_to_temp(expected_file)
+        actual_path = save_upload_to_temp(actual_file)
+        try:
+            report = compare_metric_csv(
+                expected_path,
+                actual_path,
+                tolerance=tolerance,
+                columns=parse_columns(columns),
+                key_column=key_column,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        finally:
+            expected_path.unlink(missing_ok=True)
+            actual_path.unlink(missing_ok=True)
+
+        return validation_payload(
+            report,
+            expected_name=expected_file.filename or "expected.csv",
+            actual_name=actual_file.filename or "actual.csv",
+        )
+
     @app.post("/upload/threshold")
     def upload_threshold(
         file: Annotated[UploadFile, File()],
@@ -471,6 +502,33 @@ def preview_payload(source_path: str, preview_image: PreviewImage) -> dict[str, 
 
 def threshold_payload(source_path: str, threshold: float, method: str) -> dict[str, object]:
     return {"source_path": source_path, "threshold": threshold, "method": method}
+
+
+def validation_payload(report, *, expected_name: str, actual_name: str) -> dict[str, object]:
+    return {
+        "passed": report.passed,
+        "expected_path": expected_name,
+        "actual_path": actual_name,
+        "tolerance": report.tolerance,
+        "compared_rows": report.compared_rows,
+        "compared_cells": report.compared_cells,
+        "differences": [
+            {
+                "row_id": difference.row_id,
+                "column": difference.column,
+                "expected": difference.expected,
+                "actual": difference.actual,
+                "delta": difference.delta,
+            }
+            for difference in report.differences
+        ],
+    }
+
+
+def parse_columns(columns: str | None) -> list[str] | None:
+    if columns is None or not columns.strip():
+        return None
+    return [column for column in columns.replace(",", " ").split() if column]
 
 
 def voxel_payload(voxel: VoxelSize) -> dict[str, float]:

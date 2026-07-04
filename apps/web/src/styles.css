@@ -162,6 +162,10 @@ button:disabled:hover {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
+.grid .wide {
+  grid-column: span 2;
+}
+
 .checkbox-row {
   display: flex;
   align-items: center;
@@ -237,6 +241,18 @@ legend {
   color: #7a3f00;
 }
 
+.validation-pass {
+  color: #0f6b43;
+  border-color: #8bd3ad;
+  background: #eefaf3;
+}
+
+.validation-fail {
+  color: #8a1f11;
+  border-color: #f0a59b;
+  background: #fff1ef;
+}
+
 .results {
   margin: 0 18px 18px;
   padding: 18px;
@@ -290,5 +306,9 @@ th {
   .grid,
   .grid.four {
     grid-template-columns: 1fr;
+  }
+
+  .grid .wide {
+    grid-column: auto;
   }
 }

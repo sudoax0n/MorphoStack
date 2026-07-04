@@ -110,6 +110,7 @@ Current API endpoints:
 - `POST /upload/inspect`
 - `POST /upload/analyze`
 - `POST /upload/batch`
+- `POST /upload/validate`
 - `POST /upload/threshold`
 - `POST /upload/preview`
 
@@ -127,6 +128,8 @@ already access the file. After analysis, the frame metrics table can be
 downloaded as a CSV file, and the run manifest can be downloaded as JSON.
 Multiple uploaded stacks can be batch analyzed into one spreadsheet-friendly
 summary CSV.
+CSV validation is available in the browser for comparing new exports against
+reference metric files.
 The analysis summary reports valid-frame means, minima, maxima, and standard
 deviations for core shape descriptors.
 Current 2D descriptors include area, perimeter, circularity, bounding-box size,

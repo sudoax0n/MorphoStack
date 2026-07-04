@@ -109,6 +109,24 @@ type BatchAnalyzeResponse = {
   rows: BatchSummaryRow[];
 };
 
+type ValidationDifference = {
+  row_id: string;
+  column: string;
+  expected: string;
+  actual: string;
+  delta: number | null;
+};
+
+type ValidationResponse = {
+  passed: boolean;
+  expected_path: string;
+  actual_path: string;
+  tolerance: number;
+  compared_rows: number;
+  compared_cells: number;
+  differences: ValidationDifference[];
+};
+
 const CSV_COLUMNS = [
   "frame_index",
   "threshold",
@@ -268,6 +286,52 @@ app.innerHTML = `
 
   <section class="results">
     <div class="results-header">
+      <h2>CSV Validation</h2>
+      <button id="validate-csv-btn" type="button">Validate</button>
+    </div>
+    <div class="grid validation-grid">
+      <label>
+        Reference CSV
+        <input id="expected-csv-input" type="file" accept=".csv,text/csv" />
+      </label>
+      <label>
+        New CSV
+        <input id="actual-csv-input" type="file" accept=".csv,text/csv" />
+      </label>
+      <label>
+        Tolerance
+        <input id="validation-tolerance" type="number" min="0" step="0.000001" value="0.000001" />
+      </label>
+      <label>
+        Key column
+        <input id="validation-key-column" type="text" value="frame_index" />
+      </label>
+      <label class="wide">
+        Columns
+        <input id="validation-columns" type="text" placeholder="area_um2 circularity deformation_index" />
+      </label>
+    </div>
+    <div id="validation-summary" class="output muted">No validation run yet.</div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Row</th>
+            <th>Column</th>
+            <th>Expected</th>
+            <th>Actual</th>
+            <th>Delta</th>
+          </tr>
+        </thead>
+        <tbody id="validation-results-body">
+          <tr><td colspan="5" class="muted">Run validation to show differences.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="results">
+    <div class="results-header">
       <h2>Frame Metrics</h2>
       <div class="button-row">
         <button id="download-manifest-btn" class="secondary" type="button" disabled>Download Manifest</button>
@@ -304,8 +368,10 @@ const inspectOutput = mustElement<HTMLDivElement>("inspect-output");
 const previewOutput = mustElement<HTMLDivElement>("preview-output");
 const analysisSummary = mustElement<HTMLDivElement>("analysis-summary");
 const batchSummary = mustElement<HTMLDivElement>("batch-summary");
+const validationSummary = mustElement<HTMLDivElement>("validation-summary");
 const resultsBody = mustElement<HTMLTableSectionElement>("results-body");
 const batchResultsBody = mustElement<HTMLTableSectionElement>("batch-results-body");
+const validationResultsBody = mustElement<HTMLTableSectionElement>("validation-results-body");
 const downloadCsvButton = mustElement<HTMLButtonElement>("download-csv-btn");
 const downloadManifestButton = mustElement<HTMLButtonElement>("download-manifest-btn");
 const downloadBatchButton = mustElement<HTMLButtonElement>("download-batch-btn");
@@ -330,6 +396,10 @@ mustElement<HTMLButtonElement>("suggest-threshold-btn").addEventListener("click"
 
 mustElement<HTMLButtonElement>("batch-analyze-btn").addEventListener("click", () => {
   void analyzeBatch();
+});
+
+mustElement<HTMLButtonElement>("validate-csv-btn").addEventListener("click", () => {
+  void validateCsv();
 });
 
 downloadCsvButton.addEventListener("click", () => {
@@ -464,6 +534,18 @@ async function analyzeBatch(): Promise<void> {
   }
 }
 
+async function validateCsv(): Promise<void> {
+  validationSummary.textContent = "Validating...";
+  validationResultsBody.innerHTML = `<tr><td colspan="5" class="muted">Running validation...</td></tr>`;
+  try {
+    const payload = await apiUploadPost<ValidationResponse>("/api/upload/validate", validationUploadForm());
+    renderValidation(payload);
+  } catch (error) {
+    validationSummary.textContent = errorMessage(error);
+    validationResultsBody.innerHTML = `<tr><td colspan="5" class="muted">Validation failed.</td></tr>`;
+  }
+}
+
 function renderPreview(payload: PreviewResponse): void {
   previewOutput.innerHTML = `
     <img
@@ -573,6 +655,36 @@ function renderBatch(payload: BatchAnalyzeResponse): void {
           <td>${formatUnknownNumber(row.area_um2_mean)}</td>
           <td>${formatUnknownNumber(row.deformation_index_mean)}</td>
           <td>${formatUnknownNumber(row.circularity_mean)}</td>
+        </tr>
+      `
+    )
+    .join("");
+}
+
+function renderValidation(payload: ValidationResponse): void {
+  validationSummary.className = payload.passed ? "output validation-pass" : "output validation-fail";
+  validationSummary.innerHTML = `
+    Result: <strong>${payload.passed ? "PASS" : "FAIL"}</strong><br />
+    Reference: ${escapeHtml(payload.expected_path)}<br />
+    New: ${escapeHtml(payload.actual_path)}<br />
+    Rows compared: ${payload.compared_rows}, cells compared: ${payload.compared_cells}, tolerance: ${formatNumber(payload.tolerance)}
+  `;
+
+  if (payload.differences.length === 0) {
+    validationResultsBody.innerHTML = `<tr><td colspan="5" class="muted">No differences found.</td></tr>`;
+    return;
+  }
+
+  validationResultsBody.innerHTML = payload.differences
+    .slice(0, 20)
+    .map(
+      (difference) => `
+        <tr>
+          <td>${escapeHtml(difference.row_id)}</td>
+          <td>${escapeHtml(difference.column)}</td>
+          <td>${escapeHtml(difference.expected)}</td>
+          <td>${escapeHtml(difference.actual)}</td>
+          <td>${difference.delta === null ? "" : formatNumber(difference.delta)}</td>
         </tr>
       `
     )
@@ -710,6 +822,14 @@ function selectedBatchFiles(): File[] {
   return files;
 }
 
+function selectedRequiredFile(id: string, label: string): File {
+  const file = mustElement<HTMLInputElement>(id).files?.[0] ?? null;
+  if (!file) {
+    throw new Error(`${label} is required.`);
+  }
+  return file;
+}
+
 function inspectUploadForm(file: File): FormData {
   const formData = new FormData();
   appendFileAndVoxel(formData, file);
@@ -756,6 +876,19 @@ function batchUploadForm(files: File[]): FormData {
   formData.set("include_mesh", String(mustElement<HTMLInputElement>("mesh-input").checked));
   formData.set("prefer_opencv", String(!mustElement<HTMLInputElement>("fallback-input").checked));
   appendRoiFields(formData);
+  return formData;
+}
+
+function validationUploadForm(): FormData {
+  const formData = new FormData();
+  formData.set("expected_file", selectedRequiredFile("expected-csv-input", "Reference CSV"));
+  formData.set("actual_file", selectedRequiredFile("actual-csv-input", "New CSV"));
+  formData.set("tolerance", String(readNumber("validation-tolerance")));
+  formData.set("key_column", mustElement<HTMLInputElement>("validation-key-column").value.trim() || "frame_index");
+  const columns = mustElement<HTMLInputElement>("validation-columns").value.trim();
+  if (columns) {
+    formData.set("columns", columns);
+  }
   return formData;
 }
 
