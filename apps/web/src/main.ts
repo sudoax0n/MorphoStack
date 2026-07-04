@@ -63,6 +63,12 @@ type PreviewResponse = {
   image_png_base64: string;
 };
 
+type ThresholdResponse = {
+  source_path: string;
+  threshold: number;
+  method: string;
+};
+
 const CSV_COLUMNS = [
   "frame_index",
   "threshold",
@@ -155,6 +161,10 @@ app.innerHTML = `
           Threshold
           <input id="threshold-input" type="number" step="1" value="100" />
         </label>
+        <label class="button-label">
+          Threshold tool
+          <button id="suggest-threshold-btn" class="secondary" type="button">Suggest</button>
+        </label>
         <label class="checkbox-row">
           <input id="mesh-input" type="checkbox" />
           Include 3D mesh
@@ -227,6 +237,10 @@ mustElement<HTMLButtonElement>("preview-btn").addEventListener("click", () => {
   void previewStack();
 });
 
+mustElement<HTMLButtonElement>("suggest-threshold-btn").addEventListener("click", () => {
+  void suggestThreshold();
+});
+
 downloadCsvButton.addEventListener("click", () => {
   downloadLatestCsv();
 });
@@ -282,6 +296,28 @@ async function previewStack(): Promise<void> {
           prefer_opencv: !mustElement<HTMLInputElement>("fallback-input").checked
         });
     renderPreview(payload);
+  } catch (error) {
+    previewOutput.textContent = errorMessage(error);
+  }
+}
+
+async function suggestThreshold(): Promise<void> {
+  previewOutput.textContent = "Suggesting threshold...";
+  try {
+    const file = selectedFile();
+    const payload = file
+      ? await apiUploadPost<ThresholdResponse>("/api/upload/threshold", thresholdUploadForm(file))
+      : await apiPost<ThresholdResponse>("/api/threshold", {
+          path: readPath(),
+          method: "auto",
+          voxel: readVoxel(),
+          roi: readRoi()
+        });
+    mustElement<HTMLInputElement>("threshold-input").value = formatInputNumber(payload.threshold);
+    previewOutput.innerHTML = `
+      <strong>${escapeHtml(payload.source_path)}</strong><br />
+      Suggested threshold: ${formatNumber(payload.threshold)} (${escapeHtml(payload.method)})
+    `;
   } catch (error) {
     previewOutput.textContent = errorMessage(error);
   }
@@ -468,6 +504,14 @@ function previewUploadForm(file: File): FormData {
   return formData;
 }
 
+function thresholdUploadForm(file: File): FormData {
+  const formData = new FormData();
+  appendFileAndVoxel(formData, file);
+  formData.set("method", "auto");
+  appendRoiFields(formData);
+  return formData;
+}
+
 function appendFileAndVoxel(formData: FormData, file: File): void {
   const voxel = readVoxel();
   formData.set("file", file);
@@ -558,6 +602,10 @@ function mustElement<T extends HTMLElement>(id: string): T {
 
 function formatNumber(value: number): string {
   return Number.isFinite(value) ? value.toPrecision(6) : "0";
+}
+
+function formatInputNumber(value: number): string {
+  return Number.isFinite(value) ? String(Number(value.toPrecision(6))) : "0";
 }
 
 function errorMessage(error: unknown): string {

@@ -32,4 +32,5 @@ can preview threshold segmentation before analysis and download the returned
 frame metrics as a CSV file after analysis. The metrics include core 2D shape
 descriptors such as area, perimeter, circularity, aspect ratio, equivalent
 diameter, elongation, extent, and solidity. The profile selector currently
-supports vesicle and RBC analysis modes.
+supports vesicle and RBC analysis modes. The `Suggest` threshold control uses
+Otsu thresholding when available and falls back to a percentile suggestion.

@@ -109,6 +109,22 @@ def test_analyze_stack_with_mesh(client, tmp_path):
     assert payload["mesh"]["volume_um3"] > 0
 
 
+def test_threshold_stack_returns_suggestion(client, tmp_path):
+    path = tmp_path / "stack.tif"
+    write_stack(path)
+
+    response = client.post(
+        "/threshold",
+        json={"path": str(path), "method": "percentile"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["source_path"] == str(path)
+    assert payload["method"] == "percentile"
+    assert payload["threshold"] >= 0
+
+
 def test_preview_stack_returns_png(client, tmp_path):
     pytest.importorskip("PIL")
     path = tmp_path / "stack.tif"
@@ -217,6 +233,20 @@ def test_upload_preview_returns_png(client):
     assert payload["frame_index"] == 2
     assert payload["method"] == "fallback"
     assert b64decode(payload["image_png_base64"]).startswith(b"\x89PNG")
+
+
+def test_upload_threshold_returns_suggestion(client):
+    response = client.post(
+        "/upload/threshold",
+        files={"file": ("stack.tif", stack_upload_bytes(), "image/tiff")},
+        data={"method": "percentile"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["source_path"] == "stack.tif"
+    assert payload["method"] == "percentile"
+    assert payload["threshold"] >= 0
 
 
 def test_analyze_bad_path_returns_400(client):

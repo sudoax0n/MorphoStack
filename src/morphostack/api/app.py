@@ -12,7 +12,15 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 from morphostack import __version__
-from morphostack.core import DEFAULT_PROFILE, PROFILE_CHOICES, RectROI, VoxelSize, analyze_stack, load_image_stack
+from morphostack.core import (
+    DEFAULT_PROFILE,
+    PROFILE_CHOICES,
+    RectROI,
+    VoxelSize,
+    analyze_stack,
+    load_image_stack,
+    suggest_threshold,
+)
 from morphostack.core.export import analysis_rows
 from morphostack.core.preview import PreviewImage, render_segmentation_preview_png
 from morphostack.core.segmentation import apply_rect_roi
@@ -53,6 +61,13 @@ class PreviewRequest(BaseModel):
     voxel: VoxelOverride | None = None
     roi: ROIRequest | None = None
     prefer_opencv: bool = True
+
+
+class ThresholdRequest(BaseModel):
+    path: str
+    method: str = "auto"
+    voxel: VoxelOverride | None = None
+    roi: ROIRequest | None = None
 
 
 def create_app() -> FastAPI:
@@ -107,6 +122,17 @@ def create_app() -> FastAPI:
             "mesh": mesh,
             "rows": analysis_rows(analysis),
         }
+
+    @app.post("/threshold")
+    def threshold(request: ThresholdRequest) -> dict[str, object]:
+        try:
+            stack = load_image_stack(request.path, voxel_override=to_voxel_size(request.voxel))
+            grayscale = apply_preview_roi(stack.grayscale, to_rect_roi(request.roi))
+            value, method = suggest_threshold(grayscale, method=request.method)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        return threshold_payload(str(stack.source_path), value, method)
 
     @app.post("/preview")
     def preview(request: PreviewRequest) -> dict[str, object]:
@@ -237,6 +263,36 @@ def create_app() -> FastAPI:
 
         return preview_payload(file.filename or str(temp_path.name), preview_image)
 
+    @app.post("/upload/threshold")
+    def upload_threshold(
+        file: Annotated[UploadFile, File()],
+        method: Annotated[str, Form()] = "auto",
+        voxel_x_um: Annotated[float, Form(gt=0)] = 1.0,
+        voxel_y_um: Annotated[float, Form(gt=0)] = 1.0,
+        voxel_z_um: Annotated[float, Form(gt=0)] = 1.0,
+        roi_xmin: Annotated[int | None, Form()] = None,
+        roi_xmax: Annotated[int | None, Form()] = None,
+        roi_ymin: Annotated[int | None, Form()] = None,
+        roi_ymax: Annotated[int | None, Form()] = None,
+    ) -> dict[str, object]:
+        temp_path = save_upload_to_temp(file)
+        try:
+            stack = load_image_stack(
+                temp_path,
+                voxel_override=VoxelSize(voxel_x_um, voxel_y_um, voxel_z_um),
+            )
+            grayscale = apply_preview_roi(
+                stack.grayscale,
+                roi_from_optional_bounds(roi_xmin, roi_xmax, roi_ymin, roi_ymax),
+            )
+            value, used_method = suggest_threshold(grayscale, method=method)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        finally:
+            temp_path.unlink(missing_ok=True)
+
+        return threshold_payload(file.filename or str(temp_path.name), value, used_method)
+
     return app
 
 
@@ -307,6 +363,10 @@ def preview_payload(source_path: str, preview_image: PreviewImage) -> dict[str, 
         "circularity": preview.circularity,
         "image_png_base64": b64encode(preview_image.png_bytes).decode("ascii"),
     }
+
+
+def threshold_payload(source_path: str, threshold: float, method: str) -> dict[str, object]:
+    return {"source_path": source_path, "threshold": threshold, "method": method}
 
 
 def voxel_payload(voxel: VoxelSize) -> dict[str, float]:

@@ -72,9 +72,11 @@ Current API endpoints:
 - `GET /health`
 - `POST /inspect`
 - `POST /analyze`
+- `POST /threshold`
 - `POST /preview`
 - `POST /upload/inspect`
 - `POST /upload/analyze`
+- `POST /upload/threshold`
 - `POST /upload/preview`
 
 To start only the browser UI during development:
@@ -91,6 +93,8 @@ already access the file. After analysis, the frame metrics table can be
 downloaded as a CSV file. Current 2D descriptors include area, perimeter,
 circularity, bounding-box size, aspect ratio, elongation, extent, equivalent
 diameter, and solidity.
+The `Suggest` threshold tool uses Otsu thresholding when available and falls
+back to a percentile-based suggestion.
 The analysis profile selector currently supports `vesicle` and `rbc`.
 
 ## Architecture Direction

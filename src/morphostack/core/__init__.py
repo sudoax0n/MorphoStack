@@ -24,7 +24,7 @@ from morphostack.core.pipeline import (
     analyze_stack,
 )
 from morphostack.core.profiles import DEFAULT_PROFILE, PROFILE_CHOICES, AnalysisProfile, normalize_profile
-from morphostack.core.segmentation import apply_rect_roi, threshold_mask
+from morphostack.core.segmentation import apply_rect_roi, suggest_threshold, threshold_mask
 
 __all__ = [
     "AnalysisProfile",
@@ -59,6 +59,7 @@ __all__ = [
     "smooth_contour_guarded",
     "stretch_to_uint8",
     "surface_area_volume",
+    "suggest_threshold",
     "threshold_mask",
     "write_analysis_csv",
 ]

@@ -169,6 +169,14 @@ button:disabled:hover {
   min-height: 38px;
 }
 
+.button-label {
+  align-content: end;
+}
+
+.button-label button {
+  width: 100%;
+}
+
 .checkbox-row input {
   width: 16px;
   min-height: 16px;
