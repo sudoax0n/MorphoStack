@@ -52,5 +52,6 @@ No GitHub remote is configured yet.
 - Store physical spacing as micrometers through `VoxelSize`.
 - Use `vx * vy` for areas and anisotropic segment lengths for perimeters.
 - Keep basic threshold previews usable without OpenCV; use optional OpenCV only for richer contour smoothing/extraction.
+- When `opencv-python` is installed, `segmentation_preview` uses real external contours instead of the rectangular fallback.
 - Treat heavy analysis libraries such as OpenCV and scikit-image as optional until the pipeline needs them.
 - Ambiguous 3D arrays with final channel size 3 or 4 are treated as single color images; grayscale stacks should be shaped `(z, y, x)` without an RGB-like final channel.

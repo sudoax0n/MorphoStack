@@ -5,6 +5,7 @@ from morphostack.core.contours import (
     contour_circularity,
     largest_component_boundary,
     largest_connected_component,
+    largest_opencv_contour,
     segmentation_preview,
     smooth_contour_guarded,
 )
@@ -28,6 +29,7 @@ __all__ = [
     "contour_metrics",
     "largest_component_boundary",
     "largest_connected_component",
+    "largest_opencv_contour",
     "load_image_stack",
     "segmentation_preview",
     "smooth_contour_guarded",

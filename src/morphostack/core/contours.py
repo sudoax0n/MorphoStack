@@ -17,22 +17,59 @@ class SegmentationPreview:
     area_px2: float
     perimeter_px: float
     circularity: float
+    method: str = "fallback"
 
 
-def segmentation_preview(image: np.ndarray, threshold: float) -> SegmentationPreview:
+def segmentation_preview(
+    image: np.ndarray,
+    threshold: float,
+    *,
+    prefer_opencv: bool = True,
+) -> SegmentationPreview:
     """Threshold an image and return the largest contour-like boundary."""
 
     mask = np.asarray(image) >= threshold
-    contour = largest_component_boundary(mask)
+    contour = None
+    method = "fallback"
+    if prefer_opencv:
+        contour = largest_opencv_contour(mask)
+        if contour is not None:
+            method = "opencv"
+
     if contour is None:
-        return SegmentationPreview(threshold, None, 0.0, 0.0, 0.0)
+        contour = largest_component_boundary(mask)
+
+    if contour is None:
+        return SegmentationPreview(threshold, None, 0.0, 0.0, 0.0, method)
 
     area = polygon_area(contour)
     perimeter = polygon_perimeter(contour, x_scale=1.0, y_scale=1.0)
     circularity = 0.0
     if perimeter > 0:
         circularity = float((4.0 * np.pi * area) / (perimeter**2))
-    return SegmentationPreview(threshold, contour, area, perimeter, circularity)
+    return SegmentationPreview(threshold, contour, area, perimeter, circularity, method)
+
+
+def largest_opencv_contour(mask: np.ndarray) -> np.ndarray | None:
+    """Return the largest external contour using OpenCV when installed."""
+
+    try:
+        import cv2
+    except Exception:
+        return None
+
+    arr = np.asarray(mask, dtype=bool)
+    if arr.ndim != 2:
+        raise ValueError("largest_opencv_contour expects a 2D mask")
+
+    binary = (arr.astype(np.uint8)) * 255
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return None
+    largest = max(contours, key=lambda contour: float(cv2.contourArea(contour)))
+    if largest is None or len(largest) < 3:
+        return None
+    return normalize_points(largest)
 
 
 def largest_component_boundary(mask: np.ndarray) -> np.ndarray | None:
