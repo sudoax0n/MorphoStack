@@ -21,12 +21,15 @@ from morphostack.core import (
     analyze_stack,
     analysis_manifest,
     analysis_summary,
+    analysis_summary_row,
     analysis_warnings,
     apply_rect_roi,
+    failed_analysis_summary_row,
     load_image_stack,
     suggest_threshold,
     write_analysis_csv,
     write_analysis_manifest_json,
+    write_batch_summary_csv,
 )
 
 
@@ -136,6 +139,35 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Use dependency-light rectangular fallback contours instead of OpenCV contours.",
     )
+    batch = subparsers.add_parser(
+        "batch",
+        help="Analyze every supported stack in a directory and write one summary CSV.",
+    )
+    batch.add_argument("directory", help="Directory containing .tif, .tiff, or .czi stacks.")
+    batch.add_argument("--threshold", type=float, required=True, help="Global intensity threshold.")
+    batch.add_argument("--out", required=True, help="Batch summary CSV output path.")
+    batch.add_argument("--recursive", action="store_true", help="Search subdirectories too.")
+    batch.add_argument("--metrics-dir", help="Optional directory for per-stack frame CSV files.")
+    batch.add_argument(
+        "--profile",
+        choices=PROFILE_CHOICES,
+        default="vesicle",
+        help="Analysis profile. Default: vesicle.",
+    )
+    batch.add_argument("--voxel-x", type=float, help="Override X voxel size in micrometers.")
+    batch.add_argument("--voxel-y", type=float, help="Override Y voxel size in micrometers.")
+    batch.add_argument("--voxel-z", type=float, help="Override Z voxel size in micrometers.")
+    batch.add_argument("--roi", nargs=4, type=int, metavar=("XMIN", "XMAX", "YMIN", "YMAX"))
+    batch.add_argument(
+        "--mesh",
+        action="store_true",
+        help="Compute 3D surface area/volume for each stack.",
+    )
+    batch.add_argument(
+        "--fallback-contours",
+        action="store_true",
+        help="Use dependency-light rectangular fallback contours instead of OpenCV contours.",
+    )
     return parser
 
 
@@ -191,6 +223,22 @@ def main(argv: list[str] | None = None) -> int:
             roi=args.roi,
             manifest=args.manifest,
             write_manifest=not args.no_manifest,
+            prefer_opencv=not args.fallback_contours,
+            include_mesh=args.mesh,
+        )
+
+    if args.command == "batch":
+        return run_batch(
+            directory=args.directory,
+            threshold=args.threshold,
+            out=args.out,
+            recursive=args.recursive,
+            metrics_dir=args.metrics_dir,
+            profile=args.profile,
+            voxel_x=args.voxel_x,
+            voxel_y=args.voxel_y,
+            voxel_z=args.voxel_z,
+            roi=args.roi,
             prefer_opencv=not args.fallback_contours,
             include_mesh=args.mesh,
         )
@@ -408,6 +456,97 @@ def run_threshold(
     print(f"Method: {used_method}")
     print(f"Threshold: {threshold:g}")
     return 0
+
+
+def run_batch(
+    *,
+    directory: str,
+    threshold: float,
+    out: str,
+    recursive: bool = False,
+    metrics_dir: str | None = None,
+    profile: str = "vesicle",
+    voxel_x: float | None = None,
+    voxel_y: float | None = None,
+    voxel_z: float | None = None,
+    roi: list[int] | None = None,
+    prefer_opencv: bool = True,
+    include_mesh: bool = False,
+) -> int:
+    voxel_override_result = build_voxel_override(voxel_x, voxel_y, voxel_z)
+    if voxel_override_result == "partial":
+        print("Voxel override requires --voxel-x, --voxel-y, and --voxel-z together.")
+        return 2
+    voxel_override = voxel_override_result
+    rect_roi = RectROI(*roi) if roi is not None else None
+    input_dir = Path(directory)
+    if not input_dir.is_dir():
+        print(f"Batch directory does not exist: {input_dir}")
+        return 1
+
+    stack_paths = discover_stack_paths(input_dir, recursive=recursive)
+    if not stack_paths:
+        print(f"No supported stacks found in {input_dir}.")
+        return 1
+
+    output_path = Path(out)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    frame_metrics_dir = Path(metrics_dir) if metrics_dir else None
+    if frame_metrics_dir:
+        frame_metrics_dir.mkdir(parents=True, exist_ok=True)
+
+    rows: list[dict[str, object]] = []
+    failures = 0
+    for stack_path in stack_paths:
+        try:
+            stack = load_image_stack(stack_path, voxel_override=voxel_override)
+            analysis = analyze_stack(
+                stack.grayscale,
+                thresholds=threshold,
+                voxel_size=stack.voxel_size,
+                roi=rect_roi,
+                profile=profile,
+                prefer_opencv=prefer_opencv,
+                include_mesh=include_mesh,
+            )
+            rows.append(
+                analysis_summary_row(
+                    analysis,
+                    source_path=str(stack.source_path),
+                    threshold=threshold,
+                )
+            )
+            if frame_metrics_dir:
+                write_analysis_csv(analysis, frame_metrics_dir / f"{safe_output_stem(stack_path)}_metrics.csv")
+        except Exception as exc:
+            failures += 1
+            rows.append(failed_analysis_summary_row(str(stack_path), str(exc)))
+
+    write_batch_summary_csv(rows, output_path)
+
+    print("MorphoStack Batch Complete")
+    print("==========================")
+    print(f"Stacks found: {len(stack_paths)}")
+    print(f"Succeeded: {len(stack_paths) - failures}")
+    print(f"Failed: {failures}")
+    print(f"Summary CSV: {output_path}")
+    if frame_metrics_dir:
+        print(f"Frame metrics: {frame_metrics_dir}")
+    return 1 if failures else 0
+
+
+def discover_stack_paths(directory: Path, *, recursive: bool = False) -> list[Path]:
+    pattern = "**/*" if recursive else "*"
+    return sorted(
+        path
+        for path in directory.glob(pattern)
+        if path.is_file() and path.suffix.lower() in {".tif", ".tiff", ".czi"}
+    )
+
+
+def safe_output_stem(path: Path) -> str:
+    raw = path.stem.strip() or "stack"
+    return "".join(char if char.isalnum() or char in "._-" else "_" for char in raw)
 
 
 def roi_to_payload(roi: RectROI | None) -> dict[str, int] | None:

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import csv
 import json
-from math import sqrt
 from datetime import datetime, timezone
+from math import sqrt
 from pathlib import Path
 from typing import TextIO
 
@@ -45,6 +45,21 @@ SUMMARY_METRICS = (
     "extent",
     "equivalent_diameter_um",
     "solidity",
+)
+
+BATCH_SUMMARY_COLUMNS = (
+    "source_path",
+    "status",
+    "error_message",
+    "profile",
+    "threshold",
+    "frame_count",
+    "valid_frame_count",
+    "valid_fraction",
+    "mesh_surface_area_um2",
+    "mesh_volume_um3",
+    "warning_codes",
+    *tuple(f"{metric}_{stat}" for metric in SUMMARY_METRICS for stat in ("mean", "min", "max", "std")),
 )
 
 
@@ -201,6 +216,62 @@ def analysis_manifest(
         "warnings": analysis_warnings(analysis),
         "columns": list(CSV_COLUMNS),
     }
+
+
+def analysis_summary_row(
+    analysis: StackAnalysis,
+    *,
+    source_path: str,
+    threshold: float | list[float] | tuple[float, ...],
+) -> dict[str, object]:
+    summary = analysis_summary(analysis)
+    metrics = summary["metrics"]
+    row: dict[str, object] = {
+        "source_path": source_path,
+        "status": "ok",
+        "error_message": "",
+        "profile": analysis.profile,
+        "threshold": threshold,
+        "frame_count": summary["frame_count"],
+        "valid_frame_count": summary["valid_frame_count"],
+        "valid_fraction": summary["valid_fraction"],
+        "mesh_surface_area_um2": analysis.mesh.surface_area_um2 if analysis.mesh else 0.0,
+        "mesh_volume_um3": analysis.mesh.volume_um3 if analysis.mesh else 0.0,
+        "warning_codes": ";".join(str(warning["code"]) for warning in analysis_warnings(analysis)),
+    }
+    if isinstance(metrics, dict):
+        for metric in SUMMARY_METRICS:
+            values = metrics.get(metric)
+            if isinstance(values, dict):
+                for stat in ("mean", "min", "max", "std"):
+                    row[f"{metric}_{stat}"] = values[stat]
+    return {column: row.get(column, "") for column in BATCH_SUMMARY_COLUMNS}
+
+
+def failed_analysis_summary_row(source_path: str, error_message: str) -> dict[str, object]:
+    row = {
+        "source_path": source_path,
+        "status": "error",
+        "error_message": error_message,
+    }
+    return {column: row.get(column, "") for column in BATCH_SUMMARY_COLUMNS}
+
+
+def write_batch_summary_csv(rows: list[dict[str, object]], destination: str | Path | TextIO) -> None:
+    close_after = False
+    if hasattr(destination, "write"):
+        handle = destination
+    else:
+        handle = Path(destination).open("w", newline="", encoding="utf-8")
+        close_after = True
+
+    try:
+        writer = csv.DictWriter(handle, fieldnames=BATCH_SUMMARY_COLUMNS)
+        writer.writeheader()
+        writer.writerows(rows)
+    finally:
+        if close_after:
+            handle.close()
 
 
 def write_analysis_manifest_json(manifest: dict[str, object], destination: str | Path | TextIO) -> None:

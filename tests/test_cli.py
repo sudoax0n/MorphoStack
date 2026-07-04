@@ -256,3 +256,54 @@ def test_analyze_prints_and_records_warnings_for_blank_stack(tmp_path, capsys):
     assert "Warning [no_valid_contours]" in out
     manifest = json.loads(output_path.with_suffix(".csv.manifest.json").read_text(encoding="utf-8"))
     assert manifest["warnings"][0]["code"] == "no_valid_contours"
+
+
+def test_batch_writes_summary_csv_from_directory(tmp_path, capsys):
+    tifffile = pytest.importorskip("tifffile")
+    input_dir = tmp_path / "stacks"
+    input_dir.mkdir()
+    for index in range(2):
+        stack = np.zeros((2, 8, 8), dtype=np.uint8)
+        stack[:, 2:5, 1:4] = 200
+        tifffile.imwrite(input_dir / f"stack_{index}.tif", stack, photometric="minisblack")
+    (input_dir / "notes.txt").write_text("ignore me", encoding="utf-8")
+    output_path = tmp_path / "batch_summary.csv"
+    metrics_dir = tmp_path / "frame_metrics"
+
+    result = main(
+        [
+            "batch",
+            str(input_dir),
+            "--threshold",
+            "100",
+            "--out",
+            str(output_path),
+            "--metrics-dir",
+            str(metrics_dir),
+            "--voxel-x",
+            "1.0",
+            "--voxel-y",
+            "1.0",
+            "--voxel-z",
+            "1.0",
+            "--fallback-contours",
+        ]
+    )
+
+    assert result == 0
+    out = capsys.readouterr().out
+    assert "MorphoStack Batch Complete" in out
+    assert "Succeeded: 2" in out
+    summary_csv = output_path.read_text(encoding="utf-8")
+    assert "source_path,status,error_message,profile,threshold" in summary_csv
+    assert "area_um2_mean" in summary_csv
+    assert summary_csv.count(",ok,,vesicle,100.0,2,2,1.0") == 2
+    assert len(list(metrics_dir.glob("*_metrics.csv"))) == 2
+
+
+def test_batch_reports_when_no_supported_stacks(tmp_path, capsys):
+    result = main(["batch", str(tmp_path), "--threshold", "100", "--out", str(tmp_path / "summary.csv")])
+
+    assert result == 1
+    out = capsys.readouterr().out
+    assert "No supported stacks found" in out

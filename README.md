@@ -13,6 +13,7 @@ morphostack inspect path\to\stack.tif
 morphostack threshold path\to\stack.tif
 morphostack analyze path\to\stack.tif --threshold 100 --out metrics.csv
 morphostack analyze path\to\stack.tif --threshold 100 --profile rbc --out metrics.csv
+morphostack batch path\to\stacks --threshold 100 --out batch_summary.csv
 morphostack serve
 morphostack dev
 mst doctor
@@ -62,6 +63,15 @@ By default, `morphostack analyze` also writes `<metrics.csv>.manifest.json`
 with source path, version, profile, voxel size, ROI, threshold, mesh settings,
 run-level summary statistics, quality warnings, and CSV columns. Use `--no-manifest` to skip it or
 `--manifest path\to\run.json` to choose the JSON path.
+
+To analyze a folder of stacks and produce one summary table:
+
+```bash
+.\.venv\Scripts\morphostack batch path\to\stacks --threshold 100 --out batch_summary.csv --voxel-x 0.1 --voxel-y 0.1 --voxel-z 0.5
+```
+
+Add `--recursive` to include subdirectories, and `--metrics-dir path\to\frames`
+to also save each stack's per-frame metrics CSV.
 
 To start the local backend for the future web UI:
 
@@ -131,6 +141,8 @@ No GitHub remote is configured yet.
 - Keep basic threshold previews usable without OpenCV; use optional OpenCV only for richer contour smoothing/extraction.
 - When `opencv-python` is installed, `segmentation_preview` uses real external contours instead of the rectangular fallback.
 - Use `analyze_stack` as the headless core pipeline for CLI/API/UI workflows.
+- Use `morphostack batch` when a directory of stacks should become one
+  spreadsheet-friendly summary table.
 - Treat vesicle and RBC analysis as explicit profiles, even where early shared
   processing is identical.
 - Treat heavy analysis libraries such as OpenCV and scikit-image as optional until the pipeline needs them.
