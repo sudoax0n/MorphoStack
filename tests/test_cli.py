@@ -120,8 +120,8 @@ def test_analyze_writes_csv_from_synthetic_tiff(tmp_path, capsys):
     assert "MorphoStack Analysis Complete" in out
     assert output_path.exists()
     csv_text = output_path.read_text(encoding="utf-8")
-    assert "frame_index,threshold,method,has_contour" in csv_text
-    assert "0,100.0,fallback,True" in csv_text
+    assert "frame_index,threshold,profile,method,has_contour" in csv_text
+    assert "0,100.0,vesicle,fallback,True" in csv_text
 
 
 def test_analyze_can_write_mesh_summary_from_synthetic_tiff(tmp_path, capsys):
@@ -140,6 +140,8 @@ def test_analyze_can_write_mesh_summary_from_synthetic_tiff(tmp_path, capsys):
             str(input_path),
             "--threshold",
             "100",
+            "--profile",
+            "rbc",
             "--out",
             str(output_path),
             "--voxel-x",
@@ -155,6 +157,8 @@ def test_analyze_can_write_mesh_summary_from_synthetic_tiff(tmp_path, capsys):
 
     assert result == 0
     out = capsys.readouterr().out
+    assert "Profile: rbc" in out
     assert "3D surface area:" in out
     csv_text = output_path.read_text(encoding="utf-8")
+    assert "rbc" in csv_text
     assert "mesh_surface_area_um2,mesh_volume_um3" in csv_text

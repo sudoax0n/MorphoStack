@@ -11,6 +11,7 @@ from morphostack.core.pipeline import StackAnalysis
 CSV_COLUMNS = (
     "frame_index",
     "threshold",
+    "profile",
     "method",
     "has_contour",
     "area_px2",
@@ -37,6 +38,7 @@ def analysis_rows(analysis: StackAnalysis) -> list[dict[str, object]]:
             {
                 "frame_index": frame.frame_index,
                 "threshold": frame.threshold,
+                "profile": frame.profile,
                 "method": frame.preview.method,
                 "has_contour": metrics is not None,
                 "area_px2": metrics.area_px2 if metrics else 0.0,

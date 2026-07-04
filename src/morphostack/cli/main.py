@@ -14,7 +14,7 @@ from pathlib import Path
 
 from morphostack import __version__
 from morphostack.cli.system_info import collect_diagnostics, format_diagnostics
-from morphostack.core import RectROI, VoxelSize, analyze_stack, load_image_stack, write_analysis_csv
+from morphostack.core import PROFILE_CHOICES, RectROI, VoxelSize, analyze_stack, load_image_stack, write_analysis_csv
 
 
 CORE_DEPENDENCIES = ("numpy", "psutil")
@@ -85,6 +85,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     analyze.add_argument("path", help="Path to a .tif, .tiff, or .czi file.")
     analyze.add_argument("--threshold", type=float, required=True, help="Global intensity threshold.")
+    analyze.add_argument(
+        "--profile",
+        choices=PROFILE_CHOICES,
+        default="vesicle",
+        help="Analysis profile. Default: vesicle.",
+    )
     analyze.add_argument("--out", required=True, help="CSV output path.")
     analyze.add_argument("--voxel-x", type=float, help="Override X voxel size in micrometers.")
     analyze.add_argument("--voxel-y", type=float, help="Override Y voxel size in micrometers.")
@@ -137,6 +143,7 @@ def main(argv: list[str] | None = None) -> int:
         return run_analyze(
             path=args.path,
             threshold=args.threshold,
+            profile=args.profile,
             out=args.out,
             voxel_x=args.voxel_x,
             voxel_y=args.voxel_y,
@@ -243,6 +250,7 @@ def run_analyze(
     path: str,
     threshold: float,
     out: str,
+    profile: str = "vesicle",
     voxel_x: float | None = None,
     voxel_y: float | None = None,
     voxel_z: float | None = None,
@@ -265,6 +273,7 @@ def run_analyze(
             thresholds=threshold,
             voxel_size=stack.voxel_size,
             roi=rect_roi,
+            profile=profile,
             prefer_opencv=prefer_opencv,
             include_mesh=include_mesh,
         )
@@ -278,6 +287,7 @@ def run_analyze(
     print("MorphoStack Analysis Complete")
     print("=============================")
     print(f"Source: {stack.source_path}")
+    print(f"Profile: {analysis.profile}")
     print(f"Frames: {len(analysis.frames)}")
     print(f"Valid frames: {len(analysis.valid_frames)}")
     if analysis.mesh:

@@ -23,14 +23,18 @@ from morphostack.core.pipeline import (
     analyze_frame,
     analyze_stack,
 )
+from morphostack.core.profiles import DEFAULT_PROFILE, PROFILE_CHOICES, AnalysisProfile, normalize_profile
 from morphostack.core.segmentation import apply_rect_roi, threshold_mask
 
 __all__ = [
+    "AnalysisProfile",
     "ContourMetrics",
     "CSV_COLUMNS",
+    "DEFAULT_PROFILE",
     "FrameAnalysis",
     "ImageStack",
     "MeshMeasurement",
+    "PROFILE_CHOICES",
     "RectROI",
     "SegmentationPreview",
     "StackAnalysis",
@@ -50,6 +54,7 @@ __all__ = [
     "largest_opencv_contour",
     "load_image_stack",
     "measure_contour_stack",
+    "normalize_profile",
     "segmentation_preview",
     "smooth_contour_guarded",
     "stretch_to_uint8",

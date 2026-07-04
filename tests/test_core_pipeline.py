@@ -51,7 +51,36 @@ def test_analyze_stack_uses_scalar_threshold_for_all_frames():
 
     assert len(result.frames) == 2
     assert len(result.valid_frames) == 2
+    assert result.profile == "vesicle"
     assert [frame.threshold for frame in result.frames] == [100.0, 100.0]
+    assert [frame.profile for frame in result.frames] == ["vesicle", "vesicle"]
+
+
+def test_analyze_stack_accepts_rbc_profile():
+    stack = np.zeros((1, 8, 8), dtype=np.uint8)
+    stack[0, 2:5, 1:4] = 200
+
+    result = analyze_stack(
+        stack,
+        thresholds=100,
+        voxel_size=VoxelSize(1.0, 1.0, 1.0),
+        profile="rbc",
+        prefer_opencv=False,
+    )
+
+    assert result.profile == "rbc"
+    assert result.frames[0].profile == "rbc"
+    assert result.frames[0].metrics is not None
+
+
+def test_analyze_stack_rejects_unknown_profile():
+    with pytest.raises(ValueError, match="analysis profile"):
+        analyze_stack(
+            np.zeros((1, 8, 8)),
+            thresholds=1,
+            voxel_size=VoxelSize(1.0, 1.0, 1.0),
+            profile="unknown",
+        )
 
 
 def test_analyze_stack_can_include_mesh_measurement():

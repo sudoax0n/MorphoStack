@@ -6,6 +6,8 @@ type VoxelOverride = {
   z_um: number;
 };
 
+type AnalysisProfile = "vesicle" | "rbc";
+
 type InspectResponse = {
   source_path: string;
   grayscale_shape: number[];
@@ -16,6 +18,7 @@ type InspectResponse = {
 type AnalysisRow = {
   frame_index: number;
   threshold: number;
+  profile: AnalysisProfile;
   method: string;
   has_contour: boolean;
   area_px2: number;
@@ -34,6 +37,7 @@ type AnalysisRow = {
 
 type AnalyzeResponse = {
   source_path: string;
+  profile: AnalysisProfile;
   frame_count: number;
   valid_frame_count: number;
   voxel_size: VoxelOverride;
@@ -60,6 +64,7 @@ type PreviewResponse = {
 const CSV_COLUMNS = [
   "frame_index",
   "threshold",
+  "profile",
   "method",
   "has_contour",
   "area_px2",
@@ -131,6 +136,13 @@ app.innerHTML = `
         </div>
       </div>
       <div class="grid">
+        <label>
+          Profile
+          <select id="profile-input">
+            <option value="vesicle" selected>Vesicle</option>
+            <option value="rbc">RBC</option>
+          </select>
+        </label>
         <label>
           Frame
           <input id="frame-input" type="number" min="0" step="1" value="0" />
@@ -282,6 +294,7 @@ async function analyzeStack(): Promise<void> {
       : await apiPost<AnalyzeResponse>("/api/analyze", {
           path: readPath(),
           threshold: readNumber("threshold-input"),
+          profile: readProfile(),
           voxel: readVoxel(),
           roi: readRoi(),
           include_mesh: mustElement<HTMLInputElement>("mesh-input").checked,
@@ -320,6 +333,7 @@ function renderAnalysis(payload: AnalyzeResponse): void {
     : "";
   analysisSummary.innerHTML = `
     <strong>${escapeHtml(payload.source_path)}</strong><br />
+    Profile: ${escapeHtml(payload.profile)}<br />
     Frames: ${payload.frame_count}, valid: ${payload.valid_frame_count}${meshText}
   `;
 
@@ -431,6 +445,7 @@ function analyzeUploadForm(file: File): FormData {
   const formData = new FormData();
   appendFileAndVoxel(formData, file);
   formData.set("threshold", String(readNumber("threshold-input")));
+  formData.set("profile", readProfile());
   formData.set("include_mesh", String(mustElement<HTMLInputElement>("mesh-input").checked));
   formData.set("prefer_opencv", String(!mustElement<HTMLInputElement>("fallback-input").checked));
   appendRoiFields(formData);
@@ -484,6 +499,14 @@ function readVoxel(): VoxelOverride {
     y_um: readNumber("voxel-y"),
     z_um: readNumber("voxel-z")
   };
+}
+
+function readProfile(): AnalysisProfile {
+  const value = mustElement<HTMLSelectElement>("profile-input").value;
+  if (value !== "vesicle" && value !== "rbc") {
+    throw new Error("Analysis profile must be vesicle or rbc.");
+  }
+  return value;
 }
 
 function readRoi(): null | { xmin: number; xmax: number; ymin: number; ymax: number } {

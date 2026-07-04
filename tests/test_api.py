@@ -35,7 +35,9 @@ def test_health(client):
     response = client.get("/health")
 
     assert response.status_code == 200
-    assert response.json()["ok"] is True
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["profiles"] == ["vesicle", "rbc"]
 
 
 def test_inspect_stack(client, tmp_path):
@@ -65,6 +67,7 @@ def test_analyze_stack_without_mesh(client, tmp_path):
         json={
             "path": str(path),
             "threshold": 100,
+            "profile": "rbc",
             "voxel": {"x_um": 1.0, "y_um": 1.0, "z_um": 1.0},
             "prefer_opencv": False,
         },
@@ -72,6 +75,7 @@ def test_analyze_stack_without_mesh(client, tmp_path):
 
     assert response.status_code == 200
     payload = response.json()
+    assert payload["profile"] == "rbc"
     assert payload["frame_count"] == 3
     assert payload["valid_frame_count"] == 3
     assert payload["mesh"] is None
@@ -164,6 +168,7 @@ def test_upload_analyze_stack_with_mesh(client):
         files={"file": ("stack.tif", stack_upload_bytes(), "image/tiff")},
         data={
             "threshold": "100",
+            "profile": "rbc",
             "voxel_x_um": "1.0",
             "voxel_y_um": "1.0",
             "voxel_z_um": "1.0",
@@ -175,6 +180,7 @@ def test_upload_analyze_stack_with_mesh(client):
     assert response.status_code == 200
     payload = response.json()
     assert payload["source_path"] == "stack.tif"
+    assert payload["profile"] == "rbc"
     assert payload["frame_count"] == 3
     assert payload["valid_frame_count"] == 3
     assert payload["rows"][0]["area_um2"] == 9.0

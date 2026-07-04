@@ -11,6 +11,7 @@ morphostack doctor
 morphostack init
 morphostack inspect path\to\stack.tif
 morphostack analyze path\to\stack.tif --threshold 100 --out metrics.csv
+morphostack analyze path\to\stack.tif --threshold 100 --profile rbc --out metrics.csv
 morphostack serve
 morphostack dev
 mst doctor
@@ -44,6 +45,10 @@ To run the current headless analysis pipeline and export per-frame metrics:
 ```bash
 .\.venv\Scripts\morphostack analyze path\to\stack.tif --threshold 100 --out metrics.csv --voxel-x 0.1 --voxel-y 0.1 --voxel-z 0.5
 ```
+
+Use `--profile vesicle` or `--profile rbc` to record the biological analysis
+profile. The current RBC profile shares the same threshold-contour engine while
+providing a clean branch point for RBC-specific metrics.
 
 Add `--mesh` to assemble contour masks and include marching-cubes 3D surface area and volume in the CSV.
 
@@ -85,6 +90,7 @@ file through upload endpoints, or use a local stack path when the backend can
 already access the file. After analysis, the frame metrics table can be
 downloaded as a CSV file. Current 2D descriptors include area, perimeter,
 circularity, bounding-box size, aspect ratio, equivalent diameter, and solidity.
+The analysis profile selector currently supports `vesicle` and `rbc`.
 
 ## Architecture Direction
 
@@ -106,5 +112,7 @@ No GitHub remote is configured yet.
 - Keep basic threshold previews usable without OpenCV; use optional OpenCV only for richer contour smoothing/extraction.
 - When `opencv-python` is installed, `segmentation_preview` uses real external contours instead of the rectangular fallback.
 - Use `analyze_stack` as the headless core pipeline for CLI/API/UI workflows.
+- Treat vesicle and RBC analysis as explicit profiles, even where early shared
+  processing is identical.
 - Treat heavy analysis libraries such as OpenCV and scikit-image as optional until the pipeline needs them.
 - Ambiguous 3D arrays with final channel size 3 or 4 are treated as single color images; grayscale stacks should be shaped `(z, y, x)` without an RGB-like final channel.

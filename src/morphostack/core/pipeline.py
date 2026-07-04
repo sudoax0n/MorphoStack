@@ -11,6 +11,7 @@ from morphostack.core.contours import SegmentationPreview, segmentation_preview
 from morphostack.core.mesh import MeshMeasurement, measure_contour_stack
 from morphostack.core.metrics import ContourMetrics, contour_metrics
 from morphostack.core.models import VoxelSize
+from morphostack.core.profiles import AnalysisProfile, DEFAULT_PROFILE, normalize_profile
 from morphostack.core.segmentation import apply_rect_roi
 
 
@@ -26,6 +27,7 @@ class RectROI:
 class FrameAnalysis:
     frame_index: int
     threshold: float
+    profile: AnalysisProfile
     contour: np.ndarray | None
     metrics: ContourMetrics | None
     preview: SegmentationPreview
@@ -34,6 +36,7 @@ class FrameAnalysis:
 @dataclass(frozen=True)
 class StackAnalysis:
     voxel_size: VoxelSize
+    profile: AnalysisProfile
     frames: tuple[FrameAnalysis, ...]
     mesh: MeshMeasurement | None = None
 
@@ -48,8 +51,10 @@ def analyze_frame(
     frame_index: int,
     threshold: float,
     voxel_size: VoxelSize,
+    profile: str | None = DEFAULT_PROFILE,
     prefer_opencv: bool = True,
 ) -> FrameAnalysis:
+    analysis_profile = normalize_profile(profile)
     preview = segmentation_preview(image, threshold, prefer_opencv=prefer_opencv)
     metrics = None
     if preview.contour is not None:
@@ -57,6 +62,7 @@ def analyze_frame(
     return FrameAnalysis(
         frame_index=frame_index,
         threshold=threshold,
+        profile=analysis_profile,
         contour=preview.contour,
         metrics=metrics,
         preview=preview,
@@ -69,9 +75,11 @@ def analyze_stack(
     thresholds: float | Sequence[float],
     voxel_size: VoxelSize,
     roi: RectROI | None = None,
+    profile: str | None = DEFAULT_PROFILE,
     prefer_opencv: bool = True,
     include_mesh: bool = False,
 ) -> StackAnalysis:
+    analysis_profile = normalize_profile(profile)
     arr = np.asarray(stack)
     if arr.ndim != 3:
         raise ValueError("analyze_stack expects a grayscale stack shaped as (z, y, x)")
@@ -92,6 +100,7 @@ def analyze_stack(
             frame_index=idx,
             threshold=per_frame_thresholds[idx],
             voxel_size=voxel_size,
+            profile=analysis_profile,
             prefer_opencv=prefer_opencv,
         )
         for idx, frame in enumerate(arr)
@@ -103,7 +112,7 @@ def analyze_stack(
             shape=arr.shape,
             voxel=voxel_size,
         )
-    return StackAnalysis(voxel_size=voxel_size, frames=frames, mesh=mesh)
+    return StackAnalysis(voxel_size=voxel_size, profile=analysis_profile, frames=frames, mesh=mesh)
 
 
 def normalize_thresholds(thresholds: float | Sequence[float], *, frame_count: int) -> tuple[float, ...]:
