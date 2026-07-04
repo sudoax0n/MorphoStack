@@ -38,6 +38,12 @@ from morphostack.core.pipeline import (
 )
 from morphostack.core.profiles import DEFAULT_PROFILE, PROFILE_CHOICES, AnalysisProfile, normalize_profile
 from morphostack.core.segmentation import apply_rect_roi, suggest_threshold, threshold_mask
+from morphostack.core.validation import (
+    ValidationDifference,
+    ValidationReport,
+    compare_metric_csv,
+    format_validation_report,
+)
 
 __all__ = [
     "AnalysisProfile",
@@ -53,6 +59,8 @@ __all__ = [
     "SegmentationPreview",
     "StackAnalysis",
     "VoxelSize",
+    "ValidationDifference",
+    "ValidationReport",
     "apply_rect_roi",
     "as_color_stack",
     "as_grayscale_stack",
@@ -68,7 +76,9 @@ __all__ = [
     "contour_metrics",
     "contour_to_mask",
     "contours_to_mask_stack",
+    "compare_metric_csv",
     "failed_analysis_summary_row",
+    "format_validation_report",
     "largest_component_boundary",
     "largest_connected_component",
     "largest_opencv_contour",

@@ -25,6 +25,8 @@ from morphostack.core import (
     analysis_summary_row,
     apply_rect_roi,
     failed_analysis_summary_row,
+    compare_metric_csv,
+    format_validation_report,
     load_image_stack,
     suggest_threshold,
     write_analysis_csv,
@@ -168,6 +170,28 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Use dependency-light rectangular fallback contours instead of OpenCV contours.",
     )
+    validate = subparsers.add_parser(
+        "validate",
+        help="Compare two MorphoStack CSV exports within a numeric tolerance.",
+    )
+    validate.add_argument("expected", help="Reference CSV path.")
+    validate.add_argument("actual", help="CSV path to validate.")
+    validate.add_argument(
+        "--tolerance",
+        type=float,
+        default=1e-6,
+        help="Absolute numeric tolerance. Default: 1e-6.",
+    )
+    validate.add_argument(
+        "--columns",
+        nargs="+",
+        help="Optional metric columns to compare. Default: all shared numeric columns.",
+    )
+    validate.add_argument(
+        "--key-column",
+        default="frame_index",
+        help="Column used to match rows. Default: frame_index.",
+    )
     return parser
 
 
@@ -241,6 +265,15 @@ def main(argv: list[str] | None = None) -> int:
             roi=args.roi,
             prefer_opencv=not args.fallback_contours,
             include_mesh=args.mesh,
+        )
+
+    if args.command == "validate":
+        return run_validate(
+            expected=args.expected,
+            actual=args.actual,
+            tolerance=args.tolerance,
+            columns=args.columns,
+            key_column=args.key_column,
         )
 
     parser.print_help()
@@ -539,6 +572,30 @@ def run_batch(
     if frame_metrics_dir:
         print(f"Frame metrics: {frame_metrics_dir}")
     return 1 if failures else 0
+
+
+def run_validate(
+    *,
+    expected: str,
+    actual: str,
+    tolerance: float = 1e-6,
+    columns: list[str] | None = None,
+    key_column: str = "frame_index",
+) -> int:
+    try:
+        report = compare_metric_csv(
+            expected,
+            actual,
+            tolerance=tolerance,
+            columns=columns,
+            key_column=key_column,
+        )
+    except Exception as exc:
+        print(f"Failed to validate CSV metrics: {exc}")
+        return 1
+
+    print(format_validation_report(report))
+    return 0 if report.passed else 1
 
 
 def discover_stack_paths(directory: Path, *, recursive: bool = False) -> list[Path]:

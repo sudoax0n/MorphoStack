@@ -14,6 +14,7 @@ morphostack threshold path\to\stack.tif
 morphostack analyze path\to\stack.tif --threshold 100 --out metrics.csv
 morphostack analyze path\to\stack.tif --threshold 100 --profile rbc --out metrics.csv
 morphostack batch path\to\stacks --threshold 100 --out batch_summary.csv
+morphostack validate reference_metrics.csv new_metrics.csv
 morphostack serve
 morphostack dev
 mst doctor
@@ -73,6 +74,16 @@ To analyze a folder of stacks and produce one summary table:
 
 Add `--recursive` to include subdirectories, and `--metrics-dir path\to\frames`
 to also save each stack's per-frame metrics CSV.
+
+To compare a new CSV export against a reference export:
+
+```bash
+.\.venv\Scripts\morphostack validate reference_metrics.csv new_metrics.csv --tolerance 0.000001
+```
+
+Use `--columns area_um2 circularity deformation_index` to restrict validation
+to selected metrics. This is intended for regression checks against trusted
+legacy outputs or curated lab reference datasets.
 
 To start the local backend for the future web UI:
 
@@ -151,6 +162,8 @@ No GitHub remote is configured yet.
 - Use `analyze_stack` as the headless core pipeline for CLI/API/UI workflows.
 - Use `morphostack batch` when a directory of stacks should become one
   spreadsheet-friendly summary table.
+- Use `morphostack validate` to compare generated CSV metrics against reference
+  outputs before trusting analysis changes.
 - Treat vesicle and RBC analysis as explicit profiles, even where early shared
   processing is identical.
 - Treat heavy analysis libraries such as OpenCV and scikit-image as optional until the pipeline needs them.

@@ -313,3 +313,31 @@ def test_batch_reports_when_no_supported_stacks(tmp_path, capsys):
     assert result == 1
     out = capsys.readouterr().out
     assert "No supported stacks found" in out
+
+
+def test_validate_passes_matching_metric_csvs(tmp_path, capsys):
+    expected = tmp_path / "expected.csv"
+    actual = tmp_path / "actual.csv"
+    expected.write_text("frame_index,area_um2\n0,9.0\n", encoding="utf-8")
+    actual.write_text("frame_index,area_um2\n0,9.000001\n", encoding="utf-8")
+
+    result = main(["validate", str(expected), str(actual), "--tolerance", "0.00001"])
+
+    assert result == 0
+    out = capsys.readouterr().out
+    assert "MorphoStack CSV Validation" in out
+    assert "Result: PASS" in out
+
+
+def test_validate_fails_different_metric_csvs(tmp_path, capsys):
+    expected = tmp_path / "expected.csv"
+    actual = tmp_path / "actual.csv"
+    expected.write_text("frame_index,area_um2\n0,9.0\n", encoding="utf-8")
+    actual.write_text("frame_index,area_um2\n0,10.0\n", encoding="utf-8")
+
+    result = main(["validate", str(expected), str(actual)])
+
+    assert result == 1
+    out = capsys.readouterr().out
+    assert "Result: FAIL" in out
+    assert "area_um2" in out
