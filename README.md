@@ -83,7 +83,8 @@ npm run dev
 The browser UI can preview threshold segmentation, analyze a selected TIFF/CZI
 file through upload endpoints, or use a local stack path when the backend can
 already access the file. After analysis, the frame metrics table can be
-downloaded as a CSV file.
+downloaded as a CSV file. Current 2D descriptors include area, perimeter,
+circularity, bounding-box size, aspect ratio, equivalent diameter, and solidity.
 
 ## Architecture Direction
 
@@ -100,6 +101,8 @@ No GitHub remote is configured yet.
 - Load files non-interactively; voxel sizes must come from metadata, defaults, or explicit caller overrides.
 - Store physical spacing as micrometers through `VoxelSize`.
 - Use `vx * vy` for areas and anisotropic segment lengths for perimeters.
+- Keep shape descriptors unit-consistent; solidity must compare physical area
+  with physical convex-hull area.
 - Keep basic threshold previews usable without OpenCV; use optional OpenCV only for richer contour smoothing/extraction.
 - When `opencv-python` is installed, `segmentation_preview` uses real external contours instead of the rectangular fallback.
 - Use `analyze_stack` as the headless core pipeline for CLI/API/UI workflows.

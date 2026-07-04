@@ -23,6 +23,11 @@ type AnalysisRow = {
   area_um2: number;
   perimeter_um: number;
   circularity: number;
+  bbox_width_um: number;
+  bbox_height_um: number;
+  aspect_ratio: number;
+  equivalent_diameter_um: number;
+  solidity: number;
   mesh_surface_area_um2: number;
   mesh_volume_um3: number;
 };
@@ -62,6 +67,11 @@ const CSV_COLUMNS = [
   "area_um2",
   "perimeter_um",
   "circularity",
+  "bbox_width_um",
+  "bbox_height_um",
+  "aspect_ratio",
+  "equivalent_diameter_um",
+  "solidity",
   "mesh_surface_area_um2",
   "mesh_volume_um3"
 ] as const;
@@ -166,11 +176,14 @@ app.innerHTML = `
             <th>Contour</th>
             <th>Area (um2)</th>
             <th>Perimeter (um)</th>
+            <th>Eq. diameter (um)</th>
+            <th>Aspect</th>
+            <th>Solidity</th>
             <th>Circularity</th>
           </tr>
         </thead>
         <tbody id="results-body">
-          <tr><td colspan="6" class="muted">Run an analysis to populate metrics.</td></tr>
+          <tr><td colspan="9" class="muted">Run an analysis to populate metrics.</td></tr>
         </tbody>
       </table>
     </div>
@@ -261,7 +274,7 @@ async function analyzeStack(): Promise<void> {
   latestAnalysis = null;
   downloadCsvButton.disabled = true;
   analysisSummary.textContent = "Analyzing...";
-  resultsBody.innerHTML = `<tr><td colspan="6" class="muted">Running analysis...</td></tr>`;
+  resultsBody.innerHTML = `<tr><td colspan="9" class="muted">Running analysis...</td></tr>`;
   try {
     const file = selectedFile();
     const payload = file
@@ -277,7 +290,7 @@ async function analyzeStack(): Promise<void> {
     renderAnalysis(payload);
   } catch (error) {
     analysisSummary.textContent = errorMessage(error);
-    resultsBody.innerHTML = `<tr><td colspan="6" class="muted">Analysis failed.</td></tr>`;
+    resultsBody.innerHTML = `<tr><td colspan="9" class="muted">Analysis failed.</td></tr>`;
   }
 }
 
@@ -311,7 +324,7 @@ function renderAnalysis(payload: AnalyzeResponse): void {
   `;
 
   if (payload.rows.length === 0) {
-    resultsBody.innerHTML = `<tr><td colspan="6" class="muted">No rows returned.</td></tr>`;
+    resultsBody.innerHTML = `<tr><td colspan="9" class="muted">No rows returned.</td></tr>`;
     return;
   }
 
@@ -324,6 +337,9 @@ function renderAnalysis(payload: AnalyzeResponse): void {
           <td>${row.has_contour ? "yes" : "no"}</td>
           <td>${formatNumber(row.area_um2)}</td>
           <td>${formatNumber(row.perimeter_um)}</td>
+          <td>${formatNumber(row.equivalent_diameter_um)}</td>
+          <td>${formatNumber(row.aspect_ratio)}</td>
+          <td>${formatNumber(row.solidity)}</td>
           <td>${formatNumber(row.circularity)}</td>
         </tr>
       `

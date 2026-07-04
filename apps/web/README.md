@@ -29,4 +29,6 @@ Set `MORPHOSTACK_API_TARGET` to point Vite at a different backend.
 The UI supports direct TIFF/CZI uploads for normal local use. The path input is
 kept as a developer fallback when the backend can access a file directly. Users
 can preview threshold segmentation before analysis and download the returned
-frame metrics as a CSV file after analysis.
+frame metrics as a CSV file after analysis. The metrics include core 2D shape
+descriptors such as area, perimeter, circularity, aspect ratio, equivalent
+diameter, and solidity.

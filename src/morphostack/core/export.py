@@ -18,6 +18,11 @@ CSV_COLUMNS = (
     "area_um2",
     "perimeter_um",
     "circularity",
+    "bbox_width_um",
+    "bbox_height_um",
+    "aspect_ratio",
+    "equivalent_diameter_um",
+    "solidity",
     "mesh_surface_area_um2",
     "mesh_volume_um3",
 )
@@ -39,6 +44,11 @@ def analysis_rows(analysis: StackAnalysis) -> list[dict[str, object]]:
                 "area_um2": metrics.area_um2 if metrics else 0.0,
                 "perimeter_um": metrics.perimeter_um if metrics else 0.0,
                 "circularity": metrics.circularity if metrics else 0.0,
+                "bbox_width_um": metrics.bbox_width_um if metrics else 0.0,
+                "bbox_height_um": metrics.bbox_height_um if metrics else 0.0,
+                "aspect_ratio": metrics.aspect_ratio if metrics else 0.0,
+                "equivalent_diameter_um": metrics.equivalent_diameter_um if metrics else 0.0,
+                "solidity": metrics.solidity if metrics else 0.0,
                 "mesh_surface_area_um2": mesh.surface_area_um2 if mesh else 0.0,
                 "mesh_volume_um3": mesh.volume_um3 if mesh else 0.0,
             }
