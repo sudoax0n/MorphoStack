@@ -19,6 +19,8 @@ class ContourMetrics:
     bbox_width_um: float
     bbox_height_um: float
     aspect_ratio: float
+    elongation: float
+    extent: float
     equivalent_diameter_um: float
     solidity: float
 
@@ -40,8 +42,14 @@ def contour_metrics(points_xy: np.ndarray, voxel: VoxelSize) -> ContourMetrics:
         circularity = (4.0 * np.pi * area_um) / (perimeter_um**2)
     bbox_width_um, bbox_height_um = bounding_box_size(scaled_pts)
     aspect_ratio = 0.0
+    elongation = 0.0
     if min(bbox_width_um, bbox_height_um) > 0:
-        aspect_ratio = max(bbox_width_um, bbox_height_um) / min(bbox_width_um, bbox_height_um)
+        major = max(bbox_width_um, bbox_height_um)
+        minor = min(bbox_width_um, bbox_height_um)
+        aspect_ratio = major / minor
+        elongation = 1.0 - (minor / major)
+    bbox_area_um = bbox_width_um * bbox_height_um
+    extent = area_um / bbox_area_um if bbox_area_um > 0 else 0.0
     equivalent_diameter_um = 0.0
     if area_um > 0:
         equivalent_diameter_um = float(np.sqrt((4.0 * area_um) / np.pi))
@@ -57,6 +65,8 @@ def contour_metrics(points_xy: np.ndarray, voxel: VoxelSize) -> ContourMetrics:
         bbox_width_um=bbox_width_um,
         bbox_height_um=bbox_height_um,
         aspect_ratio=aspect_ratio,
+        elongation=elongation,
+        extent=extent,
         equivalent_diameter_um=equivalent_diameter_um,
         solidity=solidity,
     )

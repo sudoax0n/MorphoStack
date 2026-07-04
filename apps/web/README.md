@@ -31,5 +31,5 @@ kept as a developer fallback when the backend can access a file directly. Users
 can preview threshold segmentation before analysis and download the returned
 frame metrics as a CSV file after analysis. The metrics include core 2D shape
 descriptors such as area, perimeter, circularity, aspect ratio, equivalent
-diameter, and solidity. The profile selector currently supports vesicle and RBC
-analysis modes.
+diameter, elongation, extent, and solidity. The profile selector currently
+supports vesicle and RBC analysis modes.

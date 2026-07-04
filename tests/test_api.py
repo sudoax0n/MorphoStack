@@ -81,6 +81,8 @@ def test_analyze_stack_without_mesh(client, tmp_path):
     assert payload["mesh"] is None
     assert payload["rows"][0]["area_um2"] == 9.0
     assert payload["rows"][0]["aspect_ratio"] == 1.0
+    assert payload["rows"][0]["elongation"] == 0.0
+    assert payload["rows"][0]["extent"] == 1.0
     assert payload["rows"][0]["solidity"] == 1.0
 
 

@@ -89,7 +89,8 @@ The browser UI can preview threshold segmentation, analyze a selected TIFF/CZI
 file through upload endpoints, or use a local stack path when the backend can
 already access the file. After analysis, the frame metrics table can be
 downloaded as a CSV file. Current 2D descriptors include area, perimeter,
-circularity, bounding-box size, aspect ratio, equivalent diameter, and solidity.
+circularity, bounding-box size, aspect ratio, elongation, extent, equivalent
+diameter, and solidity.
 The analysis profile selector currently supports `vesicle` and `rbc`.
 
 ## Architecture Direction

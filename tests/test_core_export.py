@@ -27,6 +27,8 @@ def test_analysis_rows_include_empty_and_valid_frames():
     assert rows[1]["has_contour"] is True
     assert rows[1]["area_um2"] == 9.0
     assert rows[1]["aspect_ratio"] == 1.0
+    assert rows[1]["elongation"] == 0.0
+    assert rows[1]["extent"] == 1.0
     assert rows[1]["solidity"] == 1.0
 
 
@@ -45,6 +47,6 @@ def test_write_analysis_csv_writes_header_and_rows():
 
     csv_text = buffer.getvalue()
     assert "frame_index,threshold,profile,method,has_contour" in csv_text
-    assert "bbox_width_um,bbox_height_um,aspect_ratio,equivalent_diameter_um,solidity" in csv_text
+    assert "bbox_width_um,bbox_height_um,aspect_ratio,elongation,extent,equivalent_diameter_um,solidity" in csv_text
     assert "mesh_surface_area_um2,mesh_volume_um3" in csv_text
     assert "0,100.0,vesicle,fallback,True" in csv_text

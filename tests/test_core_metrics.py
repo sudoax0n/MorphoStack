@@ -24,6 +24,8 @@ def test_contour_metrics_use_anisotropic_pixel_spacing():
     assert metrics.bbox_width_um == 2.0
     assert metrics.bbox_height_um == 4.0
     assert metrics.aspect_ratio == 2.0
+    assert metrics.elongation == 0.5
+    assert metrics.extent == 1.0
     assert metrics.equivalent_diameter_um == pytest.approx(3.191538243)
     assert metrics.solidity == 1.0
 
@@ -48,6 +50,7 @@ def test_contour_metrics_solidity_uses_physical_convex_hull_area():
     metrics = contour_metrics(concave, VoxelSize(x_um=2.0, y_um=1.0, z_um=1.0))
 
     assert metrics.area_um2 == 24.0
+    assert metrics.extent == 0.75
     assert metrics.solidity == 0.75
 
 
