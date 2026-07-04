@@ -47,6 +47,7 @@ type AnalyzeResponse = {
     surface_area_um2: number;
     volume_um3: number;
   };
+  manifest: Record<string, unknown>;
   rows: AnalysisRow[];
 };
 
@@ -191,7 +192,10 @@ app.innerHTML = `
   <section class="results">
     <div class="results-header">
       <h2>Frame Metrics</h2>
-      <button id="download-csv-btn" class="secondary" type="button" disabled>Download CSV</button>
+      <div class="button-row">
+        <button id="download-manifest-btn" class="secondary" type="button" disabled>Download Manifest</button>
+        <button id="download-csv-btn" class="secondary" type="button" disabled>Download CSV</button>
+      </div>
     </div>
     <div class="table-wrap">
       <table>
@@ -223,6 +227,7 @@ const previewOutput = mustElement<HTMLDivElement>("preview-output");
 const analysisSummary = mustElement<HTMLDivElement>("analysis-summary");
 const resultsBody = mustElement<HTMLTableSectionElement>("results-body");
 const downloadCsvButton = mustElement<HTMLButtonElement>("download-csv-btn");
+const downloadManifestButton = mustElement<HTMLButtonElement>("download-manifest-btn");
 let latestAnalysis: AnalyzeResponse | null = null;
 
 mustElement<HTMLButtonElement>("inspect-btn").addEventListener("click", () => {
@@ -243,6 +248,10 @@ mustElement<HTMLButtonElement>("suggest-threshold-btn").addEventListener("click"
 
 downloadCsvButton.addEventListener("click", () => {
   downloadLatestCsv();
+});
+
+downloadManifestButton.addEventListener("click", () => {
+  downloadLatestManifest();
 });
 
 void refreshHealth();
@@ -326,6 +335,7 @@ async function suggestThreshold(): Promise<void> {
 async function analyzeStack(): Promise<void> {
   latestAnalysis = null;
   downloadCsvButton.disabled = true;
+  downloadManifestButton.disabled = true;
   analysisSummary.textContent = "Analyzing...";
   resultsBody.innerHTML = `<tr><td colspan="10" class="muted">Running analysis...</td></tr>`;
   try {
@@ -369,6 +379,7 @@ function renderPreview(payload: PreviewResponse): void {
 function renderAnalysis(payload: AnalyzeResponse): void {
   latestAnalysis = payload;
   downloadCsvButton.disabled = payload.rows.length === 0;
+  downloadManifestButton.disabled = false;
   const meshText = payload.mesh
     ? `<br />3D surface: ${formatNumber(payload.mesh.surface_area_um2)} um2, volume: ${formatNumber(payload.mesh.volume_um3)} um3`
     : "";
@@ -420,6 +431,23 @@ function downloadLatestCsv(): void {
   URL.revokeObjectURL(url);
 }
 
+function downloadLatestManifest(): void {
+  if (!latestAnalysis) {
+    return;
+  }
+
+  const json = `${JSON.stringify(latestAnalysis.manifest, null, 2)}\n`;
+  const blob = new Blob([json], { type: "application/json;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = manifestFilename(latestAnalysis.source_path);
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
 function rowsToCsv(rows: AnalysisRow[]): string {
   const lines = [
     CSV_COLUMNS.join(","),
@@ -441,6 +469,13 @@ function csvFilename(sourcePath: string): string {
   const baseName = rawName.replace(/\.[^.]+$/, "") || "morphostack-analysis";
   const safeName = baseName.replace(/[^a-z0-9._-]+/gi, "_");
   return `${safeName}_metrics.csv`;
+}
+
+function manifestFilename(sourcePath: string): string {
+  const rawName = sourcePath.split(/[\\/]/).pop() || "morphostack-analysis";
+  const baseName = rawName.replace(/\.[^.]+$/, "") || "morphostack-analysis";
+  const safeName = baseName.replace(/[^a-z0-9._-]+/gi, "_");
+  return `${safeName}_manifest.json`;
 }
 
 async function apiGet<T>(url: string): Promise<T> {

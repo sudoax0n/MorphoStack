@@ -19,10 +19,12 @@ from morphostack.core import (
     RectROI,
     VoxelSize,
     analyze_stack,
+    analysis_manifest,
     apply_rect_roi,
     load_image_stack,
     suggest_threshold,
     write_analysis_csv,
+    write_analysis_manifest_json,
 )
 
 
@@ -120,6 +122,8 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.add_argument("--voxel-y", type=float, help="Override Y voxel size in micrometers.")
     analyze.add_argument("--voxel-z", type=float, help="Override Z voxel size in micrometers.")
     analyze.add_argument("--roi", nargs=4, type=int, metavar=("XMIN", "XMAX", "YMIN", "YMAX"))
+    analyze.add_argument("--manifest", help="Manifest JSON output path. Default: <csv>.manifest.json.")
+    analyze.add_argument("--no-manifest", action="store_true", help="Do not write a manifest JSON sidecar.")
     analyze.add_argument(
         "--mesh",
         action="store_true",
@@ -183,6 +187,8 @@ def main(argv: list[str] | None = None) -> int:
             voxel_y=args.voxel_y,
             voxel_z=args.voxel_z,
             roi=args.roi,
+            manifest=args.manifest,
+            write_manifest=not args.no_manifest,
             prefer_opencv=not args.fallback_contours,
             include_mesh=args.mesh,
         )
@@ -289,6 +295,8 @@ def run_analyze(
     voxel_y: float | None = None,
     voxel_z: float | None = None,
     roi: list[int] | None = None,
+    manifest: str | None = None,
+    write_manifest: bool = True,
     prefer_opencv: bool = True,
     include_mesh: bool = False,
 ) -> int:
@@ -314,6 +322,21 @@ def run_analyze(
         output_path = Path(out)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         write_analysis_csv(analysis, output_path)
+        manifest_path = None
+        if write_manifest:
+            manifest_path = Path(manifest) if manifest else output_path.with_suffix(f"{output_path.suffix}.manifest.json")
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            write_analysis_manifest_json(
+                analysis_manifest(
+                    analysis,
+                    source_path=str(stack.source_path),
+                    threshold=threshold,
+                    roi=roi_to_payload(rect_roi),
+                    include_mesh=include_mesh,
+                    prefer_opencv=prefer_opencv,
+                ),
+                manifest_path,
+            )
     except Exception as exc:
         print(f"Failed to analyze image stack: {exc}")
         return 1
@@ -328,6 +351,8 @@ def run_analyze(
         print(f"3D surface area: {analysis.mesh.surface_area_um2:g} um^2")
         print(f"3D volume: {analysis.mesh.volume_um3:g} um^3")
     print(f"CSV: {output_path}")
+    if manifest_path:
+        print(f"Manifest: {manifest_path}")
     return 0
 
 
@@ -369,6 +394,12 @@ def run_threshold(
     print(f"Method: {used_method}")
     print(f"Threshold: {threshold:g}")
     return 0
+
+
+def roi_to_payload(roi: RectROI | None) -> dict[str, int] | None:
+    if roi is None:
+        return None
+    return {"xmin": roi.xmin, "xmax": roi.xmax, "ymin": roi.ymin, "ymax": roi.ymax}
 
 
 def run_serve(*, host: str, port: int) -> int:

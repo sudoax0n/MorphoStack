@@ -140,7 +140,13 @@ def test_analyze_writes_csv_from_synthetic_tiff(tmp_path, capsys):
     assert result == 0
     out = capsys.readouterr().out
     assert "MorphoStack Analysis Complete" in out
+    assert "Manifest:" in out
     assert output_path.exists()
+    manifest_path = output_path.with_suffix(".csv.manifest.json")
+    assert manifest_path.exists()
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["source_path"] == str(input_path)
+    assert manifest["profile"] == "vesicle"
     csv_text = output_path.read_text(encoding="utf-8")
     assert "frame_index,threshold,profile,method,has_contour" in csv_text
     assert "0,100.0,vesicle,fallback,True" in csv_text
@@ -184,3 +190,35 @@ def test_analyze_can_write_mesh_summary_from_synthetic_tiff(tmp_path, capsys):
     csv_text = output_path.read_text(encoding="utf-8")
     assert "rbc" in csv_text
     assert "mesh_surface_area_um2,mesh_volume_um3" in csv_text
+
+
+def test_analyze_can_skip_manifest_from_synthetic_tiff(tmp_path):
+    tifffile = pytest.importorskip("tifffile")
+    stack = np.zeros((1, 8, 8), dtype=np.uint8)
+    stack[0, 2:5, 1:4] = 200
+    input_path = tmp_path / "stack.tif"
+    output_path = tmp_path / "metrics.csv"
+    tifffile.imwrite(input_path, stack, photometric="minisblack")
+
+    result = main(
+        [
+            "analyze",
+            str(input_path),
+            "--threshold",
+            "100",
+            "--out",
+            str(output_path),
+            "--voxel-x",
+            "1.0",
+            "--voxel-y",
+            "1.0",
+            "--voxel-z",
+            "1.0",
+            "--fallback-contours",
+            "--no-manifest",
+        ]
+    )
+
+    assert result == 0
+    assert output_path.exists()
+    assert not output_path.with_suffix(".csv.manifest.json").exists()

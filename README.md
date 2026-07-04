@@ -58,6 +58,10 @@ profile. The current RBC profile shares the same threshold-contour engine while
 providing a clean branch point for RBC-specific metrics.
 
 Add `--mesh` to assemble contour masks and include marching-cubes 3D surface area and volume in the CSV.
+By default, `morphostack analyze` also writes `<metrics.csv>.manifest.json`
+with source path, version, profile, voxel size, ROI, threshold, mesh settings,
+and CSV columns. Use `--no-manifest` to skip it or `--manifest path\to\run.json`
+to choose the JSON path.
 
 To start the local backend for the future web UI:
 
@@ -97,9 +101,9 @@ npm run dev
 The browser UI can preview threshold segmentation, analyze a selected TIFF/CZI
 file through upload endpoints, or use a local stack path when the backend can
 already access the file. After analysis, the frame metrics table can be
-downloaded as a CSV file. Current 2D descriptors include area, perimeter,
-circularity, bounding-box size, aspect ratio, elongation, extent, equivalent
-diameter, and solidity.
+downloaded as a CSV file, and the run manifest can be downloaded as JSON.
+Current 2D descriptors include area, perimeter, circularity, bounding-box size,
+aspect ratio, elongation, extent, equivalent diameter, and solidity.
 The `Suggest` threshold tool uses Otsu thresholding when available and falls
 back to a percentile-based suggestion.
 The analysis profile selector currently supports `vesicle` and `rbc`.

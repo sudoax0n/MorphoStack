@@ -18,6 +18,7 @@ from morphostack.core import (
     RectROI,
     VoxelSize,
     analyze_stack,
+    analysis_manifest,
     load_image_stack,
     suggest_threshold,
 )
@@ -120,6 +121,14 @@ def create_app() -> FastAPI:
             "valid_frame_count": len(analysis.valid_frames),
             "voxel_size": voxel_payload(stack.voxel_size),
             "mesh": mesh,
+            "manifest": analysis_manifest(
+                analysis,
+                source_path=str(stack.source_path),
+                threshold=request.threshold,
+                roi=roi_payload(to_rect_roi(request.roi)),
+                include_mesh=request.include_mesh,
+                prefer_opencv=request.prefer_opencv,
+            ),
             "rows": analysis_rows(analysis),
         }
 
@@ -223,6 +232,14 @@ def create_app() -> FastAPI:
             "valid_frame_count": len(analysis.valid_frames),
             "voxel_size": voxel_payload(stack.voxel_size),
             "mesh": mesh,
+            "manifest": analysis_manifest(
+                analysis,
+                source_path=file.filename or str(temp_path.name),
+                threshold=threshold,
+                roi=roi_payload(roi_from_optional_bounds(roi_xmin, roi_xmax, roi_ymin, roi_ymax)),
+                include_mesh=include_mesh,
+                prefer_opencv=prefer_opencv,
+            ),
             "rows": analysis_rows(analysis),
         }
 
@@ -320,6 +337,12 @@ def roi_from_optional_bounds(
     if any(value is None for value in values):
         raise ValueError("ROI requires xmin, xmax, ymin, and ymax")
     return RectROI(xmin, xmax, ymin, ymax)
+
+
+def roi_payload(roi: RectROI | None) -> dict[str, int] | None:
+    if roi is None:
+        return None
+    return {"xmin": roi.xmin, "xmax": roi.xmax, "ymin": roi.ymin, "ymax": roi.ymax}
 
 
 def apply_preview_roi(stack, roi: RectROI | None):

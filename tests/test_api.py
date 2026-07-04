@@ -78,6 +78,9 @@ def test_analyze_stack_without_mesh(client, tmp_path):
     assert payload["profile"] == "rbc"
     assert payload["frame_count"] == 3
     assert payload["valid_frame_count"] == 3
+    assert payload["manifest"]["profile"] == "rbc"
+    assert payload["manifest"]["source_path"] == str(path)
+    assert payload["manifest"]["threshold"] == 100
     assert payload["mesh"] is None
     assert payload["rows"][0]["area_um2"] == 9.0
     assert payload["rows"][0]["aspect_ratio"] == 1.0
@@ -199,6 +202,8 @@ def test_upload_analyze_stack_with_mesh(client):
     payload = response.json()
     assert payload["source_path"] == "stack.tif"
     assert payload["profile"] == "rbc"
+    assert payload["manifest"]["source_path"] == "stack.tif"
+    assert payload["manifest"]["include_mesh"] is True
     assert payload["frame_count"] == 3
     assert payload["valid_frame_count"] == 3
     assert payload["rows"][0]["area_um2"] == 9.0

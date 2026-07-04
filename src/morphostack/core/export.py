@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import csv
+import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TextIO
 
+from morphostack import __version__
 from morphostack.core.pipeline import StackAnalysis
 
 CSV_COLUMNS = (
@@ -60,6 +63,58 @@ def analysis_rows(analysis: StackAnalysis) -> list[dict[str, object]]:
             }
         )
     return rows
+
+
+def analysis_manifest(
+    analysis: StackAnalysis,
+    *,
+    source_path: str,
+    threshold: float | list[float] | tuple[float, ...],
+    roi: dict[str, int] | None = None,
+    include_mesh: bool = False,
+    prefer_opencv: bool = True,
+) -> dict[str, object]:
+    mesh = None
+    if analysis.mesh:
+        mesh = {
+            "surface_area_um2": analysis.mesh.surface_area_um2,
+            "volume_um3": analysis.mesh.volume_um3,
+        }
+    return {
+        "morphostack_version": __version__,
+        "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "source_path": source_path,
+        "profile": analysis.profile,
+        "threshold": threshold,
+        "roi": roi,
+        "include_mesh": include_mesh,
+        "prefer_opencv": prefer_opencv,
+        "voxel_size": {
+            "x_um": analysis.voxel_size.x_um,
+            "y_um": analysis.voxel_size.y_um,
+            "z_um": analysis.voxel_size.z_um,
+        },
+        "frame_count": len(analysis.frames),
+        "valid_frame_count": len(analysis.valid_frames),
+        "mesh": mesh,
+        "columns": list(CSV_COLUMNS),
+    }
+
+
+def write_analysis_manifest_json(manifest: dict[str, object], destination: str | Path | TextIO) -> None:
+    close_after = False
+    if hasattr(destination, "write"):
+        handle = destination
+    else:
+        handle = Path(destination).open("w", encoding="utf-8")
+        close_after = True
+
+    try:
+        json.dump(manifest, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+    finally:
+        if close_after:
+            handle.close()
 
 
 def write_analysis_csv(analysis: StackAnalysis, destination: str | Path | TextIO) -> None:
