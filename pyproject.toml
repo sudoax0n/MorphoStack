@@ -1,0 +1,48 @@
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "morphostack"
+version = "0.1.0"
+description = "Local morphometry toolkit for microscopy Z-stacks."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [
+  { name = "Abhinav", email = "ms24115@iisermohali.ac.in" }
+]
+dependencies = [
+  "numpy",
+  "psutil",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest",
+]
+api = [
+  "fastapi",
+  "uvicorn",
+]
+analysis = [
+  "opencv-python",
+  "scikit-image",
+  "scipy",
+  "pandas",
+  "tifffile",
+  "czifile",
+  "shapely",
+  "plotly",
+  "networkx",
+  "pillow",
+]
+
+[project.scripts]
+morphostack = "morphostack.cli:main"
+mst = "morphostack.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
