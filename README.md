@@ -118,7 +118,8 @@ summary CSV.
 The analysis summary reports valid-frame means, minima, maxima, and standard
 deviations for core shape descriptors.
 Current 2D descriptors include area, perimeter, circularity, bounding-box size,
-aspect ratio, elongation, extent, equivalent diameter, and solidity.
+aspect ratio, elongation, deformation index, extent, equivalent diameter, and
+solidity.
 The `Suggest` threshold tool uses Otsu thresholding when available and falls
 back to a percentile-based suggestion.
 Analysis warnings are shown in the UI and included in the run manifest.

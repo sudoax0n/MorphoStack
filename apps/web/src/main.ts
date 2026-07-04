@@ -30,6 +30,7 @@ type AnalysisRow = {
   bbox_height_um: number;
   aspect_ratio: number;
   elongation: number;
+  deformation_index: number;
   extent: number;
   equivalent_diameter_um: number;
   solidity: number;
@@ -121,6 +122,7 @@ const CSV_COLUMNS = [
   "bbox_height_um",
   "aspect_ratio",
   "elongation",
+  "deformation_index",
   "extent",
   "equivalent_diameter_um",
   "solidity",
@@ -251,11 +253,12 @@ app.innerHTML = `
             <th>Frames</th>
             <th>Valid</th>
             <th>Mean area (um2)</th>
+            <th>Mean def. index</th>
             <th>Mean circularity</th>
           </tr>
         </thead>
         <tbody id="batch-results-body">
-          <tr><td colspan="7" class="muted">Run a batch analysis to populate stack summaries.</td></tr>
+          <tr><td colspan="8" class="muted">Run a batch analysis to populate stack summaries.</td></tr>
         </tbody>
       </table>
     </div>
@@ -281,12 +284,13 @@ app.innerHTML = `
             <th>Eq. diameter (um)</th>
             <th>Aspect</th>
             <th>Elongation</th>
+            <th>Def. index</th>
             <th>Solidity</th>
             <th>Circularity</th>
           </tr>
         </thead>
         <tbody id="results-body">
-          <tr><td colspan="10" class="muted">Run an analysis to populate metrics.</td></tr>
+          <tr><td colspan="11" class="muted">Run an analysis to populate metrics.</td></tr>
         </tbody>
       </table>
     </div>
@@ -421,7 +425,7 @@ async function analyzeStack(): Promise<void> {
   downloadCsvButton.disabled = true;
   downloadManifestButton.disabled = true;
   analysisSummary.textContent = "Analyzing...";
-  resultsBody.innerHTML = `<tr><td colspan="10" class="muted">Running analysis...</td></tr>`;
+  resultsBody.innerHTML = `<tr><td colspan="11" class="muted">Running analysis...</td></tr>`;
   try {
     const file = selectedFile();
     const payload = file
@@ -438,7 +442,7 @@ async function analyzeStack(): Promise<void> {
     renderAnalysis(payload);
   } catch (error) {
     analysisSummary.textContent = errorMessage(error);
-    resultsBody.innerHTML = `<tr><td colspan="10" class="muted">Analysis failed.</td></tr>`;
+    resultsBody.innerHTML = `<tr><td colspan="11" class="muted">Analysis failed.</td></tr>`;
   }
 }
 
@@ -446,14 +450,14 @@ async function analyzeBatch(): Promise<void> {
   latestBatch = null;
   downloadBatchButton.disabled = true;
   batchSummary.textContent = "Analyzing batch...";
-  batchResultsBody.innerHTML = `<tr><td colspan="7" class="muted">Running batch analysis...</td></tr>`;
+  batchResultsBody.innerHTML = `<tr><td colspan="8" class="muted">Running batch analysis...</td></tr>`;
   try {
     const files = selectedBatchFiles();
     const payload = await apiUploadPost<BatchAnalyzeResponse>("/api/upload/batch", batchUploadForm(files));
     renderBatch(payload);
   } catch (error) {
     batchSummary.textContent = errorMessage(error);
-    batchResultsBody.innerHTML = `<tr><td colspan="7" class="muted">Batch analysis failed.</td></tr>`;
+    batchResultsBody.innerHTML = `<tr><td colspan="8" class="muted">Batch analysis failed.</td></tr>`;
   }
 }
 
@@ -495,7 +499,7 @@ function renderAnalysis(payload: AnalyzeResponse): void {
   `;
 
   if (payload.rows.length === 0) {
-    resultsBody.innerHTML = `<tr><td colspan="10" class="muted">No rows returned.</td></tr>`;
+    resultsBody.innerHTML = `<tr><td colspan="11" class="muted">No rows returned.</td></tr>`;
     return;
   }
 
@@ -511,6 +515,7 @@ function renderAnalysis(payload: AnalyzeResponse): void {
           <td>${formatNumber(row.equivalent_diameter_um)}</td>
           <td>${formatNumber(row.aspect_ratio)}</td>
           <td>${formatNumber(row.elongation)}</td>
+          <td>${formatNumber(row.deformation_index)}</td>
           <td>${formatNumber(row.solidity)}</td>
           <td>${formatNumber(row.circularity)}</td>
         </tr>
@@ -548,7 +553,7 @@ function renderBatch(payload: BatchAnalyzeResponse): void {
   `;
 
   if (payload.rows.length === 0) {
-    batchResultsBody.innerHTML = `<tr><td colspan="7" class="muted">No batch rows returned.</td></tr>`;
+    batchResultsBody.innerHTML = `<tr><td colspan="8" class="muted">No batch rows returned.</td></tr>`;
     return;
   }
 
@@ -562,6 +567,7 @@ function renderBatch(payload: BatchAnalyzeResponse): void {
           <td>${formatUnknownNumber(row.frame_count)}</td>
           <td>${formatUnknownNumber(row.valid_frame_count)}</td>
           <td>${formatUnknownNumber(row.area_um2_mean)}</td>
+          <td>${formatUnknownNumber(row.deformation_index_mean)}</td>
           <td>${formatUnknownNumber(row.circularity_mean)}</td>
         </tr>
       `

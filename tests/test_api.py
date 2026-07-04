@@ -89,6 +89,7 @@ def test_analyze_stack_without_mesh(client, tmp_path):
     assert payload["rows"][0]["area_um2"] == 9.0
     assert payload["rows"][0]["aspect_ratio"] == 1.0
     assert payload["rows"][0]["elongation"] == 0.0
+    assert payload["rows"][0]["deformation_index"] == 0.0
     assert payload["rows"][0]["extent"] == 1.0
     assert payload["rows"][0]["solidity"] == 1.0
 
@@ -215,6 +216,7 @@ def test_upload_analyze_stack_with_mesh(client):
     assert payload["frame_count"] == 3
     assert payload["valid_frame_count"] == 3
     assert payload["rows"][0]["area_um2"] == 9.0
+    assert payload["rows"][0]["deformation_index"] == 0.0
     assert payload["rows"][0]["equivalent_diameter_um"] > 0
     assert payload["mesh"]["surface_area_um2"] > 0
     assert payload["mesh"]["volume_um3"] > 0
@@ -247,6 +249,7 @@ def test_upload_batch_analyze_returns_summary_rows(client):
     assert payload["columns"][0] == "source_path"
     assert payload["rows"][0]["profile"] == "rbc"
     assert payload["rows"][0]["area_um2_mean"] == 9.0
+    assert payload["rows"][0]["deformation_index_mean"] == 0.0
 
 
 def test_upload_analyze_partial_roi_returns_400(client):

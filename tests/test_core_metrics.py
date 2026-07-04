@@ -25,6 +25,7 @@ def test_contour_metrics_use_anisotropic_pixel_spacing():
     assert metrics.bbox_height_um == 4.0
     assert metrics.aspect_ratio == 2.0
     assert metrics.elongation == 0.5
+    assert metrics.deformation_index == pytest.approx(1.0 / 3.0)
     assert metrics.extent == 1.0
     assert metrics.equivalent_diameter_um == pytest.approx(3.191538243)
     assert metrics.solidity == 1.0

@@ -27,6 +27,7 @@ CSV_COLUMNS = (
     "bbox_height_um",
     "aspect_ratio",
     "elongation",
+    "deformation_index",
     "extent",
     "equivalent_diameter_um",
     "solidity",
@@ -44,6 +45,7 @@ SUMMARY_METRICS = (
     "bbox_height_um",
     "aspect_ratio",
     "elongation",
+    "deformation_index",
     "extent",
     "equivalent_diameter_um",
     "solidity",
@@ -88,6 +90,7 @@ def analysis_rows(analysis: StackAnalysis) -> list[dict[str, object]]:
                 "bbox_height_um": metrics.bbox_height_um if metrics else 0.0,
                 "aspect_ratio": metrics.aspect_ratio if metrics else 0.0,
                 "elongation": metrics.elongation if metrics else 0.0,
+                "deformation_index": metrics.deformation_index if metrics else 0.0,
                 "extent": metrics.extent if metrics else 0.0,
                 "equivalent_diameter_um": metrics.equivalent_diameter_um if metrics else 0.0,
                 "solidity": metrics.solidity if metrics else 0.0,
@@ -157,6 +160,7 @@ def analysis_summary(analysis: StackAnalysis) -> dict[str, object]:
         metric_values["bbox_height_um"].append(metrics.bbox_height_um)
         metric_values["aspect_ratio"].append(metrics.aspect_ratio)
         metric_values["elongation"].append(metrics.elongation)
+        metric_values["deformation_index"].append(metrics.deformation_index)
         metric_values["extent"].append(metrics.extent)
         metric_values["equivalent_diameter_um"].append(metrics.equivalent_diameter_um)
         metric_values["solidity"].append(metrics.solidity)
