@@ -89,6 +89,28 @@ def test_analyze_requires_complete_voxel_override(capsys):
     assert "requires --voxel-x, --voxel-y, and --voxel-z" in out
 
 
+def test_threshold_requires_complete_voxel_override(capsys):
+    assert main(["threshold", "sample.tif", "--voxel-x", "1.0"]) == 2
+    out = capsys.readouterr().out
+    assert "requires --voxel-x, --voxel-y, and --voxel-z" in out
+
+
+def test_threshold_prints_suggestion_from_synthetic_tiff(tmp_path, capsys):
+    tifffile = pytest.importorskip("tifffile")
+    stack = np.zeros((2, 8, 8), dtype=np.uint8)
+    stack[:, 2:5, 1:4] = 200
+    input_path = tmp_path / "stack.tif"
+    tifffile.imwrite(input_path, stack, photometric="minisblack")
+
+    result = main(["threshold", str(input_path), "--method", "percentile"])
+
+    assert result == 0
+    out = capsys.readouterr().out
+    assert "MorphoStack Threshold Suggestion" in out
+    assert "Method: percentile" in out
+    assert "Threshold:" in out
+
+
 def test_analyze_writes_csv_from_synthetic_tiff(tmp_path, capsys):
     tifffile = pytest.importorskip("tifffile")
     stack = np.zeros((2, 8, 8), dtype=np.uint8)

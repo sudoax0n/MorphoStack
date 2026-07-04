@@ -14,7 +14,16 @@ from pathlib import Path
 
 from morphostack import __version__
 from morphostack.cli.system_info import collect_diagnostics, format_diagnostics
-from morphostack.core import PROFILE_CHOICES, RectROI, VoxelSize, analyze_stack, load_image_stack, write_analysis_csv
+from morphostack.core import (
+    PROFILE_CHOICES,
+    RectROI,
+    VoxelSize,
+    analyze_stack,
+    apply_rect_roi,
+    load_image_stack,
+    suggest_threshold,
+    write_analysis_csv,
+)
 
 
 CORE_DEPENDENCIES = ("numpy", "psutil")
@@ -79,6 +88,21 @@ def build_parser() -> argparse.ArgumentParser:
     inspect.add_argument("--voxel-x", type=float, help="Override X voxel size in micrometers.")
     inspect.add_argument("--voxel-y", type=float, help="Override Y voxel size in micrometers.")
     inspect.add_argument("--voxel-z", type=float, help="Override Z voxel size in micrometers.")
+    threshold = subparsers.add_parser(
+        "threshold",
+        help="Suggest an intensity threshold for an image stack.",
+    )
+    threshold.add_argument("path", help="Path to a .tif, .tiff, or .czi file.")
+    threshold.add_argument(
+        "--method",
+        choices=("auto", "otsu", "percentile"),
+        default="auto",
+        help="Threshold suggestion method. Default: auto.",
+    )
+    threshold.add_argument("--voxel-x", type=float, help="Override X voxel size in micrometers.")
+    threshold.add_argument("--voxel-y", type=float, help="Override Y voxel size in micrometers.")
+    threshold.add_argument("--voxel-z", type=float, help="Override Z voxel size in micrometers.")
+    threshold.add_argument("--roi", nargs=4, type=int, metavar=("XMIN", "XMAX", "YMIN", "YMAX"))
     analyze = subparsers.add_parser(
         "analyze",
         help="Run headless threshold analysis on an image stack and write CSV metrics.",
@@ -129,6 +153,16 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "serve":
         return run_serve(host=args.host, port=args.port)
+
+    if args.command == "threshold":
+        return run_threshold(
+            path=args.path,
+            method=args.method,
+            voxel_x=args.voxel_x,
+            voxel_y=args.voxel_y,
+            voxel_z=args.voxel_z,
+            roi=args.roi,
+        )
 
     if args.command == "dev":
         return run_dev(
@@ -294,6 +328,46 @@ def run_analyze(
         print(f"3D surface area: {analysis.mesh.surface_area_um2:g} um^2")
         print(f"3D volume: {analysis.mesh.volume_um3:g} um^3")
     print(f"CSV: {output_path}")
+    return 0
+
+
+def run_threshold(
+    *,
+    path: str,
+    method: str = "auto",
+    voxel_x: float | None = None,
+    voxel_y: float | None = None,
+    voxel_z: float | None = None,
+    roi: list[int] | None = None,
+) -> int:
+    voxel_override_result = build_voxel_override(voxel_x, voxel_y, voxel_z)
+    if voxel_override_result == "partial":
+        print("Voxel override requires --voxel-x, --voxel-y, and --voxel-z together.")
+        return 2
+    voxel_override = voxel_override_result
+    rect_roi = RectROI(*roi) if roi is not None else None
+
+    try:
+        stack = load_image_stack(path, voxel_override=voxel_override)
+        grayscale = stack.grayscale
+        if rect_roi is not None:
+            grayscale = apply_rect_roi(
+                grayscale,
+                xmin=rect_roi.xmin,
+                xmax=rect_roi.xmax,
+                ymin=rect_roi.ymin,
+                ymax=rect_roi.ymax,
+            )
+        threshold, used_method = suggest_threshold(grayscale, method=method)
+    except Exception as exc:
+        print(f"Failed to suggest threshold: {exc}")
+        return 1
+
+    print("MorphoStack Threshold Suggestion")
+    print("================================")
+    print(f"Source: {stack.source_path}")
+    print(f"Method: {used_method}")
+    print(f"Threshold: {threshold:g}")
     return 0
 
 
