@@ -114,6 +114,8 @@ def test_analyze_stack_with_mesh(client, tmp_path):
     payload = response.json()
     assert payload["mesh"]["surface_area_um2"] > 0
     assert payload["mesh"]["volume_um3"] > 0
+    assert payload["mesh"]["equivalent_sphere_diameter_um"] > 0
+    assert payload["mesh"]["sphericity"] > 0
 
 
 def test_threshold_stack_returns_suggestion(client, tmp_path):
@@ -216,6 +218,8 @@ def test_upload_analyze_stack_with_mesh(client):
     assert payload["rows"][0]["equivalent_diameter_um"] > 0
     assert payload["mesh"]["surface_area_um2"] > 0
     assert payload["mesh"]["volume_um3"] > 0
+    assert payload["mesh"]["equivalent_sphere_diameter_um"] > 0
+    assert payload["mesh"]["sphericity"] > 0
 
 
 def test_upload_batch_analyze_returns_summary_rows(client):

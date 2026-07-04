@@ -412,6 +412,8 @@ def run_analyze(
     if analysis.mesh:
         print(f"3D surface area: {analysis.mesh.surface_area_um2:g} um^2")
         print(f"3D volume: {analysis.mesh.volume_um3:g} um^3")
+        print(f"3D equivalent sphere diameter: {analysis.mesh.equivalent_sphere_diameter_um:g} um")
+        print(f"3D sphericity: {analysis.mesh.sphericity:g}")
     print(f"CSV: {output_path}")
     if manifest_path:
         print(f"Manifest: {manifest_path}")

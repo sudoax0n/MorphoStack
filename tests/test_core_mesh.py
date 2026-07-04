@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from math import pi
+
 import numpy as np
 import pytest
 
@@ -28,6 +30,8 @@ def test_surface_area_volume_for_unit_tetrahedron():
     expected_area = 1.5 + (3**0.5 / 2.0)
     assert measurement.surface_area_um2 == expected_area
     assert measurement.volume_um3 == 1.0 / 6.0
+    assert measurement.equivalent_sphere_diameter_um == pytest.approx((1.0 / pi) ** (1.0 / 3.0))
+    assert 0 < measurement.sphericity <= 1
 
 
 def test_contours_to_mask_stack_rasterizes_contours():
@@ -55,3 +59,5 @@ def test_measure_contour_stack_returns_mesh_measurement():
     assert measurement is not None
     assert measurement.surface_area_um2 > 0
     assert measurement.volume_um3 > 0
+    assert measurement.equivalent_sphere_diameter_um > 0
+    assert 0 < measurement.sphericity <= 1

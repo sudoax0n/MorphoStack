@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import pi
 
 import numpy as np
 
@@ -14,6 +15,19 @@ from morphostack.core.metrics import normalize_points
 class MeshMeasurement:
     surface_area_um2: float
     volume_um3: float
+
+    @property
+    def equivalent_sphere_diameter_um(self) -> float:
+        if self.volume_um3 <= 0:
+            return 0.0
+        return float((6.0 * self.volume_um3 / pi) ** (1.0 / 3.0))
+
+    @property
+    def sphericity(self) -> float:
+        if self.surface_area_um2 <= 0 or self.volume_um3 <= 0:
+            return 0.0
+        raw = (pi ** (1.0 / 3.0)) * ((6.0 * self.volume_um3) ** (2.0 / 3.0)) / self.surface_area_um2
+        return float(min(raw, 1.0))
 
 
 def surface_area_volume(vertices: np.ndarray, faces: np.ndarray) -> MeshMeasurement:

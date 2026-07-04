@@ -190,9 +190,10 @@ def test_analyze_can_write_mesh_summary_from_synthetic_tiff(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "Profile: rbc" in out
     assert "3D surface area:" in out
+    assert "3D sphericity:" in out
     csv_text = output_path.read_text(encoding="utf-8")
     assert "rbc" in csv_text
-    assert "mesh_surface_area_um2,mesh_volume_um3" in csv_text
+    assert "mesh_surface_area_um2,mesh_volume_um3,mesh_equivalent_sphere_diameter_um,mesh_sphericity" in csv_text
 
 
 def test_analyze_can_skip_manifest_from_synthetic_tiff(tmp_path):

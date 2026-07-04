@@ -32,6 +32,8 @@ CSV_COLUMNS = (
     "solidity",
     "mesh_surface_area_um2",
     "mesh_volume_um3",
+    "mesh_equivalent_sphere_diameter_um",
+    "mesh_sphericity",
 )
 
 SUMMARY_METRICS = (
@@ -58,6 +60,8 @@ BATCH_SUMMARY_COLUMNS = (
     "valid_fraction",
     "mesh_surface_area_um2",
     "mesh_volume_um3",
+    "mesh_equivalent_sphere_diameter_um",
+    "mesh_sphericity",
     "warning_codes",
     *tuple(f"{metric}_{stat}" for metric in SUMMARY_METRICS for stat in ("mean", "min", "max", "std")),
 )
@@ -89,6 +93,8 @@ def analysis_rows(analysis: StackAnalysis) -> list[dict[str, object]]:
                 "solidity": metrics.solidity if metrics else 0.0,
                 "mesh_surface_area_um2": mesh.surface_area_um2 if mesh else 0.0,
                 "mesh_volume_um3": mesh.volume_um3 if mesh else 0.0,
+                "mesh_equivalent_sphere_diameter_um": mesh.equivalent_sphere_diameter_um if mesh else 0.0,
+                "mesh_sphericity": mesh.sphericity if mesh else 0.0,
             }
         )
     return rows
@@ -194,6 +200,8 @@ def analysis_manifest(
         mesh = {
             "surface_area_um2": analysis.mesh.surface_area_um2,
             "volume_um3": analysis.mesh.volume_um3,
+            "equivalent_sphere_diameter_um": analysis.mesh.equivalent_sphere_diameter_um,
+            "sphericity": analysis.mesh.sphericity,
         }
     return {
         "morphostack_version": __version__,
@@ -237,6 +245,8 @@ def analysis_summary_row(
         "valid_fraction": summary["valid_fraction"],
         "mesh_surface_area_um2": analysis.mesh.surface_area_um2 if analysis.mesh else 0.0,
         "mesh_volume_um3": analysis.mesh.volume_um3 if analysis.mesh else 0.0,
+        "mesh_equivalent_sphere_diameter_um": analysis.mesh.equivalent_sphere_diameter_um if analysis.mesh else 0.0,
+        "mesh_sphericity": analysis.mesh.sphericity if analysis.mesh else 0.0,
         "warning_codes": ";".join(str(warning["code"]) for warning in analysis_warnings(analysis)),
     }
     if isinstance(metrics, dict):

@@ -117,6 +117,8 @@ def create_app() -> FastAPI:
             mesh = {
                 "surface_area_um2": analysis.mesh.surface_area_um2,
                 "volume_um3": analysis.mesh.volume_um3,
+                "equivalent_sphere_diameter_um": analysis.mesh.equivalent_sphere_diameter_um,
+                "sphericity": analysis.mesh.sphericity,
             }
         return {
             "source_path": str(stack.source_path),
@@ -230,6 +232,8 @@ def create_app() -> FastAPI:
             mesh = {
                 "surface_area_um2": analysis.mesh.surface_area_um2,
                 "volume_um3": analysis.mesh.volume_um3,
+                "equivalent_sphere_diameter_um": analysis.mesh.equivalent_sphere_diameter_um,
+                "sphericity": analysis.mesh.sphericity,
             }
         return {
             "source_path": file.filename or str(temp_path.name),

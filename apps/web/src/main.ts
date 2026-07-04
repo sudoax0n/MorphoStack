@@ -35,6 +35,8 @@ type AnalysisRow = {
   solidity: number;
   mesh_surface_area_um2: number;
   mesh_volume_um3: number;
+  mesh_equivalent_sphere_diameter_um: number;
+  mesh_sphericity: number;
 };
 
 type AnalyzeResponse = {
@@ -46,6 +48,8 @@ type AnalyzeResponse = {
   mesh: null | {
     surface_area_um2: number;
     volume_um3: number;
+    equivalent_sphere_diameter_um: number;
+    sphericity: number;
   };
   summary: AnalysisSummary;
   warnings: AnalysisWarning[];
@@ -121,7 +125,9 @@ const CSV_COLUMNS = [
   "equivalent_diameter_um",
   "solidity",
   "mesh_surface_area_um2",
-  "mesh_volume_um3"
+  "mesh_volume_um3",
+  "mesh_equivalent_sphere_diameter_um",
+  "mesh_sphericity"
 ] as const;
 
 
@@ -474,7 +480,7 @@ function renderAnalysis(payload: AnalyzeResponse): void {
   downloadCsvButton.disabled = payload.rows.length === 0;
   downloadManifestButton.disabled = false;
   const meshText = payload.mesh
-    ? `<br />3D surface: ${formatNumber(payload.mesh.surface_area_um2)} um2, volume: ${formatNumber(payload.mesh.volume_um3)} um3`
+    ? `<br />3D surface: ${formatNumber(payload.mesh.surface_area_um2)} um2, volume: ${formatNumber(payload.mesh.volume_um3)} um3, sphericity: ${formatNumber(payload.mesh.sphericity)}`
     : "";
   const warningText =
     payload.warnings.length > 0
