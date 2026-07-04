@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from io import BytesIO
+
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
@@ -17,6 +19,15 @@ def write_stack(path):
     stack = np.zeros((3, 8, 8), dtype=np.uint8)
     stack[:, 2:5, 1:4] = 200
     tifffile.imwrite(path, stack, photometric="minisblack")
+
+
+def stack_upload_bytes() -> bytes:
+    tifffile = pytest.importorskip("tifffile")
+    stack = np.zeros((3, 8, 8), dtype=np.uint8)
+    stack[:, 2:5, 1:4] = 200
+    buffer = BytesIO()
+    tifffile.imwrite(buffer, stack, photometric="minisblack")
+    return buffer.getvalue()
 
 
 def test_health(client):
@@ -87,6 +98,58 @@ def test_analyze_stack_with_mesh(client, tmp_path):
     payload = response.json()
     assert payload["mesh"]["surface_area_um2"] > 0
     assert payload["mesh"]["volume_um3"] > 0
+
+
+def test_upload_inspect_stack(client):
+    response = client.post(
+        "/upload/inspect",
+        files={"file": ("stack.tif", stack_upload_bytes(), "image/tiff")},
+        data={"voxel_x_um": "0.1", "voxel_y_um": "0.2", "voxel_z_um": "0.3"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["source_path"] == "stack.tif"
+    assert payload["grayscale_shape"] == [3, 8, 8]
+    assert payload["voxel_size"] == {"x_um": 0.1, "y_um": 0.2, "z_um": 0.3}
+
+
+def test_upload_analyze_stack_with_mesh(client):
+    pytest.importorskip("cv2")
+    pytest.importorskip("skimage")
+
+    response = client.post(
+        "/upload/analyze",
+        files={"file": ("stack.tif", stack_upload_bytes(), "image/tiff")},
+        data={
+            "threshold": "100",
+            "voxel_x_um": "1.0",
+            "voxel_y_um": "1.0",
+            "voxel_z_um": "1.0",
+            "prefer_opencv": "false",
+            "include_mesh": "true",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["source_path"] == "stack.tif"
+    assert payload["frame_count"] == 3
+    assert payload["valid_frame_count"] == 3
+    assert payload["rows"][0]["area_um2"] == 9.0
+    assert payload["mesh"]["surface_area_um2"] > 0
+    assert payload["mesh"]["volume_um3"] > 0
+
+
+def test_upload_analyze_partial_roi_returns_400(client):
+    response = client.post(
+        "/upload/analyze",
+        files={"file": ("stack.tif", stack_upload_bytes(), "image/tiff")},
+        data={"threshold": "100", "roi_xmin": "1"},
+    )
+
+    assert response.status_code == 400
+    assert "ROI requires" in response.json()["detail"]
 
 
 def test_analyze_bad_path_returns_400(client):

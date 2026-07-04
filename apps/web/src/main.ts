@@ -61,7 +61,11 @@ app.innerHTML = `
         <button id="inspect-btn" type="button">Inspect</button>
       </div>
       <label>
-        Stack path
+        Stack file
+        <input id="file-input" type="file" accept=".tif,.tiff,.czi,image/tiff" />
+      </label>
+      <label>
+        Stack path (optional)
         <input id="path-input" type="text" placeholder="D:\\\\lab-data\\\\sample.tif" />
       </label>
       <div class="grid">
@@ -164,10 +168,13 @@ async function refreshHealth(): Promise<void> {
 async function inspectStack(): Promise<void> {
   inspectOutput.textContent = "Inspecting...";
   try {
-    const payload = await apiPost<InspectResponse>("/api/inspect", {
-      path: readPath(),
-      voxel: readVoxel()
-    });
+    const file = selectedFile();
+    const payload = file
+      ? await apiUploadPost<InspectResponse>("/api/upload/inspect", inspectUploadForm(file))
+      : await apiPost<InspectResponse>("/api/inspect", {
+          path: readPath(),
+          voxel: readVoxel()
+        });
     inspectOutput.innerHTML = `
       <strong>${escapeHtml(payload.source_path)}</strong><br />
       Grayscale: ${payload.grayscale_shape.join(" x ")}<br />
@@ -185,14 +192,17 @@ async function analyzeStack(): Promise<void> {
   analysisSummary.textContent = "Analyzing...";
   resultsBody.innerHTML = `<tr><td colspan="6" class="muted">Running analysis...</td></tr>`;
   try {
-    const payload = await apiPost<AnalyzeResponse>("/api/analyze", {
-      path: readPath(),
-      threshold: readNumber("threshold-input"),
-      voxel: readVoxel(),
-      roi: readRoi(),
-      include_mesh: mustElement<HTMLInputElement>("mesh-input").checked,
-      prefer_opencv: !mustElement<HTMLInputElement>("fallback-input").checked
-    });
+    const file = selectedFile();
+    const payload = file
+      ? await apiUploadPost<AnalyzeResponse>("/api/upload/analyze", analyzeUploadForm(file))
+      : await apiPost<AnalyzeResponse>("/api/analyze", {
+          path: readPath(),
+          threshold: readNumber("threshold-input"),
+          voxel: readVoxel(),
+          roi: readRoi(),
+          include_mesh: mustElement<HTMLInputElement>("mesh-input").checked,
+          prefer_opencv: !mustElement<HTMLInputElement>("fallback-input").checked
+        });
     renderAnalysis(payload);
   } catch (error) {
     analysisSummary.textContent = errorMessage(error);
@@ -244,12 +254,63 @@ async function apiPost<T>(url: string, body: unknown): Promise<T> {
   return parseResponse<T>(response);
 }
 
+async function apiUploadPost<T>(url: string, formData: FormData): Promise<T> {
+  const response = await fetch(url, {
+    method: "POST",
+    body: formData
+  });
+  return parseResponse<T>(response);
+}
+
 async function parseResponse<T>(response: Response): Promise<T> {
   const payload = await response.json();
   if (!response.ok) {
     throw new Error(payload.detail ?? response.statusText);
   }
   return payload as T;
+}
+
+function selectedFile(): File | null {
+  return mustElement<HTMLInputElement>("file-input").files?.[0] ?? null;
+}
+
+function inspectUploadForm(file: File): FormData {
+  const formData = new FormData();
+  appendFileAndVoxel(formData, file);
+  return formData;
+}
+
+function analyzeUploadForm(file: File): FormData {
+  const formData = new FormData();
+  appendFileAndVoxel(formData, file);
+  formData.set("threshold", String(readNumber("threshold-input")));
+  formData.set("include_mesh", String(mustElement<HTMLInputElement>("mesh-input").checked));
+  formData.set("prefer_opencv", String(!mustElement<HTMLInputElement>("fallback-input").checked));
+  appendRoiFields(formData);
+  return formData;
+}
+
+function appendFileAndVoxel(formData: FormData, file: File): void {
+  const voxel = readVoxel();
+  formData.set("file", file);
+  formData.set("voxel_x_um", String(voxel.x_um));
+  formData.set("voxel_y_um", String(voxel.y_um));
+  formData.set("voxel_z_um", String(voxel.z_um));
+}
+
+function appendRoiFields(formData: FormData): void {
+  const ids = ["roi-xmin", "roi-xmax", "roi-ymin", "roi-ymax"] as const;
+  const names = ["roi_xmin", "roi_xmax", "roi_ymin", "roi_ymax"] as const;
+  const values = ids.map((id) => mustElement<HTMLInputElement>(id).value.trim());
+  if (values.every((value) => value === "")) {
+    return;
+  }
+  if (values.some((value) => value === "")) {
+    throw new Error("ROI requires xmin, xmax, ymin, and ymax.");
+  }
+  values.forEach((value, index) => {
+    formData.set(names[index], value);
+  });
 }
 
 function readPath(): string {
@@ -321,4 +382,3 @@ function escapeHtml(value: string): string {
     return entities[char];
   });
 }
-

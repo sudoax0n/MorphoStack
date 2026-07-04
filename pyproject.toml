@@ -24,6 +24,7 @@ dev = [
 api = [
   "fastapi",
   "httpx2",
+  "python-multipart",
   "uvicorn",
 ]
 analysis = [
