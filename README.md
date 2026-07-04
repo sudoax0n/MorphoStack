@@ -10,6 +10,7 @@ The first milestone is intentionally small: prove the project structure, command
 morphostack doctor
 morphostack init
 morphostack inspect path\to\stack.tif
+morphostack analyze path\to\stack.tif --threshold 100 --out metrics.csv
 mst doctor
 ```
 
@@ -34,6 +35,12 @@ To inspect a stack after installing analysis dependencies:
 
 ```bash
 .\.venv\Scripts\morphostack inspect path\to\stack.tif --voxel-x 0.1 --voxel-y 0.1 --voxel-z 0.5
+```
+
+To run the current headless analysis pipeline and export per-frame metrics:
+
+```bash
+.\.venv\Scripts\morphostack analyze path\to\stack.tif --threshold 100 --out metrics.csv --voxel-x 0.1 --voxel-y 0.1 --voxel-z 0.5
 ```
 
 ## Architecture Direction

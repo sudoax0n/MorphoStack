@@ -9,6 +9,7 @@ from morphostack.core.contours import (
     segmentation_preview,
     smooth_contour_guarded,
 )
+from morphostack.core.export import CSV_COLUMNS, analysis_rows, write_analysis_csv
 from morphostack.core.images import as_color_stack, as_grayscale_stack, stretch_to_uint8
 from morphostack.core.io import load_image_stack
 from morphostack.core.mesh import MeshMeasurement, surface_area_volume
@@ -25,6 +26,7 @@ from morphostack.core.segmentation import apply_rect_roi, threshold_mask
 
 __all__ = [
     "ContourMetrics",
+    "CSV_COLUMNS",
     "FrameAnalysis",
     "ImageStack",
     "MeshMeasurement",
@@ -37,6 +39,7 @@ __all__ = [
     "as_grayscale_stack",
     "analyze_frame",
     "analyze_stack",
+    "analysis_rows",
     "contour_circularity",
     "contour_metrics",
     "largest_component_boundary",
@@ -48,4 +51,5 @@ __all__ = [
     "stretch_to_uint8",
     "surface_area_volume",
     "threshold_mask",
+    "write_analysis_csv",
 ]

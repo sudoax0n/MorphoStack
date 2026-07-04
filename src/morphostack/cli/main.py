@@ -7,10 +7,11 @@ import subprocess
 import shutil
 import sys
 from importlib import import_module
+from pathlib import Path
 
 from morphostack import __version__
 from morphostack.cli.system_info import collect_diagnostics, format_diagnostics
-from morphostack.core import VoxelSize, load_image_stack
+from morphostack.core import RectROI, VoxelSize, analyze_stack, load_image_stack, write_analysis_csv
 
 
 CORE_DEPENDENCIES = ("numpy", "psutil")
@@ -64,6 +65,22 @@ def build_parser() -> argparse.ArgumentParser:
     inspect.add_argument("--voxel-x", type=float, help="Override X voxel size in micrometers.")
     inspect.add_argument("--voxel-y", type=float, help="Override Y voxel size in micrometers.")
     inspect.add_argument("--voxel-z", type=float, help="Override Z voxel size in micrometers.")
+    analyze = subparsers.add_parser(
+        "analyze",
+        help="Run headless threshold analysis on an image stack and write CSV metrics.",
+    )
+    analyze.add_argument("path", help="Path to a .tif, .tiff, or .czi file.")
+    analyze.add_argument("--threshold", type=float, required=True, help="Global intensity threshold.")
+    analyze.add_argument("--out", required=True, help="CSV output path.")
+    analyze.add_argument("--voxel-x", type=float, help="Override X voxel size in micrometers.")
+    analyze.add_argument("--voxel-y", type=float, help="Override Y voxel size in micrometers.")
+    analyze.add_argument("--voxel-z", type=float, help="Override Z voxel size in micrometers.")
+    analyze.add_argument("--roi", nargs=4, type=int, metavar=("XMIN", "XMAX", "YMIN", "YMAX"))
+    analyze.add_argument(
+        "--fallback-contours",
+        action="store_true",
+        help="Use dependency-light rectangular fallback contours instead of OpenCV contours.",
+    )
     return parser
 
 
@@ -83,6 +100,18 @@ def main(argv: list[str] | None = None) -> int:
             voxel_x=args.voxel_x,
             voxel_y=args.voxel_y,
             voxel_z=args.voxel_z,
+        )
+
+    if args.command == "analyze":
+        return run_analyze(
+            path=args.path,
+            threshold=args.threshold,
+            out=args.out,
+            voxel_x=args.voxel_x,
+            voxel_y=args.voxel_y,
+            voxel_z=args.voxel_z,
+            roi=args.roi,
+            prefer_opencv=not args.fallback_contours,
         )
 
     parser.print_help()
@@ -175,6 +204,62 @@ def run_inspect(
         f"z={stack.voxel_size.z_um:g} um"
     )
     return 0
+
+
+def run_analyze(
+    *,
+    path: str,
+    threshold: float,
+    out: str,
+    voxel_x: float | None = None,
+    voxel_y: float | None = None,
+    voxel_z: float | None = None,
+    roi: list[int] | None = None,
+    prefer_opencv: bool = True,
+) -> int:
+    voxel_override_result = build_voxel_override(voxel_x, voxel_y, voxel_z)
+    if voxel_override_result == "partial":
+        print("Voxel override requires --voxel-x, --voxel-y, and --voxel-z together.")
+        return 2
+    voxel_override = voxel_override_result
+
+    rect_roi = RectROI(*roi) if roi is not None else None
+
+    try:
+        stack = load_image_stack(path, voxel_override=voxel_override)
+        analysis = analyze_stack(
+            stack.grayscale,
+            thresholds=threshold,
+            voxel_size=stack.voxel_size,
+            roi=rect_roi,
+            prefer_opencv=prefer_opencv,
+        )
+        output_path = Path(out)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        write_analysis_csv(analysis, output_path)
+    except Exception as exc:
+        print(f"Failed to analyze image stack: {exc}")
+        return 1
+
+    print("MorphoStack Analysis Complete")
+    print("=============================")
+    print(f"Source: {stack.source_path}")
+    print(f"Frames: {len(analysis.frames)}")
+    print(f"Valid frames: {len(analysis.valid_frames)}")
+    print(f"CSV: {output_path}")
+    return 0
+
+
+def build_voxel_override(
+    voxel_x: float | None,
+    voxel_y: float | None,
+    voxel_z: float | None,
+) -> VoxelSize | None | str:
+    if any(value is not None for value in (voxel_x, voxel_y, voxel_z)):
+        if None in (voxel_x, voxel_y, voxel_z):
+            return "partial"
+        return VoxelSize(voxel_x, voxel_y, voxel_z)
+    return None
 
 
 def dependency_status(names: tuple[str, ...]) -> dict[str, bool]:
