@@ -12,6 +12,7 @@ morphostack init
 morphostack inspect path\to\stack.tif
 morphostack analyze path\to\stack.tif --threshold 100 --out metrics.csv
 morphostack serve
+morphostack dev
 mst doctor
 ```
 
@@ -52,6 +53,15 @@ To start the local backend for the future web UI:
 .\.venv\Scripts\morphostack serve
 ```
 
+To start the local backend and web UI together during development:
+
+```bash
+.\.venv\Scripts\morphostack dev
+```
+
+Use `.\.venv\Scripts\morphostack dev --check` to verify that Python API
+dependencies, npm, and web dependencies are available before launching.
+
 Current API endpoints:
 
 - `GET /health`
@@ -60,7 +70,7 @@ Current API endpoints:
 - `POST /upload/inspect`
 - `POST /upload/analyze`
 
-To start the browser UI during development:
+To start only the browser UI during development:
 
 ```bash
 cd apps\web

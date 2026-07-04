@@ -41,6 +41,27 @@ def test_init_can_skip_dependency_install(monkeypatch, capsys):
     assert "Skipped dependency installation" in out
 
 
+def test_dev_check_reports_ready(monkeypatch, capsys):
+    monkeypatch.setattr(cli_main_module, "dev_prerequisite_issues", lambda _: [])
+
+    assert main(["dev", "--check", "--no-open", "--api-port", "8123", "--web-port", "5123"]) == 0
+
+    out = capsys.readouterr().out
+    assert "MorphoStack dev environment is ready." in out
+    assert "http://127.0.0.1:8123" in out
+    assert "http://127.0.0.1:5123" in out
+
+
+def test_dev_check_reports_missing_prerequisites(monkeypatch, capsys):
+    monkeypatch.setattr(cli_main_module, "dev_prerequisite_issues", lambda _: ["npm was not found on PATH."])
+
+    assert main(["dev", "--check"]) == 1
+
+    out = capsys.readouterr().out
+    assert "MorphoStack dev environment is not ready" in out
+    assert "npm was not found" in out
+
+
 def test_inspect_requires_complete_voxel_override(capsys):
     assert main(["inspect", "sample.tif", "--voxel-x", "1.0"]) == 2
     out = capsys.readouterr().out

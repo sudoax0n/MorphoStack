@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import shutil
 import sys
+import time
+import webbrowser
 from importlib import import_module
 from pathlib import Path
 
@@ -26,7 +29,9 @@ ANALYSIS_DEPENDENCIES = (
     "networkx",
     "PIL",
 )
-API_DEPENDENCIES = ("fastapi", "uvicorn")
+API_DEPENDENCIES = ("fastapi", "python_multipart", "uvicorn")
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+WEB_APP_DIR = PROJECT_ROOT / "apps" / "web"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -60,6 +65,12 @@ def build_parser() -> argparse.ArgumentParser:
     serve = subparsers.add_parser("serve", help="Run the local FastAPI backend.")
     serve.add_argument("--host", default="127.0.0.1", help="Bind host. Default: 127.0.0.1.")
     serve.add_argument("--port", default=8000, type=int, help="Bind port. Default: 8000.")
+    dev = subparsers.add_parser("dev", help="Run the local backend and browser UI together.")
+    dev.add_argument("--host", default="127.0.0.1", help="Bind host. Default: 127.0.0.1.")
+    dev.add_argument("--api-port", default=8000, type=int, help="Backend port. Default: 8000.")
+    dev.add_argument("--web-port", default=5173, type=int, help="Frontend port. Default: 5173.")
+    dev.add_argument("--no-open", action="store_true", help="Do not open the browser.")
+    dev.add_argument("--check", action="store_true", help="Validate dev prerequisites and exit.")
     inspect = subparsers.add_parser(
         "inspect",
         help="Load an image stack and print basic metadata.",
@@ -112,6 +123,15 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "serve":
         return run_serve(host=args.host, port=args.port)
+
+    if args.command == "dev":
+        return run_dev(
+            host=args.host,
+            api_port=args.api_port,
+            web_port=args.web_port,
+            open_browser=not args.no_open,
+            check_only=args.check,
+        )
 
     if args.command == "analyze":
         return run_analyze(
@@ -277,6 +297,114 @@ def run_serve(*, host: str, port: int) -> int:
     uvicorn.run("morphostack.api:app", host=host, port=port)
     return 0
 
+
+def run_dev(
+    *,
+    host: str = "127.0.0.1",
+    api_port: int = 8000,
+    web_port: int = 5173,
+    open_browser: bool = True,
+    check_only: bool = False,
+) -> int:
+    issues = dev_prerequisite_issues(WEB_APP_DIR)
+    if issues:
+        print("MorphoStack dev environment is not ready:")
+        for issue in issues:
+            print(f"- {issue}")
+        return 1
+
+    if check_only:
+        print("MorphoStack dev environment is ready.")
+        print(f"Backend: http://{host}:{api_port}")
+        print(f"Web UI: http://{host}:{web_port}")
+        return 0
+
+    npm_command = shutil.which("npm")
+    if npm_command is None:
+        print("npm is required to run the web UI.")
+        return 1
+
+    api_target = f"http://{host}:{api_port}"
+    web_url = f"http://{host}:{web_port}"
+    env = dict(os.environ)
+    env["MORPHOSTACK_API_TARGET"] = api_target
+    processes: list[subprocess.Popen[bytes]] = []
+
+    try:
+        backend = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "uvicorn",
+                "morphostack.api:app",
+                "--host",
+                host,
+                "--port",
+                str(api_port),
+            ]
+        )
+        processes.append(backend)
+
+        frontend = subprocess.Popen(
+            [
+                npm_command,
+                "run",
+                "dev",
+                "--",
+                "--host",
+                host,
+                "--port",
+                str(web_port),
+            ],
+            cwd=WEB_APP_DIR,
+            env=env,
+        )
+        processes.append(frontend)
+
+        print("MorphoStack dev app is starting.")
+        print(f"Backend: {api_target}")
+        print(f"Web UI: {web_url}")
+        print("Press Ctrl+C to stop both processes.")
+        if open_browser:
+            webbrowser.open(web_url)
+
+        while True:
+            for process in processes:
+                returncode = process.poll()
+                if returncode is not None:
+                    print(f"A dev process exited with code {returncode}.")
+                    return returncode
+            time.sleep(0.5)
+    except KeyboardInterrupt:
+        print("Stopping MorphoStack dev app...")
+        return 0
+    finally:
+        stop_processes(processes)
+
+
+def dev_prerequisite_issues(web_app_dir: Path) -> list[str]:
+    issues: list[str] = []
+    if shutil.which("npm") is None:
+        issues.append("npm was not found on PATH.")
+    if not import_available("uvicorn"):
+        issues.append("uvicorn is not installed in this Python environment.")
+    if not (web_app_dir / "package.json").exists():
+        issues.append(f"web package.json was not found at {web_app_dir}.")
+    if not (web_app_dir / "node_modules").exists():
+        issues.append("web dependencies are not installed; run npm install in apps/web.")
+    return issues
+
+
+def stop_processes(processes: list[subprocess.Popen[bytes]]) -> None:
+    for process in processes:
+        if process.poll() is None:
+            process.terminate()
+    for process in processes:
+        if process.poll() is None:
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
 
 def build_voxel_override(
     voxel_x: float | None,
