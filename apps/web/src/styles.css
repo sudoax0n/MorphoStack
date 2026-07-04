@@ -249,6 +249,10 @@ legend {
   gap: 12px;
 }
 
+.batch-file-label {
+  margin-top: 14px;
+}
+
 .table-wrap {
   overflow-x: auto;
   margin-top: 14px;

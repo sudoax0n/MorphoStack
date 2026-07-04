@@ -97,6 +97,7 @@ Current API endpoints:
 - `POST /preview`
 - `POST /upload/inspect`
 - `POST /upload/analyze`
+- `POST /upload/batch`
 - `POST /upload/threshold`
 - `POST /upload/preview`
 
@@ -112,6 +113,8 @@ The browser UI can preview threshold segmentation, analyze a selected TIFF/CZI
 file through upload endpoints, or use a local stack path when the backend can
 already access the file. After analysis, the frame metrics table can be
 downloaded as a CSV file, and the run manifest can be downloaded as JSON.
+Multiple uploaded stacks can be batch analyzed into one spreadsheet-friendly
+summary CSV.
 The analysis summary reports valid-frame means, minima, maxima, and standard
 deviations for core shape descriptors.
 Current 2D descriptors include area, perimeter, circularity, bounding-box size,

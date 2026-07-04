@@ -92,6 +92,16 @@ type ThresholdResponse = {
   method: string;
 };
 
+type BatchSummaryRow = Record<string, string | number | boolean>;
+
+type BatchAnalyzeResponse = {
+  file_count: number;
+  succeeded_count: number;
+  failed_count: number;
+  columns: string[];
+  rows: BatchSummaryRow[];
+};
+
 const CSV_COLUMNS = [
   "frame_index",
   "threshold",
@@ -113,6 +123,7 @@ const CSV_COLUMNS = [
   "mesh_surface_area_um2",
   "mesh_volume_um3"
 ] as const;
+
 
 const app = document.querySelector<HTMLDivElement>("#app");
 
@@ -213,6 +224,39 @@ app.innerHTML = `
 
   <section class="results">
     <div class="results-header">
+      <h2>Batch Analysis</h2>
+      <div class="button-row">
+        <button id="batch-analyze-btn" type="button">Analyze Batch</button>
+        <button id="download-batch-btn" class="secondary" type="button" disabled>Download Batch CSV</button>
+      </div>
+    </div>
+    <label class="batch-file-label">
+      Stack files
+      <input id="batch-file-input" type="file" accept=".tif,.tiff,.czi,image/tiff" multiple />
+    </label>
+    <div id="batch-summary" class="output muted">No batch run yet.</div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Source</th>
+            <th>Status</th>
+            <th>Profile</th>
+            <th>Frames</th>
+            <th>Valid</th>
+            <th>Mean area (um2)</th>
+            <th>Mean circularity</th>
+          </tr>
+        </thead>
+        <tbody id="batch-results-body">
+          <tr><td colspan="7" class="muted">Run a batch analysis to populate stack summaries.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="results">
+    <div class="results-header">
       <h2>Frame Metrics</h2>
       <div class="button-row">
         <button id="download-manifest-btn" class="secondary" type="button" disabled>Download Manifest</button>
@@ -247,10 +291,14 @@ const apiStatus = mustElement<HTMLDivElement>("api-status");
 const inspectOutput = mustElement<HTMLDivElement>("inspect-output");
 const previewOutput = mustElement<HTMLDivElement>("preview-output");
 const analysisSummary = mustElement<HTMLDivElement>("analysis-summary");
+const batchSummary = mustElement<HTMLDivElement>("batch-summary");
 const resultsBody = mustElement<HTMLTableSectionElement>("results-body");
+const batchResultsBody = mustElement<HTMLTableSectionElement>("batch-results-body");
 const downloadCsvButton = mustElement<HTMLButtonElement>("download-csv-btn");
 const downloadManifestButton = mustElement<HTMLButtonElement>("download-manifest-btn");
+const downloadBatchButton = mustElement<HTMLButtonElement>("download-batch-btn");
 let latestAnalysis: AnalyzeResponse | null = null;
+let latestBatch: BatchAnalyzeResponse | null = null;
 
 mustElement<HTMLButtonElement>("inspect-btn").addEventListener("click", () => {
   void inspectStack();
@@ -268,12 +316,20 @@ mustElement<HTMLButtonElement>("suggest-threshold-btn").addEventListener("click"
   void suggestThreshold();
 });
 
+mustElement<HTMLButtonElement>("batch-analyze-btn").addEventListener("click", () => {
+  void analyzeBatch();
+});
+
 downloadCsvButton.addEventListener("click", () => {
   downloadLatestCsv();
 });
 
 downloadManifestButton.addEventListener("click", () => {
   downloadLatestManifest();
+});
+
+downloadBatchButton.addEventListener("click", () => {
+  downloadLatestBatchCsv();
 });
 
 void refreshHealth();
@@ -380,6 +436,21 @@ async function analyzeStack(): Promise<void> {
   }
 }
 
+async function analyzeBatch(): Promise<void> {
+  latestBatch = null;
+  downloadBatchButton.disabled = true;
+  batchSummary.textContent = "Analyzing batch...";
+  batchResultsBody.innerHTML = `<tr><td colspan="7" class="muted">Running batch analysis...</td></tr>`;
+  try {
+    const files = selectedBatchFiles();
+    const payload = await apiUploadPost<BatchAnalyzeResponse>("/api/upload/batch", batchUploadForm(files));
+    renderBatch(payload);
+  } catch (error) {
+    batchSummary.textContent = errorMessage(error);
+    batchResultsBody.innerHTML = `<tr><td colspan="7" class="muted">Batch analysis failed.</td></tr>`;
+  }
+}
+
 function renderPreview(payload: PreviewResponse): void {
   previewOutput.innerHTML = `
     <img
@@ -462,6 +533,36 @@ function renderSummaryMetrics(summary: AnalysisSummary): string {
   return `<br />Summary: ${parts.join(", ")}`;
 }
 
+function renderBatch(payload: BatchAnalyzeResponse): void {
+  latestBatch = payload;
+  downloadBatchButton.disabled = payload.rows.length === 0;
+  batchSummary.innerHTML = `
+    Files: ${payload.file_count}<br />
+    Succeeded: ${payload.succeeded_count}, failed: ${payload.failed_count}
+  `;
+
+  if (payload.rows.length === 0) {
+    batchResultsBody.innerHTML = `<tr><td colspan="7" class="muted">No batch rows returned.</td></tr>`;
+    return;
+  }
+
+  batchResultsBody.innerHTML = payload.rows
+    .map(
+      (row) => `
+        <tr>
+          <td>${escapeHtml(String(row.source_path ?? ""))}</td>
+          <td>${escapeHtml(String(row.status ?? ""))}</td>
+          <td>${escapeHtml(String(row.profile ?? ""))}</td>
+          <td>${formatUnknownNumber(row.frame_count)}</td>
+          <td>${formatUnknownNumber(row.valid_frame_count)}</td>
+          <td>${formatUnknownNumber(row.area_um2_mean)}</td>
+          <td>${formatUnknownNumber(row.circularity_mean)}</td>
+        </tr>
+      `
+    )
+    .join("");
+}
+
 function downloadLatestCsv(): void {
   if (!latestAnalysis || latestAnalysis.rows.length === 0) {
     return;
@@ -473,6 +574,23 @@ function downloadLatestCsv(): void {
   const anchor = document.createElement("a");
   anchor.href = url;
   anchor.download = csvFilename(latestAnalysis.source_path);
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
+function downloadLatestBatchCsv(): void {
+  if (!latestBatch || latestBatch.rows.length === 0) {
+    return;
+  }
+
+  const csv = genericRowsToCsv(latestBatch.rows, latestBatch.columns);
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = "morphostack_batch_summary.csv";
   document.body.append(anchor);
   anchor.click();
   anchor.remove();
@@ -504,8 +622,16 @@ function rowsToCsv(rows: AnalysisRow[]): string {
   return `${lines.join("\r\n")}\r\n`;
 }
 
-function csvCell(value: string | number | boolean): string {
-  const text = String(value);
+function genericRowsToCsv(rows: BatchSummaryRow[], columns: string[]): string {
+  const lines = [
+    columns.join(","),
+    ...rows.map((row) => columns.map((column) => csvCell(row[column])).join(","))
+  ];
+  return `${lines.join("\r\n")}\r\n`;
+}
+
+function csvCell(value: unknown): string {
+  const text = value === null || value === undefined ? "" : String(value);
   if (!/[",\r\n]/.test(text)) {
     return text;
   }
@@ -560,6 +686,14 @@ function selectedFile(): File | null {
   return mustElement<HTMLInputElement>("file-input").files?.[0] ?? null;
 }
 
+function selectedBatchFiles(): File[] {
+  const files = Array.from(mustElement<HTMLInputElement>("batch-file-input").files ?? []);
+  if (files.length === 0) {
+    throw new Error("At least one batch stack file is required.");
+  }
+  return files;
+}
+
 function inspectUploadForm(file: File): FormData {
   const formData = new FormData();
   appendFileAndVoxel(formData, file);
@@ -595,9 +729,27 @@ function thresholdUploadForm(file: File): FormData {
   return formData;
 }
 
+function batchUploadForm(files: File[]): FormData {
+  const formData = new FormData();
+  files.forEach((file) => {
+    formData.append("files", file);
+  });
+  appendVoxelFields(formData);
+  formData.set("threshold", String(readNumber("threshold-input")));
+  formData.set("profile", readProfile());
+  formData.set("include_mesh", String(mustElement<HTMLInputElement>("mesh-input").checked));
+  formData.set("prefer_opencv", String(!mustElement<HTMLInputElement>("fallback-input").checked));
+  appendRoiFields(formData);
+  return formData;
+}
+
 function appendFileAndVoxel(formData: FormData, file: File): void {
-  const voxel = readVoxel();
   formData.set("file", file);
+  appendVoxelFields(formData);
+}
+
+function appendVoxelFields(formData: FormData): void {
+  const voxel = readVoxel();
   formData.set("voxel_x_um", String(voxel.x_um));
   formData.set("voxel_y_um", String(voxel.y_um));
   formData.set("voxel_z_um", String(voxel.z_um));
@@ -689,6 +841,11 @@ function formatNumber(value: number): string {
 
 function formatInputNumber(value: number): string {
   return Number.isFinite(value) ? String(Number(value.toPrecision(6))) : "0";
+}
+
+function formatUnknownNumber(value: unknown): string {
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? formatNumber(numberValue) : "";
 }
 
 function errorMessage(error: unknown): string {

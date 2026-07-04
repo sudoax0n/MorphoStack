@@ -218,6 +218,33 @@ def test_upload_analyze_stack_with_mesh(client):
     assert payload["mesh"]["volume_um3"] > 0
 
 
+def test_upload_batch_analyze_returns_summary_rows(client):
+    response = client.post(
+        "/upload/batch",
+        files=[
+            ("files", ("stack_a.tif", stack_upload_bytes(), "image/tiff")),
+            ("files", ("stack_b.tif", stack_upload_bytes(), "image/tiff")),
+        ],
+        data={
+            "threshold": "100",
+            "profile": "rbc",
+            "voxel_x_um": "1.0",
+            "voxel_y_um": "1.0",
+            "voxel_z_um": "1.0",
+            "prefer_opencv": "false",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["file_count"] == 2
+    assert payload["succeeded_count"] == 2
+    assert payload["failed_count"] == 0
+    assert payload["columns"][0] == "source_path"
+    assert payload["rows"][0]["profile"] == "rbc"
+    assert payload["rows"][0]["area_um2_mean"] == 9.0
+
+
 def test_upload_analyze_partial_roi_returns_400(client):
     response = client.post(
         "/upload/analyze",

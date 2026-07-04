@@ -20,11 +20,13 @@ from morphostack.core import (
     analyze_stack,
     analysis_manifest,
     analysis_summary,
+    analysis_summary_row,
     analysis_warnings,
+    failed_analysis_summary_row,
     load_image_stack,
     suggest_threshold,
 )
-from morphostack.core.export import analysis_rows
+from morphostack.core.export import BATCH_SUMMARY_COLUMNS, analysis_rows
 from morphostack.core.preview import PreviewImage, render_segmentation_preview_png
 from morphostack.core.segmentation import apply_rect_roi
 
@@ -285,6 +287,68 @@ def create_app() -> FastAPI:
             temp_path.unlink(missing_ok=True)
 
         return preview_payload(file.filename or str(temp_path.name), preview_image)
+
+    @app.post("/upload/batch")
+    def upload_batch_analyze(
+        files: Annotated[list[UploadFile], File()],
+        threshold: Annotated[float, Form()],
+        profile: Annotated[str, Form()] = DEFAULT_PROFILE,
+        voxel_x_um: Annotated[float, Form(gt=0)] = 1.0,
+        voxel_y_um: Annotated[float, Form(gt=0)] = 1.0,
+        voxel_z_um: Annotated[float, Form(gt=0)] = 1.0,
+        include_mesh: Annotated[bool, Form()] = False,
+        prefer_opencv: Annotated[bool, Form()] = True,
+        roi_xmin: Annotated[int | None, Form()] = None,
+        roi_xmax: Annotated[int | None, Form()] = None,
+        roi_ymin: Annotated[int | None, Form()] = None,
+        roi_ymax: Annotated[int | None, Form()] = None,
+    ) -> dict[str, object]:
+        if not files:
+            raise HTTPException(status_code=400, detail="At least one stack file is required.")
+
+        try:
+            roi = roi_from_optional_bounds(roi_xmin, roi_xmax, roi_ymin, roi_ymax)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        rows: list[dict[str, object]] = []
+        for file in files:
+            temp_path = save_upload_to_temp(file)
+            source_name = file.filename or str(temp_path.name)
+            try:
+                stack = load_image_stack(
+                    temp_path,
+                    voxel_override=VoxelSize(voxel_x_um, voxel_y_um, voxel_z_um),
+                )
+                analysis = analyze_stack(
+                    stack.grayscale,
+                    thresholds=threshold,
+                    voxel_size=stack.voxel_size,
+                    roi=roi,
+                    profile=profile,
+                    prefer_opencv=prefer_opencv,
+                    include_mesh=include_mesh,
+                )
+                rows.append(
+                    analysis_summary_row(
+                        analysis,
+                        source_path=source_name,
+                        threshold=threshold,
+                    )
+                )
+            except Exception as exc:
+                rows.append(failed_analysis_summary_row(source_name, str(exc)))
+            finally:
+                temp_path.unlink(missing_ok=True)
+
+        failed_count = sum(1 for row in rows if row["status"] != "ok")
+        return {
+            "file_count": len(files),
+            "succeeded_count": len(files) - failed_count,
+            "failed_count": failed_count,
+            "columns": list(BATCH_SUMMARY_COLUMNS),
+            "rows": rows,
+        }
 
     @app.post("/upload/threshold")
     def upload_threshold(
