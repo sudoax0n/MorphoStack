@@ -38,6 +38,15 @@ from morphostack.core.pipeline import (
 )
 from morphostack.core.profiles import DEFAULT_PROFILE, PROFILE_CHOICES, AnalysisProfile, normalize_profile
 from morphostack.core.segmentation import apply_rect_roi, suggest_threshold, threshold_mask
+from morphostack.core.sweep import (
+    SWEEP_COLUMNS,
+    ThresholdSweepResult,
+    best_sweep_result,
+    threshold_sweep,
+    threshold_sweep_rows,
+    threshold_values,
+    write_threshold_sweep_csv,
+)
 from morphostack.core.validation import (
     ValidationDifference,
     ValidationReport,
@@ -58,6 +67,8 @@ __all__ = [
     "RectROI",
     "SegmentationPreview",
     "StackAnalysis",
+    "SWEEP_COLUMNS",
+    "ThresholdSweepResult",
     "VoxelSize",
     "ValidationDifference",
     "ValidationReport",
@@ -72,6 +83,7 @@ __all__ = [
     "analysis_summary",
     "analysis_summary_row",
     "analysis_warnings",
+    "best_sweep_result",
     "contour_circularity",
     "contour_metrics",
     "contour_to_mask",
@@ -90,8 +102,12 @@ __all__ = [
     "stretch_to_uint8",
     "surface_area_volume",
     "suggest_threshold",
+    "threshold_sweep",
+    "threshold_sweep_rows",
+    "threshold_values",
     "threshold_mask",
     "write_batch_summary_csv",
     "write_analysis_csv",
     "write_analysis_manifest_json",
+    "write_threshold_sweep_csv",
 ]

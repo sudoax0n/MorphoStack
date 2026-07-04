@@ -166,6 +166,34 @@ def test_preview_stack_returns_png(client, tmp_path):
     assert b64decode(payload["image_png_base64"]).startswith(b"\x89PNG")
 
 
+def test_sweep_stack_returns_summary_rows(client, tmp_path):
+    path = tmp_path / "stack.tif"
+    write_stack(path)
+
+    response = client.post(
+        "/sweep",
+        json={
+            "path": str(path),
+            "start": 50,
+            "stop": 250,
+            "step": 100,
+            "voxel": {"x_um": 1.0, "y_um": 1.0, "z_um": 1.0},
+            "prefer_opencv": False,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["source_path"] == str(path)
+    assert payload["threshold_count"] == 3
+    assert payload["best_threshold"] == 50.0
+    assert payload["voxel_source"] == "override"
+    assert payload["columns"][0] == "threshold"
+    assert payload["rows"][0]["valid_frame_count"] == 3
+    assert payload["rows"][0]["area_um2_mean"] == 9.0
+    assert payload["rows"][2]["warning_codes"] == "no_valid_contours"
+
+
 def test_preview_bad_frame_returns_400(client, tmp_path):
     pytest.importorskip("PIL")
     path = tmp_path / "stack.tif"
@@ -337,6 +365,30 @@ def test_upload_threshold_returns_suggestion(client):
     assert payload["source_path"] == "stack.tif"
     assert payload["method"] == "percentile"
     assert payload["threshold"] >= 0
+
+
+def test_upload_sweep_returns_summary_rows(client):
+    response = client.post(
+        "/upload/sweep",
+        files={"file": ("stack.tif", stack_upload_bytes(), "image/tiff")},
+        data={
+            "start": "50",
+            "stop": "250",
+            "step": "100",
+            "voxel_x_um": "1.0",
+            "voxel_y_um": "1.0",
+            "voxel_z_um": "1.0",
+            "prefer_opencv": "false",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["source_path"] == "stack.tif"
+    assert payload["threshold_count"] == 3
+    assert payload["best_threshold"] == 50.0
+    assert payload["rows"][0]["valid_fraction"] == 1.0
+    assert payload["rows"][2]["valid_fraction"] == 0.0
 
 
 def test_analyze_bad_path_returns_400(client):

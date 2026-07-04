@@ -11,6 +11,7 @@ morphostack doctor
 morphostack init
 morphostack inspect path\to\stack.tif
 morphostack threshold path\to\stack.tif
+morphostack sweep path\to\stack.tif --start 50 --stop 200 --step 10 --out sweep.csv
 morphostack analyze path\to\stack.tif --threshold 100 --out metrics.csv
 morphostack analyze path\to\stack.tif --threshold 100 --profile rbc --out metrics.csv
 morphostack batch path\to\stacks --threshold 100 --out batch_summary.csv
@@ -48,6 +49,15 @@ To suggest a starting threshold before analysis:
 ```bash
 .\.venv\Scripts\morphostack threshold path\to\stack.tif --method auto
 ```
+
+To compare several thresholds and export one summary row per threshold:
+
+```bash
+.\.venv\Scripts\morphostack sweep path\to\stack.tif --start 50 --stop 200 --step 10 --out sweep.csv --voxel-x 0.1 --voxel-y 0.1 --voxel-z 0.5
+```
+
+The sweep CSV includes frame counts, valid contour fraction, warning codes, and
+summary statistics for the same shape descriptors used by `analyze`.
 
 To run the current headless analysis pipeline and export per-frame metrics:
 
@@ -107,12 +117,14 @@ Current API endpoints:
 - `POST /analyze`
 - `POST /threshold`
 - `POST /preview`
+- `POST /sweep`
 - `POST /upload/inspect`
 - `POST /upload/analyze`
 - `POST /upload/batch`
 - `POST /upload/validate`
 - `POST /upload/threshold`
 - `POST /upload/preview`
+- `POST /upload/sweep`
 
 To start only the browser UI during development:
 
@@ -126,6 +138,8 @@ The browser UI can preview threshold segmentation, analyze a selected TIFF/CZI
 file through upload endpoints, or use a local stack path when the backend can
 already access the file. After analysis, the frame metrics table can be
 downloaded as a CSV file, and the run manifest can be downloaded as JSON.
+The web app can also run a threshold sweep and download the sweep summary as
+CSV.
 Multiple uploaded stacks can be batch analyzed into one spreadsheet-friendly
 summary CSV.
 CSV validation is available in the browser for comparing new exports against
@@ -137,6 +151,8 @@ aspect ratio, elongation, deformation index, extent, equivalent diameter, and
 solidity.
 The `Suggest` threshold tool uses Otsu thresholding when available and falls
 back to a percentile-based suggestion.
+Threshold sweep support can compare a range of candidate thresholds and export
+spreadsheet-friendly summary rows for threshold sensitivity checks.
 Analysis warnings are shown in the UI and included in the run manifest.
 If voxel spacing falls back to MorphoStack defaults, analysis outputs include a
 `default_voxel_size` warning because physical units are uncalibrated.
@@ -165,6 +181,8 @@ No GitHub remote is configured yet.
 - Use `analyze_stack` as the headless core pipeline for CLI/API/UI workflows.
 - Use `morphostack batch` when a directory of stacks should become one
   spreadsheet-friendly summary table.
+- Use `morphostack sweep` when a threshold needs sensitivity checking before a
+  fixed analysis run.
 - Use `morphostack validate` to compare generated CSV metrics against reference
   outputs before trusting analysis changes.
 - Treat vesicle and RBC analysis as explicit profiles, even where early shared

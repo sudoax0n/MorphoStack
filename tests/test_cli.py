@@ -97,6 +97,30 @@ def test_threshold_requires_complete_voxel_override(capsys):
     assert "requires --voxel-x, --voxel-y, and --voxel-z" in out
 
 
+def test_sweep_requires_complete_voxel_override(capsys):
+    assert (
+        main(
+            [
+                "sweep",
+                "sample.tif",
+                "--start",
+                "50",
+                "--stop",
+                "100",
+                "--step",
+                "25",
+                "--out",
+                "sweep.csv",
+                "--voxel-x",
+                "1.0",
+            ]
+        )
+        == 2
+    )
+    out = capsys.readouterr().out
+    assert "requires --voxel-x, --voxel-y, and --voxel-z" in out
+
+
 def test_threshold_prints_suggestion_from_synthetic_tiff(tmp_path, capsys):
     tifffile = pytest.importorskip("tifffile")
     stack = np.zeros((2, 8, 8), dtype=np.uint8)
@@ -111,6 +135,47 @@ def test_threshold_prints_suggestion_from_synthetic_tiff(tmp_path, capsys):
     assert "MorphoStack Threshold Suggestion" in out
     assert "Method: percentile" in out
     assert "Threshold:" in out
+
+
+def test_sweep_writes_summary_from_synthetic_tiff(tmp_path, capsys):
+    tifffile = pytest.importorskip("tifffile")
+    stack = np.zeros((2, 8, 8), dtype=np.uint8)
+    stack[:, 2:5, 1:4] = 200
+    input_path = tmp_path / "stack.tif"
+    output_path = tmp_path / "sweep.csv"
+    tifffile.imwrite(input_path, stack, photometric="minisblack")
+
+    result = main(
+        [
+            "sweep",
+            str(input_path),
+            "--start",
+            "50",
+            "--stop",
+            "250",
+            "--step",
+            "100",
+            "--out",
+            str(output_path),
+            "--voxel-x",
+            "1.0",
+            "--voxel-y",
+            "1.0",
+            "--voxel-z",
+            "1.0",
+            "--fallback-contours",
+        ]
+    )
+
+    assert result == 0
+    out = capsys.readouterr().out
+    assert "MorphoStack Threshold Sweep Complete" in out
+    assert "Thresholds: 3" in out
+    assert "Best valid fraction: 1 at threshold 50" in out
+    csv_text = output_path.read_text(encoding="utf-8")
+    assert csv_text.startswith("threshold,profile,frame_count,valid_frame_count")
+    assert "50.0,vesicle,2,2,1.0" in csv_text
+    assert "250.0,vesicle,2,0,0.0" in csv_text
 
 
 def test_analyze_writes_csv_from_synthetic_tiff(tmp_path, capsys):

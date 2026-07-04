@@ -16,16 +16,21 @@ from morphostack.core import (
     DEFAULT_PROFILE,
     PROFILE_CHOICES,
     RectROI,
+    SWEEP_COLUMNS,
     VoxelSize,
     analyze_stack,
     analysis_manifest,
     analysis_run_warnings,
     analysis_summary,
     analysis_summary_row,
+    best_sweep_result,
     compare_metric_csv,
     failed_analysis_summary_row,
     load_image_stack,
     suggest_threshold,
+    threshold_sweep,
+    threshold_sweep_rows,
+    threshold_values,
 )
 from morphostack.core.export import BATCH_SUMMARY_COLUMNS, analysis_rows
 from morphostack.core.preview import PreviewImage, render_segmentation_preview_png
@@ -74,6 +79,18 @@ class ThresholdRequest(BaseModel):
     method: str = "auto"
     voxel: VoxelOverride | None = None
     roi: ROIRequest | None = None
+
+
+class SweepRequest(BaseModel):
+    path: str
+    start: float
+    stop: float
+    step: float = Field(gt=0)
+    profile: str = DEFAULT_PROFILE
+    voxel: VoxelOverride | None = None
+    roi: ROIRequest | None = None
+    include_mesh: bool = False
+    prefer_opencv: bool = True
 
 
 def create_app() -> FastAPI:
@@ -170,6 +187,31 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         return preview_payload(str(stack.source_path), preview_image)
+
+    @app.post("/sweep")
+    def sweep(request: SweepRequest) -> dict[str, object]:
+        try:
+            stack = load_image_stack(request.path, voxel_override=to_voxel_size(request.voxel))
+            thresholds = threshold_values(request.start, request.stop, request.step)
+            results = threshold_sweep(
+                stack.grayscale,
+                thresholds=thresholds,
+                voxel_size=stack.voxel_size,
+                roi=to_rect_roi(request.roi),
+                profile=request.profile,
+                prefer_opencv=request.prefer_opencv,
+                include_mesh=request.include_mesh,
+                voxel_source=stack.voxel_source,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        return sweep_payload(
+            source_path=str(stack.source_path),
+            profile=request.profile,
+            voxel_source=stack.voxel_source,
+            results=results,
+        )
 
     @app.post("/upload/inspect")
     def upload_inspect_stack(
@@ -422,6 +464,52 @@ def create_app() -> FastAPI:
 
         return threshold_payload(file.filename or str(temp_path.name), value, used_method)
 
+    @app.post("/upload/sweep")
+    def upload_sweep(
+        file: Annotated[UploadFile, File()],
+        start: Annotated[float, Form()],
+        stop: Annotated[float, Form()],
+        step: Annotated[float, Form(gt=0)],
+        profile: Annotated[str, Form()] = DEFAULT_PROFILE,
+        voxel_x_um: Annotated[float, Form(gt=0)] = 1.0,
+        voxel_y_um: Annotated[float, Form(gt=0)] = 1.0,
+        voxel_z_um: Annotated[float, Form(gt=0)] = 1.0,
+        include_mesh: Annotated[bool, Form()] = False,
+        prefer_opencv: Annotated[bool, Form()] = True,
+        roi_xmin: Annotated[int | None, Form()] = None,
+        roi_xmax: Annotated[int | None, Form()] = None,
+        roi_ymin: Annotated[int | None, Form()] = None,
+        roi_ymax: Annotated[int | None, Form()] = None,
+    ) -> dict[str, object]:
+        temp_path = save_upload_to_temp(file)
+        try:
+            thresholds = threshold_values(start, stop, step)
+            stack = load_image_stack(
+                temp_path,
+                voxel_override=VoxelSize(voxel_x_um, voxel_y_um, voxel_z_um),
+            )
+            results = threshold_sweep(
+                stack.grayscale,
+                thresholds=thresholds,
+                voxel_size=stack.voxel_size,
+                roi=roi_from_optional_bounds(roi_xmin, roi_xmax, roi_ymin, roi_ymax),
+                profile=profile,
+                prefer_opencv=prefer_opencv,
+                include_mesh=include_mesh,
+                voxel_source=stack.voxel_source,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        finally:
+            temp_path.unlink(missing_ok=True)
+
+        return sweep_payload(
+            source_path=file.filename or str(temp_path.name),
+            profile=profile,
+            voxel_source=stack.voxel_source,
+            results=results,
+        )
+
     return app
 
 
@@ -502,6 +590,20 @@ def preview_payload(source_path: str, preview_image: PreviewImage) -> dict[str, 
 
 def threshold_payload(source_path: str, threshold: float, method: str) -> dict[str, object]:
     return {"source_path": source_path, "threshold": threshold, "method": method}
+
+
+def sweep_payload(source_path: str, profile: str, voxel_source: str, results) -> dict[str, object]:
+    best = best_sweep_result(results)
+    best_threshold = best.threshold if best else None
+    return {
+        "source_path": source_path,
+        "profile": profile,
+        "voxel_source": voxel_source,
+        "threshold_count": len(results),
+        "best_threshold": best_threshold,
+        "columns": list(SWEEP_COLUMNS),
+        "rows": threshold_sweep_rows(results),
+    }
 
 
 def validation_payload(report, *, expected_name: str, actual_name: str) -> dict[str, object]:

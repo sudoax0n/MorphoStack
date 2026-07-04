@@ -24,14 +24,18 @@ from morphostack.core import (
     analysis_summary,
     analysis_summary_row,
     apply_rect_roi,
+    best_sweep_result,
     failed_analysis_summary_row,
     compare_metric_csv,
     format_validation_report,
     load_image_stack,
     suggest_threshold,
+    threshold_sweep,
+    threshold_values,
     write_analysis_csv,
     write_analysis_manifest_json,
     write_batch_summary_csv,
+    write_threshold_sweep_csv,
 )
 
 
@@ -112,6 +116,35 @@ def build_parser() -> argparse.ArgumentParser:
     threshold.add_argument("--voxel-y", type=float, help="Override Y voxel size in micrometers.")
     threshold.add_argument("--voxel-z", type=float, help="Override Z voxel size in micrometers.")
     threshold.add_argument("--roi", nargs=4, type=int, metavar=("XMIN", "XMAX", "YMIN", "YMAX"))
+    sweep = subparsers.add_parser(
+        "sweep",
+        help="Run the analysis pipeline across a range of thresholds and write summary CSV rows.",
+    )
+    sweep.add_argument("path", help="Path to a .tif, .tiff, or .czi file.")
+    sweep.add_argument("--start", type=float, required=True, help="First threshold to analyze.")
+    sweep.add_argument("--stop", type=float, required=True, help="Last threshold to analyze.")
+    sweep.add_argument("--step", type=float, required=True, help="Threshold increment.")
+    sweep.add_argument("--out", required=True, help="Sweep summary CSV output path.")
+    sweep.add_argument(
+        "--profile",
+        choices=PROFILE_CHOICES,
+        default="vesicle",
+        help="Analysis profile. Default: vesicle.",
+    )
+    sweep.add_argument("--voxel-x", type=float, help="Override X voxel size in micrometers.")
+    sweep.add_argument("--voxel-y", type=float, help="Override Y voxel size in micrometers.")
+    sweep.add_argument("--voxel-z", type=float, help="Override Z voxel size in micrometers.")
+    sweep.add_argument("--roi", nargs=4, type=int, metavar=("XMIN", "XMAX", "YMIN", "YMAX"))
+    sweep.add_argument(
+        "--mesh",
+        action="store_true",
+        help="Compute 3D surface area/volume for each threshold.",
+    )
+    sweep.add_argument(
+        "--fallback-contours",
+        action="store_true",
+        help="Use dependency-light rectangular fallback contours instead of OpenCV contours.",
+    )
     analyze = subparsers.add_parser(
         "analyze",
         help="Run headless threshold analysis on an image stack and write CSV metrics.",
@@ -247,6 +280,22 @@ def main(argv: list[str] | None = None) -> int:
             roi=args.roi,
             manifest=args.manifest,
             write_manifest=not args.no_manifest,
+            prefer_opencv=not args.fallback_contours,
+            include_mesh=args.mesh,
+        )
+
+    if args.command == "sweep":
+        return run_sweep(
+            path=args.path,
+            start=args.start,
+            stop=args.stop,
+            step=args.step,
+            out=args.out,
+            profile=args.profile,
+            voxel_x=args.voxel_x,
+            voxel_y=args.voxel_y,
+            voxel_z=args.voxel_z,
+            roi=args.roi,
             prefer_opencv=not args.fallback_contours,
             include_mesh=args.mesh,
         )
@@ -493,6 +542,63 @@ def run_threshold(
     print(f"Source: {stack.source_path}")
     print(f"Method: {used_method}")
     print(f"Threshold: {threshold:g}")
+    return 0
+
+
+def run_sweep(
+    *,
+    path: str,
+    start: float,
+    stop: float,
+    step: float,
+    out: str,
+    profile: str = "vesicle",
+    voxel_x: float | None = None,
+    voxel_y: float | None = None,
+    voxel_z: float | None = None,
+    roi: list[int] | None = None,
+    prefer_opencv: bool = True,
+    include_mesh: bool = False,
+) -> int:
+    voxel_override_result = build_voxel_override(voxel_x, voxel_y, voxel_z)
+    if voxel_override_result == "partial":
+        print("Voxel override requires --voxel-x, --voxel-y, and --voxel-z together.")
+        return 2
+    voxel_override = voxel_override_result
+    rect_roi = RectROI(*roi) if roi is not None else None
+
+    try:
+        thresholds = threshold_values(start, stop, step)
+        stack = load_image_stack(path, voxel_override=voxel_override)
+        results = threshold_sweep(
+            stack.grayscale,
+            thresholds=thresholds,
+            voxel_size=stack.voxel_size,
+            roi=rect_roi,
+            profile=profile,
+            prefer_opencv=prefer_opencv,
+            include_mesh=include_mesh,
+            voxel_source=stack.voxel_source,
+        )
+        output_path = Path(out)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        write_threshold_sweep_csv(results, output_path)
+        best = best_sweep_result(results)
+    except Exception as exc:
+        print(f"Failed to run threshold sweep: {exc}")
+        return 1
+
+    print("MorphoStack Threshold Sweep Complete")
+    print("====================================")
+    print(f"Source: {stack.source_path}")
+    print(f"Profile: {profile}")
+    print(f"Thresholds: {len(results)}")
+    print(f"Voxel source: {stack.voxel_source}")
+    if best is not None:
+        frame_count = len(best.analysis.frames)
+        valid_fraction = len(best.analysis.valid_frames) / frame_count if frame_count else 0.0
+        print(f"Best valid fraction: {valid_fraction:g} at threshold {best.threshold:g}")
+    print(f"CSV: {output_path}")
     return 0
 
 

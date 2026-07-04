@@ -109,6 +109,18 @@ type BatchAnalyzeResponse = {
   rows: BatchSummaryRow[];
 };
 
+type SweepSummaryRow = Record<string, string | number | boolean>;
+
+type SweepResponse = {
+  source_path: string;
+  profile: AnalysisProfile;
+  voxel_source: string;
+  threshold_count: number;
+  best_threshold: number | null;
+  columns: string[];
+  rows: SweepSummaryRow[];
+};
+
 type ValidationDifference = {
   row_id: string;
   column: string;
@@ -286,6 +298,49 @@ app.innerHTML = `
 
   <section class="results">
     <div class="results-header">
+      <h2>Threshold Sweep</h2>
+      <div class="button-row">
+        <button id="sweep-btn" type="button">Run Sweep</button>
+        <button id="download-sweep-btn" class="secondary" type="button" disabled>Download Sweep CSV</button>
+      </div>
+    </div>
+    <div class="grid sweep-grid">
+      <label>
+        Start
+        <input id="sweep-start" type="number" step="1" value="50" />
+      </label>
+      <label>
+        Stop
+        <input id="sweep-stop" type="number" step="1" value="200" />
+      </label>
+      <label>
+        Step
+        <input id="sweep-step" type="number" min="0" step="1" value="10" />
+      </label>
+    </div>
+    <div id="sweep-summary" class="output muted">No threshold sweep run yet.</div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Threshold</th>
+            <th>Valid fraction</th>
+            <th>Valid frames</th>
+            <th>Mean area (um2)</th>
+            <th>Mean def. index</th>
+            <th>Mean circularity</th>
+            <th>Warnings</th>
+          </tr>
+        </thead>
+        <tbody id="sweep-results-body">
+          <tr><td colspan="7" class="muted">Run a sweep to compare candidate thresholds.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="results">
+    <div class="results-header">
       <h2>CSV Validation</h2>
       <button id="validate-csv-btn" type="button">Validate</button>
     </div>
@@ -368,15 +423,19 @@ const inspectOutput = mustElement<HTMLDivElement>("inspect-output");
 const previewOutput = mustElement<HTMLDivElement>("preview-output");
 const analysisSummary = mustElement<HTMLDivElement>("analysis-summary");
 const batchSummary = mustElement<HTMLDivElement>("batch-summary");
+const sweepSummary = mustElement<HTMLDivElement>("sweep-summary");
 const validationSummary = mustElement<HTMLDivElement>("validation-summary");
 const resultsBody = mustElement<HTMLTableSectionElement>("results-body");
 const batchResultsBody = mustElement<HTMLTableSectionElement>("batch-results-body");
+const sweepResultsBody = mustElement<HTMLTableSectionElement>("sweep-results-body");
 const validationResultsBody = mustElement<HTMLTableSectionElement>("validation-results-body");
 const downloadCsvButton = mustElement<HTMLButtonElement>("download-csv-btn");
 const downloadManifestButton = mustElement<HTMLButtonElement>("download-manifest-btn");
 const downloadBatchButton = mustElement<HTMLButtonElement>("download-batch-btn");
+const downloadSweepButton = mustElement<HTMLButtonElement>("download-sweep-btn");
 let latestAnalysis: AnalyzeResponse | null = null;
 let latestBatch: BatchAnalyzeResponse | null = null;
+let latestSweep: SweepResponse | null = null;
 
 mustElement<HTMLButtonElement>("inspect-btn").addEventListener("click", () => {
   void inspectStack();
@@ -398,6 +457,10 @@ mustElement<HTMLButtonElement>("batch-analyze-btn").addEventListener("click", ()
   void analyzeBatch();
 });
 
+mustElement<HTMLButtonElement>("sweep-btn").addEventListener("click", () => {
+  void runSweep();
+});
+
 mustElement<HTMLButtonElement>("validate-csv-btn").addEventListener("click", () => {
   void validateCsv();
 });
@@ -412,6 +475,10 @@ downloadManifestButton.addEventListener("click", () => {
 
 downloadBatchButton.addEventListener("click", () => {
   downloadLatestBatchCsv();
+});
+
+downloadSweepButton.addEventListener("click", () => {
+  downloadLatestSweepCsv();
 });
 
 void refreshHealth();
@@ -534,6 +601,33 @@ async function analyzeBatch(): Promise<void> {
   }
 }
 
+async function runSweep(): Promise<void> {
+  latestSweep = null;
+  downloadSweepButton.disabled = true;
+  sweepSummary.textContent = "Running threshold sweep...";
+  sweepResultsBody.innerHTML = `<tr><td colspan="7" class="muted">Running sweep...</td></tr>`;
+  try {
+    const file = selectedFile();
+    const payload = file
+      ? await apiUploadPost<SweepResponse>("/api/upload/sweep", sweepUploadForm(file))
+      : await apiPost<SweepResponse>("/api/sweep", {
+          path: readPath(),
+          start: readNumber("sweep-start"),
+          stop: readNumber("sweep-stop"),
+          step: readNumber("sweep-step"),
+          profile: readProfile(),
+          voxel: readVoxel(),
+          roi: readRoi(),
+          include_mesh: mustElement<HTMLInputElement>("mesh-input").checked,
+          prefer_opencv: !mustElement<HTMLInputElement>("fallback-input").checked
+        });
+    renderSweep(payload);
+  } catch (error) {
+    sweepSummary.textContent = errorMessage(error);
+    sweepResultsBody.innerHTML = `<tr><td colspan="7" class="muted">Sweep failed.</td></tr>`;
+  }
+}
+
 async function validateCsv(): Promise<void> {
   validationSummary.textContent = "Validating...";
   validationResultsBody.innerHTML = `<tr><td colspan="5" class="muted">Running validation...</td></tr>`;
@@ -544,6 +638,39 @@ async function validateCsv(): Promise<void> {
     validationSummary.textContent = errorMessage(error);
     validationResultsBody.innerHTML = `<tr><td colspan="5" class="muted">Validation failed.</td></tr>`;
   }
+}
+
+function renderSweep(payload: SweepResponse): void {
+  latestSweep = payload;
+  downloadSweepButton.disabled = payload.rows.length === 0;
+  sweepSummary.innerHTML = `
+    <strong>${escapeHtml(payload.source_path)}</strong><br />
+    Profile: ${escapeHtml(payload.profile)}<br />
+    Thresholds: ${payload.threshold_count}<br />
+    Best threshold: ${payload.best_threshold === null ? "" : formatNumber(payload.best_threshold)}<br />
+    Voxel source: ${escapeHtml(payload.voxel_source)}
+  `;
+
+  if (payload.rows.length === 0) {
+    sweepResultsBody.innerHTML = `<tr><td colspan="7" class="muted">No sweep rows returned.</td></tr>`;
+    return;
+  }
+
+  sweepResultsBody.innerHTML = payload.rows
+    .map(
+      (row) => `
+        <tr>
+          <td>${formatUnknownNumber(row.threshold)}</td>
+          <td>${formatUnknownNumber(row.valid_fraction)}</td>
+          <td>${formatUnknownNumber(row.valid_frame_count)}</td>
+          <td>${formatUnknownNumber(row.area_um2_mean)}</td>
+          <td>${formatUnknownNumber(row.deformation_index_mean)}</td>
+          <td>${formatUnknownNumber(row.circularity_mean)}</td>
+          <td>${escapeHtml(String(row.warning_codes ?? ""))}</td>
+        </tr>
+      `
+    )
+    .join("");
 }
 
 function renderPreview(payload: PreviewResponse): void {
@@ -725,6 +852,23 @@ function downloadLatestBatchCsv(): void {
   URL.revokeObjectURL(url);
 }
 
+function downloadLatestSweepCsv(): void {
+  if (!latestSweep || latestSweep.rows.length === 0) {
+    return;
+  }
+
+  const csv = genericRowsToCsv(latestSweep.rows, latestSweep.columns);
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = sweepFilename(latestSweep.source_path);
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
 function downloadLatestManifest(): void {
   if (!latestAnalysis) {
     return;
@@ -778,6 +922,13 @@ function manifestFilename(sourcePath: string): string {
   const baseName = rawName.replace(/\.[^.]+$/, "") || "morphostack-analysis";
   const safeName = baseName.replace(/[^a-z0-9._-]+/gi, "_");
   return `${safeName}_manifest.json`;
+}
+
+function sweepFilename(sourcePath: string): string {
+  const rawName = sourcePath.split(/[\\/]/).pop() || "morphostack-sweep";
+  const baseName = rawName.replace(/\.[^.]+$/, "") || "morphostack-sweep";
+  const safeName = baseName.replace(/[^a-z0-9._-]+/gi, "_");
+  return `${safeName}_threshold_sweep.csv`;
 }
 
 async function apiGet<T>(url: string): Promise<T> {
@@ -872,6 +1023,19 @@ function batchUploadForm(files: File[]): FormData {
   });
   appendVoxelFields(formData);
   formData.set("threshold", String(readNumber("threshold-input")));
+  formData.set("profile", readProfile());
+  formData.set("include_mesh", String(mustElement<HTMLInputElement>("mesh-input").checked));
+  formData.set("prefer_opencv", String(!mustElement<HTMLInputElement>("fallback-input").checked));
+  appendRoiFields(formData);
+  return formData;
+}
+
+function sweepUploadForm(file: File): FormData {
+  const formData = new FormData();
+  appendFileAndVoxel(formData, file);
+  formData.set("start", String(readNumber("sweep-start")));
+  formData.set("stop", String(readNumber("sweep-stop")));
+  formData.set("step", String(readNumber("sweep-step")));
   formData.set("profile", readProfile());
   formData.set("include_mesh", String(mustElement<HTMLInputElement>("mesh-input").checked));
   formData.set("prefer_opencv", String(!mustElement<HTMLInputElement>("fallback-input").checked));
