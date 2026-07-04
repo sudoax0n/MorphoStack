@@ -140,6 +140,8 @@ def test_analyze_writes_csv_from_synthetic_tiff(tmp_path, capsys):
     assert result == 0
     out = capsys.readouterr().out
     assert "MorphoStack Analysis Complete" in out
+    assert "Mean area: 9 um^2" in out
+    assert "Mean circularity:" in out
     assert "Manifest:" in out
     assert output_path.exists()
     manifest_path = output_path.with_suffix(".csv.manifest.json")
@@ -147,6 +149,7 @@ def test_analyze_writes_csv_from_synthetic_tiff(tmp_path, capsys):
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["source_path"] == str(input_path)
     assert manifest["profile"] == "vesicle"
+    assert manifest["summary"]["metrics"]["area_um2"]["mean"] == 9.0
     csv_text = output_path.read_text(encoding="utf-8")
     assert "frame_index,threshold,profile,method,has_contour" in csv_text
     assert "0,100.0,vesicle,fallback,True" in csv_text

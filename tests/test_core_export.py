@@ -9,6 +9,7 @@ from morphostack.core import VoxelSize, analyze_stack
 from morphostack.core.export import (
     analysis_manifest,
     analysis_rows,
+    analysis_summary,
     analysis_warnings,
     write_analysis_csv,
     write_analysis_manifest_json,
@@ -85,8 +86,44 @@ def test_analysis_manifest_records_run_settings():
     assert manifest["roi"] == {"xmin": 1, "xmax": 4, "ymin": 2, "ymax": 6}
     assert manifest["voxel_size"] == {"x_um": 0.5, "y_um": 0.5, "z_um": 1.0}
     assert manifest["frame_count"] == 1
+    assert manifest["summary"]["metrics"]["area_um2"]["mean"] == 2.25
     assert "created_at_utc" in manifest
     assert manifest["warnings"] == []
+
+
+def test_analysis_summary_uses_valid_frames_only():
+    stack = np.zeros((2, 8, 8), dtype=np.uint8)
+    stack[1, 2:5, 1:4] = 200
+    analysis = analyze_stack(
+        stack,
+        thresholds=100,
+        voxel_size=VoxelSize(1.0, 1.0, 1.0),
+        prefer_opencv=False,
+    )
+
+    summary = analysis_summary(analysis)
+
+    assert summary["frame_count"] == 2
+    assert summary["valid_frame_count"] == 1
+    assert summary["valid_fraction"] == 0.5
+    assert summary["metrics"]["area_um2"] == {"mean": 9.0, "min": 9.0, "max": 9.0, "std": 0.0}
+    assert summary["metrics"]["circularity"]["mean"] > 0
+
+
+def test_analysis_summary_handles_no_valid_frames():
+    analysis = analyze_stack(
+        np.zeros((2, 8, 8), dtype=np.uint8),
+        thresholds=100,
+        voxel_size=VoxelSize(1.0, 1.0, 1.0),
+        prefer_opencv=False,
+    )
+
+    summary = analysis_summary(analysis)
+
+    assert summary["frame_count"] == 2
+    assert summary["valid_frame_count"] == 0
+    assert summary["valid_fraction"] == 0.0
+    assert summary["metrics"] == {}
 
 
 def test_analysis_warnings_report_no_valid_contours():

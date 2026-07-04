@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+from math import sqrt
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TextIO
@@ -31,6 +32,19 @@ CSV_COLUMNS = (
     "solidity",
     "mesh_surface_area_um2",
     "mesh_volume_um3",
+)
+
+SUMMARY_METRICS = (
+    "area_um2",
+    "perimeter_um",
+    "circularity",
+    "bbox_width_um",
+    "bbox_height_um",
+    "aspect_ratio",
+    "elongation",
+    "extent",
+    "equivalent_diameter_um",
+    "solidity",
 )
 
 
@@ -109,6 +123,48 @@ def analysis_warnings(analysis: StackAnalysis) -> list[dict[str, object]]:
     return warnings
 
 
+def analysis_summary(analysis: StackAnalysis) -> dict[str, object]:
+    metric_values: dict[str, list[float]] = {name: [] for name in SUMMARY_METRICS}
+    for frame in analysis.valid_frames:
+        metrics = frame.metrics
+        if metrics is None:
+            continue
+        metric_values["area_um2"].append(metrics.area_um2)
+        metric_values["perimeter_um"].append(metrics.perimeter_um)
+        metric_values["circularity"].append(metrics.circularity)
+        metric_values["bbox_width_um"].append(metrics.bbox_width_um)
+        metric_values["bbox_height_um"].append(metrics.bbox_height_um)
+        metric_values["aspect_ratio"].append(metrics.aspect_ratio)
+        metric_values["elongation"].append(metrics.elongation)
+        metric_values["extent"].append(metrics.extent)
+        metric_values["equivalent_diameter_um"].append(metrics.equivalent_diameter_um)
+        metric_values["solidity"].append(metrics.solidity)
+
+    frame_count = len(analysis.frames)
+    valid_frame_count = len(analysis.valid_frames)
+    return {
+        "frame_count": frame_count,
+        "valid_frame_count": valid_frame_count,
+        "valid_fraction": valid_frame_count / frame_count if frame_count else 0.0,
+        "metrics": {
+            name: summarize_values(values)
+            for name, values in metric_values.items()
+            if values
+        },
+    }
+
+
+def summarize_values(values: list[float]) -> dict[str, float]:
+    mean = sum(values) / len(values)
+    variance = sum((value - mean) ** 2 for value in values) / len(values)
+    return {
+        "mean": mean,
+        "min": min(values),
+        "max": max(values),
+        "std": sqrt(variance),
+    }
+
+
 def analysis_manifest(
     analysis: StackAnalysis,
     *,
@@ -141,6 +197,7 @@ def analysis_manifest(
         "frame_count": len(analysis.frames),
         "valid_frame_count": len(analysis.valid_frames),
         "mesh": mesh,
+        "summary": analysis_summary(analysis),
         "warnings": analysis_warnings(analysis),
         "columns": list(CSV_COLUMNS),
     }

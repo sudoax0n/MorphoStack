@@ -47,9 +47,24 @@ type AnalyzeResponse = {
     surface_area_um2: number;
     volume_um3: number;
   };
+  summary: AnalysisSummary;
   warnings: AnalysisWarning[];
   manifest: Record<string, unknown>;
   rows: AnalysisRow[];
+};
+
+type MetricSummary = {
+  mean: number;
+  min: number;
+  max: number;
+  std: number;
+};
+
+type AnalysisSummary = {
+  frame_count: number;
+  valid_frame_count: number;
+  valid_fraction: number;
+  metrics: Record<string, MetricSummary>;
 };
 
 type AnalysisWarning = {
@@ -394,10 +409,11 @@ function renderAnalysis(payload: AnalyzeResponse): void {
     payload.warnings.length > 0
       ? `<div class="warning-list">${payload.warnings.map((warning) => `<div><strong>${escapeHtml(warning.severity)}</strong>: ${escapeHtml(warning.message)}</div>`).join("")}</div>`
       : "";
+  const summaryText = renderSummaryMetrics(payload.summary);
   analysisSummary.innerHTML = `
     <strong>${escapeHtml(payload.source_path)}</strong><br />
     Profile: ${escapeHtml(payload.profile)}<br />
-    Frames: ${payload.frame_count}, valid: ${payload.valid_frame_count}${meshText}
+    Frames: ${payload.frame_count}, valid: ${payload.valid_frame_count}${summaryText}${meshText}
     ${warningText}
   `;
 
@@ -424,6 +440,26 @@ function renderAnalysis(payload: AnalyzeResponse): void {
       `
     )
     .join("");
+}
+
+function renderSummaryMetrics(summary: AnalysisSummary): string {
+  const area = summary.metrics.area_um2;
+  const circularity = summary.metrics.circularity;
+  const diameter = summary.metrics.equivalent_diameter_um;
+  if (!area && !circularity && !diameter) {
+    return "";
+  }
+  const parts: string[] = [];
+  if (area) {
+    parts.push(`mean area ${formatNumber(area.mean)} um2`);
+  }
+  if (diameter) {
+    parts.push(`mean eq. diameter ${formatNumber(diameter.mean)} um`);
+  }
+  if (circularity) {
+    parts.push(`mean circularity ${formatNumber(circularity.mean)}`);
+  }
+  return `<br />Summary: ${parts.join(", ")}`;
 }
 
 function downloadLatestCsv(): void {

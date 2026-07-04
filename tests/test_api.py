@@ -83,6 +83,8 @@ def test_analyze_stack_without_mesh(client, tmp_path):
     assert payload["manifest"]["threshold"] == 100
     assert payload["warnings"] == []
     assert payload["manifest"]["warnings"] == []
+    assert payload["summary"]["metrics"]["area_um2"]["mean"] == 9.0
+    assert payload["manifest"]["summary"]["metrics"]["area_um2"]["mean"] == 9.0
     assert payload["mesh"] is None
     assert payload["rows"][0]["area_um2"] == 9.0
     assert payload["rows"][0]["aspect_ratio"] == 1.0
@@ -207,6 +209,7 @@ def test_upload_analyze_stack_with_mesh(client):
     assert payload["manifest"]["source_path"] == "stack.tif"
     assert payload["manifest"]["include_mesh"] is True
     assert payload["warnings"] == []
+    assert payload["summary"]["metrics"]["area_um2"]["mean"] == 9.0
     assert payload["frame_count"] == 3
     assert payload["valid_frame_count"] == 3
     assert payload["rows"][0]["area_um2"] == 9.0
@@ -282,3 +285,4 @@ def test_analyze_returns_warnings_for_no_contours(client, tmp_path):
     payload = response.json()
     assert payload["warnings"][0]["code"] == "no_valid_contours"
     assert payload["manifest"]["warnings"][0]["code"] == "no_valid_contours"
+    assert payload["summary"]["metrics"] == {}

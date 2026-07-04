@@ -19,6 +19,7 @@ from morphostack.core import (
     VoxelSize,
     analyze_stack,
     analysis_manifest,
+    analysis_summary,
     analysis_warnings,
     load_image_stack,
     suggest_threshold,
@@ -122,6 +123,7 @@ def create_app() -> FastAPI:
             "valid_frame_count": len(analysis.valid_frames),
             "voxel_size": voxel_payload(stack.voxel_size),
             "mesh": mesh,
+            "summary": analysis_summary(analysis),
             "warnings": analysis_warnings(analysis),
             "manifest": analysis_manifest(
                 analysis,
@@ -234,6 +236,7 @@ def create_app() -> FastAPI:
             "valid_frame_count": len(analysis.valid_frames),
             "voxel_size": voxel_payload(stack.voxel_size),
             "mesh": mesh,
+            "summary": analysis_summary(analysis),
             "warnings": analysis_warnings(analysis),
             "manifest": analysis_manifest(
                 analysis,

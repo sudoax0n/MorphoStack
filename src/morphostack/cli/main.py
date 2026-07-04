@@ -20,6 +20,7 @@ from morphostack.core import (
     VoxelSize,
     analyze_stack,
     analysis_manifest,
+    analysis_summary,
     analysis_warnings,
     apply_rect_roi,
     load_image_stack,
@@ -321,6 +322,7 @@ def run_analyze(
             include_mesh=include_mesh,
         )
         warnings = analysis_warnings(analysis)
+        summary = analysis_summary(analysis)
         output_path = Path(out)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         write_analysis_csv(analysis, output_path)
@@ -349,6 +351,14 @@ def run_analyze(
     print(f"Profile: {analysis.profile}")
     print(f"Frames: {len(analysis.frames)}")
     print(f"Valid frames: {len(analysis.valid_frames)}")
+    metric_summary = summary["metrics"]
+    if isinstance(metric_summary, dict) and metric_summary:
+        area_summary = metric_summary.get("area_um2")
+        circularity_summary = metric_summary.get("circularity")
+        if isinstance(area_summary, dict):
+            print(f"Mean area: {area_summary['mean']:g} um^2")
+        if isinstance(circularity_summary, dict):
+            print(f"Mean circularity: {circularity_summary['mean']:g}")
     for warning in warnings:
         print(f"Warning [{warning['code']}]: {warning['message']}")
     if analysis.mesh:
