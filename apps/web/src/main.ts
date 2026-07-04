@@ -39,6 +39,19 @@ type AnalyzeResponse = {
   rows: AnalysisRow[];
 };
 
+type PreviewResponse = {
+  source_path: string;
+  frame_index: number;
+  width: number;
+  height: number;
+  threshold: number;
+  method: string;
+  area_px2: number;
+  perimeter_px: number;
+  circularity: number;
+  image_png_base64: string;
+};
+
 const CSV_COLUMNS = [
   "frame_index",
   "threshold",
@@ -102,9 +115,16 @@ app.innerHTML = `
     <section class="panel">
       <div class="panel-title">
         <h2>Analysis</h2>
-        <button id="analyze-btn" type="button">Analyze</button>
+        <div class="button-row">
+          <button id="preview-btn" class="secondary" type="button">Preview</button>
+          <button id="analyze-btn" type="button">Analyze</button>
+        </div>
       </div>
       <div class="grid">
+        <label>
+          Frame
+          <input id="frame-input" type="number" min="0" step="1" value="0" />
+        </label>
         <label>
           Threshold
           <input id="threshold-input" type="number" step="1" value="100" />
@@ -127,6 +147,7 @@ app.innerHTML = `
           <input id="roi-ymax" type="number" placeholder="ymax" />
         </div>
       </fieldset>
+      <div id="preview-output" class="preview-output muted">No preview rendered yet.</div>
       <div id="analysis-summary" class="output muted">No analysis run yet.</div>
     </section>
   </main>
@@ -158,6 +179,7 @@ app.innerHTML = `
 
 const apiStatus = mustElement<HTMLDivElement>("api-status");
 const inspectOutput = mustElement<HTMLDivElement>("inspect-output");
+const previewOutput = mustElement<HTMLDivElement>("preview-output");
 const analysisSummary = mustElement<HTMLDivElement>("analysis-summary");
 const resultsBody = mustElement<HTMLTableSectionElement>("results-body");
 const downloadCsvButton = mustElement<HTMLButtonElement>("download-csv-btn");
@@ -169,6 +191,10 @@ mustElement<HTMLButtonElement>("inspect-btn").addEventListener("click", () => {
 
 mustElement<HTMLButtonElement>("analyze-btn").addEventListener("click", () => {
   void analyzeStack();
+});
+
+mustElement<HTMLButtonElement>("preview-btn").addEventListener("click", () => {
+  void previewStack();
 });
 
 downloadCsvButton.addEventListener("click", () => {
@@ -211,6 +237,26 @@ async function inspectStack(): Promise<void> {
   }
 }
 
+async function previewStack(): Promise<void> {
+  previewOutput.textContent = "Rendering preview...";
+  try {
+    const file = selectedFile();
+    const payload = file
+      ? await apiUploadPost<PreviewResponse>("/api/upload/preview", previewUploadForm(file))
+      : await apiPost<PreviewResponse>("/api/preview", {
+          path: readPath(),
+          threshold: readNumber("threshold-input"),
+          frame_index: readInteger("frame-input"),
+          voxel: readVoxel(),
+          roi: readRoi(),
+          prefer_opencv: !mustElement<HTMLInputElement>("fallback-input").checked
+        });
+    renderPreview(payload);
+  } catch (error) {
+    previewOutput.textContent = errorMessage(error);
+  }
+}
+
 async function analyzeStack(): Promise<void> {
   latestAnalysis = null;
   downloadCsvButton.disabled = true;
@@ -233,6 +279,24 @@ async function analyzeStack(): Promise<void> {
     analysisSummary.textContent = errorMessage(error);
     resultsBody.innerHTML = `<tr><td colspan="6" class="muted">Analysis failed.</td></tr>`;
   }
+}
+
+function renderPreview(payload: PreviewResponse): void {
+  previewOutput.innerHTML = `
+    <img
+      src="data:image/png;base64,${payload.image_png_base64}"
+      width="${payload.width}"
+      height="${payload.height}"
+      alt="Segmentation preview for frame ${payload.frame_index}"
+    />
+    <div>
+      <strong>${escapeHtml(payload.source_path)}</strong><br />
+      Frame ${payload.frame_index}, ${escapeHtml(payload.method)} contour<br />
+      Area ${formatNumber(payload.area_px2)} px2,
+      perimeter ${formatNumber(payload.perimeter_px)} px,
+      circularity ${formatNumber(payload.circularity)}
+    </div>
+  `;
 }
 
 function renderAnalysis(payload: AnalyzeResponse): void {
@@ -357,6 +421,16 @@ function analyzeUploadForm(file: File): FormData {
   return formData;
 }
 
+function previewUploadForm(file: File): FormData {
+  const formData = new FormData();
+  appendFileAndVoxel(formData, file);
+  formData.set("threshold", String(readNumber("threshold-input")));
+  formData.set("frame_index", String(readInteger("frame-input")));
+  formData.set("prefer_opencv", String(!mustElement<HTMLInputElement>("fallback-input").checked));
+  appendRoiFields(formData);
+  return formData;
+}
+
 function appendFileAndVoxel(formData: FormData, file: File): void {
   const voxel = readVoxel();
   formData.set("file", file);
@@ -417,6 +491,14 @@ function readNumber(id: string): number {
   const value = Number(mustElement<HTMLInputElement>(id).value);
   if (!Number.isFinite(value)) {
     throw new Error(`${id} must be a number.`);
+  }
+  return value;
+}
+
+function readInteger(id: string): number {
+  const value = readNumber(id);
+  if (!Number.isInteger(value)) {
+    throw new Error(`${id} must be an integer.`);
   }
   return value;
 }

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 import tempfile
+from base64 import b64encode
 from pathlib import Path
 from typing import Annotated
 
@@ -13,6 +14,8 @@ from pydantic import BaseModel, Field
 from morphostack import __version__
 from morphostack.core import RectROI, VoxelSize, analyze_stack, load_image_stack
 from morphostack.core.export import analysis_rows
+from morphostack.core.preview import PreviewImage, render_segmentation_preview_png
+from morphostack.core.segmentation import apply_rect_roi
 
 
 class VoxelOverride(BaseModel):
@@ -39,6 +42,15 @@ class AnalyzeRequest(BaseModel):
     voxel: VoxelOverride | None = None
     roi: ROIRequest | None = None
     include_mesh: bool = False
+    prefer_opencv: bool = True
+
+
+class PreviewRequest(BaseModel):
+    path: str
+    threshold: float
+    frame_index: int = Field(default=0, ge=0)
+    voxel: VoxelOverride | None = None
+    roi: ROIRequest | None = None
     prefer_opencv: bool = True
 
 
@@ -92,6 +104,22 @@ def create_app() -> FastAPI:
             "mesh": mesh,
             "rows": analysis_rows(analysis),
         }
+
+    @app.post("/preview")
+    def preview(request: PreviewRequest) -> dict[str, object]:
+        try:
+            stack = load_image_stack(request.path, voxel_override=to_voxel_size(request.voxel))
+            grayscale = apply_preview_roi(stack.grayscale, to_rect_roi(request.roi))
+            preview_image = render_segmentation_preview_png(
+                grayscale,
+                frame_index=request.frame_index,
+                threshold=request.threshold,
+                prefer_opencv=request.prefer_opencv,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        return preview_payload(str(stack.source_path), preview_image)
 
     @app.post("/upload/inspect")
     def upload_inspect_stack(
@@ -166,6 +194,43 @@ def create_app() -> FastAPI:
             "rows": analysis_rows(analysis),
         }
 
+    @app.post("/upload/preview")
+    def upload_preview(
+        file: Annotated[UploadFile, File()],
+        threshold: Annotated[float, Form()],
+        frame_index: Annotated[int, Form(ge=0)] = 0,
+        voxel_x_um: Annotated[float, Form(gt=0)] = 1.0,
+        voxel_y_um: Annotated[float, Form(gt=0)] = 1.0,
+        voxel_z_um: Annotated[float, Form(gt=0)] = 1.0,
+        prefer_opencv: Annotated[bool, Form()] = True,
+        roi_xmin: Annotated[int | None, Form()] = None,
+        roi_xmax: Annotated[int | None, Form()] = None,
+        roi_ymin: Annotated[int | None, Form()] = None,
+        roi_ymax: Annotated[int | None, Form()] = None,
+    ) -> dict[str, object]:
+        temp_path = save_upload_to_temp(file)
+        try:
+            stack = load_image_stack(
+                temp_path,
+                voxel_override=VoxelSize(voxel_x_um, voxel_y_um, voxel_z_um),
+            )
+            grayscale = apply_preview_roi(
+                stack.grayscale,
+                roi_from_optional_bounds(roi_xmin, roi_xmax, roi_ymin, roi_ymax),
+            )
+            preview_image = render_segmentation_preview_png(
+                grayscale,
+                frame_index=frame_index,
+                threshold=threshold,
+                prefer_opencv=prefer_opencv,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        finally:
+            temp_path.unlink(missing_ok=True)
+
+        return preview_payload(file.filename or str(temp_path.name), preview_image)
+
     return app
 
 
@@ -195,6 +260,18 @@ def roi_from_optional_bounds(
     return RectROI(xmin, xmax, ymin, ymax)
 
 
+def apply_preview_roi(stack, roi: RectROI | None):
+    if roi is None:
+        return stack
+    return apply_rect_roi(
+        stack,
+        xmin=roi.xmin,
+        xmax=roi.xmax,
+        ymin=roi.ymin,
+        ymax=roi.ymax,
+    )
+
+
 def save_upload_to_temp(file: UploadFile) -> Path:
     suffix = Path(file.filename or "upload.tif").suffix or ".tif"
     handle = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
@@ -208,6 +285,22 @@ def save_upload_to_temp(file: UploadFile) -> Path:
     finally:
         file.file.seek(0)
     return temp_path
+
+
+def preview_payload(source_path: str, preview_image: PreviewImage) -> dict[str, object]:
+    preview = preview_image.preview
+    return {
+        "source_path": source_path,
+        "frame_index": preview_image.frame_index,
+        "width": preview_image.width,
+        "height": preview_image.height,
+        "threshold": preview.threshold,
+        "method": preview.method,
+        "area_px2": preview.area_px2,
+        "perimeter_px": preview.perimeter_px,
+        "circularity": preview.circularity,
+        "image_png_base64": b64encode(preview_image.png_bytes).decode("ascii"),
+    }
 
 
 def voxel_payload(voxel: VoxelSize) -> dict[str, float]:

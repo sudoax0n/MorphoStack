@@ -67,8 +67,10 @@ Current API endpoints:
 - `GET /health`
 - `POST /inspect`
 - `POST /analyze`
+- `POST /preview`
 - `POST /upload/inspect`
 - `POST /upload/analyze`
+- `POST /upload/preview`
 
 To start only the browser UI during development:
 
@@ -78,9 +80,10 @@ npm install
 npm run dev
 ```
 
-The browser UI can analyze a selected TIFF/CZI file through upload endpoints,
-or use a local stack path when the backend can already access the file. After
-analysis, the frame metrics table can be downloaded as a CSV file.
+The browser UI can preview threshold segmentation, analyze a selected TIFF/CZI
+file through upload endpoints, or use a local stack path when the backend can
+already access the file. After analysis, the frame metrics table can be
+downloaded as a CSV file.
 
 ## Architecture Direction
 

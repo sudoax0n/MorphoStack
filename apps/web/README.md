@@ -27,5 +27,6 @@ Vite proxies `/api/*` requests to `http://127.0.0.1:8000`.
 Set `MORPHOSTACK_API_TARGET` to point Vite at a different backend.
 
 The UI supports direct TIFF/CZI uploads for normal local use. The path input is
-kept as a developer fallback when the backend can access a file directly. After
-analysis, users can download the returned frame metrics as a CSV file.
+kept as a developer fallback when the backend can access a file directly. Users
+can preview threshold segmentation before analysis and download the returned
+frame metrics as a CSV file after analysis.

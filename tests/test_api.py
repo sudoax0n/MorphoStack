@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from base64 import b64decode
 from io import BytesIO
 
 import numpy as np
@@ -100,6 +101,44 @@ def test_analyze_stack_with_mesh(client, tmp_path):
     assert payload["mesh"]["volume_um3"] > 0
 
 
+def test_preview_stack_returns_png(client, tmp_path):
+    pytest.importorskip("PIL")
+    path = tmp_path / "stack.tif"
+    write_stack(path)
+
+    response = client.post(
+        "/preview",
+        json={
+            "path": str(path),
+            "threshold": 100,
+            "frame_index": 1,
+            "prefer_opencv": False,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["source_path"] == str(path)
+    assert payload["frame_index"] == 1
+    assert payload["width"] == 8
+    assert payload["height"] == 8
+    assert b64decode(payload["image_png_base64"]).startswith(b"\x89PNG")
+
+
+def test_preview_bad_frame_returns_400(client, tmp_path):
+    pytest.importorskip("PIL")
+    path = tmp_path / "stack.tif"
+    write_stack(path)
+
+    response = client.post(
+        "/preview",
+        json={"path": str(path), "threshold": 100, "frame_index": 9},
+    )
+
+    assert response.status_code == 400
+    assert "frame_index" in response.json()["detail"]
+
+
 def test_upload_inspect_stack(client):
     response = client.post(
         "/upload/inspect",
@@ -150,6 +189,23 @@ def test_upload_analyze_partial_roi_returns_400(client):
 
     assert response.status_code == 400
     assert "ROI requires" in response.json()["detail"]
+
+
+def test_upload_preview_returns_png(client):
+    pytest.importorskip("PIL")
+
+    response = client.post(
+        "/upload/preview",
+        files={"file": ("stack.tif", stack_upload_bytes(), "image/tiff")},
+        data={"threshold": "100", "frame_index": "2", "prefer_opencv": "false"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["source_path"] == "stack.tif"
+    assert payload["frame_index"] == 2
+    assert payload["method"] == "fallback"
+    assert b64decode(payload["image_png_base64"]).startswith(b"\x89PNG")
 
 
 def test_analyze_bad_path_returns_400(client):
