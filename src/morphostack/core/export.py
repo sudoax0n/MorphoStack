@@ -65,6 +65,50 @@ def analysis_rows(analysis: StackAnalysis) -> list[dict[str, object]]:
     return rows
 
 
+def analysis_warnings(analysis: StackAnalysis) -> list[dict[str, object]]:
+    warnings: list[dict[str, object]] = []
+    frame_count = len(analysis.frames)
+    valid_count = len(analysis.valid_frames)
+    if frame_count == 0:
+        warnings.append(
+            {
+                "code": "no_frames",
+                "severity": "error",
+                "message": "The analysis did not contain any frames.",
+            }
+        )
+        return warnings
+
+    if valid_count == 0:
+        warnings.append(
+            {
+                "code": "no_valid_contours",
+                "severity": "error",
+                "message": "No frames produced a valid contour. Check threshold, ROI, and image contrast.",
+            }
+        )
+    elif valid_count < frame_count:
+        warnings.append(
+            {
+                "code": "partial_contours",
+                "severity": "warning",
+                "message": f"{frame_count - valid_count} of {frame_count} frames did not produce a valid contour.",
+                "invalid_frame_count": frame_count - valid_count,
+                "frame_count": frame_count,
+            }
+        )
+
+    if analysis.mesh and (analysis.mesh.surface_area_um2 <= 0 or analysis.mesh.volume_um3 <= 0):
+        warnings.append(
+            {
+                "code": "zero_mesh_measurement",
+                "severity": "warning",
+                "message": "3D mesh measurement returned zero surface area or volume.",
+            }
+        )
+    return warnings
+
+
 def analysis_manifest(
     analysis: StackAnalysis,
     *,
@@ -97,6 +141,7 @@ def analysis_manifest(
         "frame_count": len(analysis.frames),
         "valid_frame_count": len(analysis.valid_frames),
         "mesh": mesh,
+        "warnings": analysis_warnings(analysis),
         "columns": list(CSV_COLUMNS),
     }
 

@@ -20,6 +20,7 @@ from morphostack.core import (
     VoxelSize,
     analyze_stack,
     analysis_manifest,
+    analysis_warnings,
     apply_rect_roi,
     load_image_stack,
     suggest_threshold,
@@ -319,6 +320,7 @@ def run_analyze(
             prefer_opencv=prefer_opencv,
             include_mesh=include_mesh,
         )
+        warnings = analysis_warnings(analysis)
         output_path = Path(out)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         write_analysis_csv(analysis, output_path)
@@ -347,6 +349,8 @@ def run_analyze(
     print(f"Profile: {analysis.profile}")
     print(f"Frames: {len(analysis.frames)}")
     print(f"Valid frames: {len(analysis.valid_frames)}")
+    for warning in warnings:
+        print(f"Warning [{warning['code']}]: {warning['message']}")
     if analysis.mesh:
         print(f"3D surface area: {analysis.mesh.surface_area_um2:g} um^2")
         print(f"3D volume: {analysis.mesh.volume_um3:g} um^3")

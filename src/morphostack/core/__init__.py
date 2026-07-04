@@ -13,6 +13,7 @@ from morphostack.core.export import (
     CSV_COLUMNS,
     analysis_manifest,
     analysis_rows,
+    analysis_warnings,
     write_analysis_csv,
     write_analysis_manifest_json,
 )
@@ -52,6 +53,7 @@ __all__ = [
     "analyze_stack",
     "analysis_manifest",
     "analysis_rows",
+    "analysis_warnings",
     "contour_circularity",
     "contour_metrics",
     "contour_to_mask",

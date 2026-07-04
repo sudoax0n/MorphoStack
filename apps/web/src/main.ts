@@ -47,8 +47,15 @@ type AnalyzeResponse = {
     surface_area_um2: number;
     volume_um3: number;
   };
+  warnings: AnalysisWarning[];
   manifest: Record<string, unknown>;
   rows: AnalysisRow[];
+};
+
+type AnalysisWarning = {
+  code: string;
+  severity: string;
+  message: string;
 };
 
 type PreviewResponse = {
@@ -383,10 +390,15 @@ function renderAnalysis(payload: AnalyzeResponse): void {
   const meshText = payload.mesh
     ? `<br />3D surface: ${formatNumber(payload.mesh.surface_area_um2)} um2, volume: ${formatNumber(payload.mesh.volume_um3)} um3`
     : "";
+  const warningText =
+    payload.warnings.length > 0
+      ? `<div class="warning-list">${payload.warnings.map((warning) => `<div><strong>${escapeHtml(warning.severity)}</strong>: ${escapeHtml(warning.message)}</div>`).join("")}</div>`
+      : "";
   analysisSummary.innerHTML = `
     <strong>${escapeHtml(payload.source_path)}</strong><br />
     Profile: ${escapeHtml(payload.profile)}<br />
     Frames: ${payload.frame_count}, valid: ${payload.valid_frame_count}${meshText}
+    ${warningText}
   `;
 
   if (payload.rows.length === 0) {

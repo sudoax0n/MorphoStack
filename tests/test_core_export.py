@@ -6,7 +6,13 @@ import json
 import numpy as np
 
 from morphostack.core import VoxelSize, analyze_stack
-from morphostack.core.export import analysis_manifest, analysis_rows, write_analysis_csv, write_analysis_manifest_json
+from morphostack.core.export import (
+    analysis_manifest,
+    analysis_rows,
+    analysis_warnings,
+    write_analysis_csv,
+    write_analysis_manifest_json,
+)
 
 
 def test_analysis_rows_include_empty_and_valid_frames():
@@ -80,6 +86,37 @@ def test_analysis_manifest_records_run_settings():
     assert manifest["voxel_size"] == {"x_um": 0.5, "y_um": 0.5, "z_um": 1.0}
     assert manifest["frame_count"] == 1
     assert "created_at_utc" in manifest
+    assert manifest["warnings"] == []
+
+
+def test_analysis_warnings_report_no_valid_contours():
+    analysis = analyze_stack(
+        np.zeros((2, 8, 8), dtype=np.uint8),
+        thresholds=100,
+        voxel_size=VoxelSize(1.0, 1.0, 1.0),
+        prefer_opencv=False,
+    )
+
+    warnings = analysis_warnings(analysis)
+
+    assert warnings[0]["code"] == "no_valid_contours"
+    assert warnings[0]["severity"] == "error"
+
+
+def test_analysis_warnings_report_partial_contours():
+    stack = np.zeros((2, 8, 8), dtype=np.uint8)
+    stack[1, 2:5, 1:4] = 200
+    analysis = analyze_stack(
+        stack,
+        thresholds=100,
+        voxel_size=VoxelSize(1.0, 1.0, 1.0),
+        prefer_opencv=False,
+    )
+
+    warnings = analysis_warnings(analysis)
+
+    assert warnings[0]["code"] == "partial_contours"
+    assert warnings[0]["invalid_frame_count"] == 1
 
 
 def test_write_analysis_manifest_json_writes_pretty_json():

@@ -81,6 +81,8 @@ def test_analyze_stack_without_mesh(client, tmp_path):
     assert payload["manifest"]["profile"] == "rbc"
     assert payload["manifest"]["source_path"] == str(path)
     assert payload["manifest"]["threshold"] == 100
+    assert payload["warnings"] == []
+    assert payload["manifest"]["warnings"] == []
     assert payload["mesh"] is None
     assert payload["rows"][0]["area_um2"] == 9.0
     assert payload["rows"][0]["aspect_ratio"] == 1.0
@@ -204,6 +206,7 @@ def test_upload_analyze_stack_with_mesh(client):
     assert payload["profile"] == "rbc"
     assert payload["manifest"]["source_path"] == "stack.tif"
     assert payload["manifest"]["include_mesh"] is True
+    assert payload["warnings"] == []
     assert payload["frame_count"] == 3
     assert payload["valid_frame_count"] == 3
     assert payload["rows"][0]["area_um2"] == 9.0
@@ -258,3 +261,24 @@ def test_analyze_bad_path_returns_400(client):
     response = client.post("/analyze", json={"path": "missing.tif", "threshold": 100})
 
     assert response.status_code == 400
+
+
+def test_analyze_returns_warnings_for_no_contours(client, tmp_path):
+    tifffile = pytest.importorskip("tifffile")
+    path = tmp_path / "blank.tif"
+    tifffile.imwrite(path, np.zeros((2, 8, 8), dtype=np.uint8), photometric="minisblack")
+
+    response = client.post(
+        "/analyze",
+        json={
+            "path": str(path),
+            "threshold": 100,
+            "voxel": {"x_um": 1.0, "y_um": 1.0, "z_um": 1.0},
+            "prefer_opencv": False,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["warnings"][0]["code"] == "no_valid_contours"
+    assert payload["manifest"]["warnings"][0]["code"] == "no_valid_contours"

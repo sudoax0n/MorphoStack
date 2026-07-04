@@ -60,8 +60,8 @@ providing a clean branch point for RBC-specific metrics.
 Add `--mesh` to assemble contour masks and include marching-cubes 3D surface area and volume in the CSV.
 By default, `morphostack analyze` also writes `<metrics.csv>.manifest.json`
 with source path, version, profile, voxel size, ROI, threshold, mesh settings,
-and CSV columns. Use `--no-manifest` to skip it or `--manifest path\to\run.json`
-to choose the JSON path.
+quality warnings, and CSV columns. Use `--no-manifest` to skip it or
+`--manifest path\to\run.json` to choose the JSON path.
 
 To start the local backend for the future web UI:
 
@@ -106,6 +106,7 @@ Current 2D descriptors include area, perimeter, circularity, bounding-box size,
 aspect ratio, elongation, extent, equivalent diameter, and solidity.
 The `Suggest` threshold tool uses Otsu thresholding when available and falls
 back to a percentile-based suggestion.
+Analysis warnings are shown in the UI and included in the run manifest.
 The analysis profile selector currently supports `vesicle` and `rbc`.
 
 ## Architecture Direction

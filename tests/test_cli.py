@@ -222,3 +222,34 @@ def test_analyze_can_skip_manifest_from_synthetic_tiff(tmp_path):
     assert result == 0
     assert output_path.exists()
     assert not output_path.with_suffix(".csv.manifest.json").exists()
+
+
+def test_analyze_prints_and_records_warnings_for_blank_stack(tmp_path, capsys):
+    tifffile = pytest.importorskip("tifffile")
+    input_path = tmp_path / "blank.tif"
+    output_path = tmp_path / "metrics.csv"
+    tifffile.imwrite(input_path, np.zeros((2, 8, 8), dtype=np.uint8), photometric="minisblack")
+
+    result = main(
+        [
+            "analyze",
+            str(input_path),
+            "--threshold",
+            "100",
+            "--out",
+            str(output_path),
+            "--voxel-x",
+            "1.0",
+            "--voxel-y",
+            "1.0",
+            "--voxel-z",
+            "1.0",
+            "--fallback-contours",
+        ]
+    )
+
+    assert result == 0
+    out = capsys.readouterr().out
+    assert "Warning [no_valid_contours]" in out
+    manifest = json.loads(output_path.with_suffix(".csv.manifest.json").read_text(encoding="utf-8"))
+    assert manifest["warnings"][0]["code"] == "no_valid_contours"
