@@ -9,6 +9,7 @@ The first milestone is intentionally small: prove the project structure, command
 ```bash
 morphostack doctor
 morphostack init
+morphostack inspect path\to\stack.tif
 mst doctor
 ```
 
@@ -29,6 +30,12 @@ dependencies into the active environment:
 .\.venv\Scripts\morphostack init
 ```
 
+To inspect a stack after installing analysis dependencies:
+
+```bash
+.\.venv\Scripts\morphostack inspect path\to\stack.tif --voxel-x 0.1 --voxel-y 0.1 --voxel-z 0.5
+```
+
 ## Architecture Direction
 
 - Python core package for scientific analysis.
@@ -41,6 +48,7 @@ No GitHub remote is configured yet.
 ## Core Migration Rules
 
 - Keep GUI behavior out of `morphostack.core`.
+- Load files non-interactively; voxel sizes must come from metadata, defaults, or explicit caller overrides.
 - Store physical spacing as micrometers through `VoxelSize`.
 - Use `vx * vy` for areas and anisotropic segment lengths for perimeters.
 - Treat heavy analysis libraries such as OpenCV and scikit-image as optional until the pipeline needs them.

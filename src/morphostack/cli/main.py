@@ -10,6 +10,7 @@ from importlib import import_module
 
 from morphostack import __version__
 from morphostack.cli.system_info import collect_diagnostics, format_diagnostics
+from morphostack.core import VoxelSize, load_image_stack
 
 
 CORE_DEPENDENCIES = ("numpy", "psutil")
@@ -55,6 +56,14 @@ def build_parser() -> argparse.ArgumentParser:
         default="analysis,api",
         help="Comma-separated optional dependency groups to install. Default: analysis,api.",
     )
+    inspect = subparsers.add_parser(
+        "inspect",
+        help="Load an image stack and print basic metadata.",
+    )
+    inspect.add_argument("path", help="Path to a .tif, .tiff, or .czi file.")
+    inspect.add_argument("--voxel-x", type=float, help="Override X voxel size in micrometers.")
+    inspect.add_argument("--voxel-y", type=float, help="Override Y voxel size in micrometers.")
+    inspect.add_argument("--voxel-z", type=float, help="Override Z voxel size in micrometers.")
     return parser
 
 
@@ -67,6 +76,14 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "init":
         return run_init(yes=args.yes, extras=args.extras)
+
+    if args.command == "inspect":
+        return run_inspect(
+            path=args.path,
+            voxel_x=args.voxel_x,
+            voxel_y=args.voxel_y,
+            voxel_z=args.voxel_z,
+        )
 
     parser.print_help()
     return 0
@@ -122,6 +139,41 @@ def run_init(yes: bool = False, extras: str = "analysis,api") -> int:
         return result.returncode
 
     print("MorphoStack setup completed.")
+    return 0
+
+
+def run_inspect(
+    *,
+    path: str,
+    voxel_x: float | None = None,
+    voxel_y: float | None = None,
+    voxel_z: float | None = None,
+) -> int:
+    if any(value is not None for value in (voxel_x, voxel_y, voxel_z)):
+        if None in (voxel_x, voxel_y, voxel_z):
+            print("Voxel override requires --voxel-x, --voxel-y, and --voxel-z together.")
+            return 2
+        voxel_override = VoxelSize(voxel_x, voxel_y, voxel_z)
+    else:
+        voxel_override = None
+
+    try:
+        stack = load_image_stack(path, voxel_override=voxel_override)
+    except Exception as exc:
+        print(f"Failed to inspect image stack: {exc}")
+        return 1
+
+    print("MorphoStack Stack Inspection")
+    print("============================")
+    print(f"Source: {stack.source_path}")
+    print(f"Grayscale shape: {stack.grayscale.shape}")
+    print(f"Color shape: {stack.color.shape}")
+    print(
+        "Voxel size: "
+        f"x={stack.voxel_size.x_um:g} um, "
+        f"y={stack.voxel_size.y_um:g} um, "
+        f"z={stack.voxel_size.z_um:g} um"
+    )
     return 0
 
 
