@@ -40,6 +40,7 @@ def test_load_image_stack_uses_override_before_detected_metadata(monkeypatch):
 
     assert loaded.source_path == Path("sample.tif")
     assert loaded.voxel_size == override
+    assert loaded.voxel_source == "override"
     assert loaded.grayscale.shape == (1, 4, 4)
     assert loaded.color.shape == (1, 4, 4, 3)
 
@@ -51,6 +52,18 @@ def test_load_image_stack_uses_default_voxel_when_metadata_missing(monkeypatch):
     loaded = load_image_stack("sample.tiff")
 
     assert loaded.voxel_size == io.DEFAULT_VOXEL_SIZE
+    assert loaded.voxel_source == "default"
+
+
+def test_load_image_stack_records_metadata_voxel_source(monkeypatch):
+    raw = np.arange(16, dtype=np.uint8).reshape(1, 4, 4)
+    detected = VoxelSize(x_um=0.5, y_um=0.5, z_um=2.0)
+    monkeypatch.setattr(io, "read_tiff", lambda _: (raw, detected))
+
+    loaded = load_image_stack("sample.tif")
+
+    assert loaded.voxel_size == detected
+    assert loaded.voxel_source == "metadata"
 
 
 def test_tiff_metadata_parses_resolution_and_spacing():

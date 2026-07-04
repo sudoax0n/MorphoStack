@@ -13,6 +13,7 @@ type InspectResponse = {
   grayscale_shape: number[];
   color_shape: number[];
   voxel_size: VoxelOverride;
+  voxel_source: string;
 };
 
 type AnalysisRow = {
@@ -46,6 +47,7 @@ type AnalyzeResponse = {
   frame_count: number;
   valid_frame_count: number;
   voxel_size: VoxelOverride;
+  voxel_source: string;
   mesh: null | {
     surface_area_um2: number;
     volume_um3: number;
@@ -371,7 +373,8 @@ async function inspectStack(): Promise<void> {
       Color: ${payload.color_shape.join(" x ")}<br />
       Voxel: x=${formatNumber(payload.voxel_size.x_um)} um,
       y=${formatNumber(payload.voxel_size.y_um)} um,
-      z=${formatNumber(payload.voxel_size.z_um)} um
+      z=${formatNumber(payload.voxel_size.z_um)} um<br />
+      Voxel source: ${escapeHtml(payload.voxel_source)}
     `;
   } catch (error) {
     inspectOutput.textContent = errorMessage(error);
@@ -494,7 +497,8 @@ function renderAnalysis(payload: AnalyzeResponse): void {
   analysisSummary.innerHTML = `
     <strong>${escapeHtml(payload.source_path)}</strong><br />
     Profile: ${escapeHtml(payload.profile)}<br />
-    Frames: ${payload.frame_count}, valid: ${payload.valid_frame_count}${summaryText}${meshText}
+    Frames: ${payload.frame_count}, valid: ${payload.valid_frame_count}<br />
+    Voxel source: ${escapeHtml(payload.voxel_source)}${summaryText}${meshText}
     ${warningText}
   `;
 

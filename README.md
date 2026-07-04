@@ -61,7 +61,8 @@ providing a clean branch point for RBC-specific metrics.
 Add `--mesh` to assemble contour masks and include marching-cubes 3D surface area, volume, equivalent sphere diameter, and sphericity in the CSV.
 By default, `morphostack analyze` also writes `<metrics.csv>.manifest.json`
 with source path, version, profile, voxel size, ROI, threshold, mesh settings,
-run-level summary statistics, quality warnings, and CSV columns. Use `--no-manifest` to skip it or
+voxel source, run-level summary statistics, quality warnings, and CSV columns.
+Use `--no-manifest` to skip it or
 `--manifest path\to\run.json` to choose the JSON path.
 
 To analyze a folder of stacks and produce one summary table:
@@ -139,6 +140,7 @@ No GitHub remote is configured yet.
 - Keep GUI behavior out of `morphostack.core`.
 - Load files non-interactively; voxel sizes must come from metadata, defaults, or explicit caller overrides.
 - Store physical spacing as micrometers through `VoxelSize`.
+- Record whether voxel spacing came from metadata, a user override, or defaults.
 - Use `vx * vy` for areas and anisotropic segment lengths for perimeters.
 - Keep shape descriptors unit-consistent; solidity must compare physical area
   with physical convex-hull area.

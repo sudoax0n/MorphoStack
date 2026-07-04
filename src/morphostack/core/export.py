@@ -57,6 +57,7 @@ BATCH_SUMMARY_COLUMNS = (
     "error_message",
     "profile",
     "threshold",
+    "voxel_source",
     "frame_count",
     "valid_frame_count",
     "valid_fraction",
@@ -198,6 +199,7 @@ def analysis_manifest(
     roi: dict[str, int] | None = None,
     include_mesh: bool = False,
     prefer_opencv: bool = True,
+    voxel_source: str = "unknown",
 ) -> dict[str, object]:
     mesh = None
     if analysis.mesh:
@@ -221,6 +223,7 @@ def analysis_manifest(
             "y_um": analysis.voxel_size.y_um,
             "z_um": analysis.voxel_size.z_um,
         },
+        "voxel_source": voxel_source,
         "frame_count": len(analysis.frames),
         "valid_frame_count": len(analysis.valid_frames),
         "mesh": mesh,
@@ -235,6 +238,7 @@ def analysis_summary_row(
     *,
     source_path: str,
     threshold: float | list[float] | tuple[float, ...],
+    voxel_source: str = "unknown",
 ) -> dict[str, object]:
     summary = analysis_summary(analysis)
     metrics = summary["metrics"]
@@ -244,6 +248,7 @@ def analysis_summary_row(
         "error_message": "",
         "profile": analysis.profile,
         "threshold": threshold,
+        "voxel_source": voxel_source,
         "frame_count": summary["frame_count"],
         "valid_frame_count": summary["valid_frame_count"],
         "valid_fraction": summary["valid_fraction"],

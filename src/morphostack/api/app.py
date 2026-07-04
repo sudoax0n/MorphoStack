@@ -94,6 +94,7 @@ def create_app() -> FastAPI:
             "grayscale_shape": list(stack.grayscale.shape),
             "color_shape": list(stack.color.shape),
             "voxel_size": voxel_payload(stack.voxel_size),
+            "voxel_source": stack.voxel_source,
         }
 
     @app.post("/analyze")
@@ -126,6 +127,7 @@ def create_app() -> FastAPI:
             "frame_count": len(analysis.frames),
             "valid_frame_count": len(analysis.valid_frames),
             "voxel_size": voxel_payload(stack.voxel_size),
+            "voxel_source": stack.voxel_source,
             "mesh": mesh,
             "summary": analysis_summary(analysis),
             "warnings": analysis_warnings(analysis),
@@ -136,6 +138,7 @@ def create_app() -> FastAPI:
                 roi=roi_payload(to_rect_roi(request.roi)),
                 include_mesh=request.include_mesh,
                 prefer_opencv=request.prefer_opencv,
+                voxel_source=stack.voxel_source,
             ),
             "rows": analysis_rows(analysis),
         }
@@ -190,6 +193,7 @@ def create_app() -> FastAPI:
             "grayscale_shape": list(stack.grayscale.shape),
             "color_shape": list(stack.color.shape),
             "voxel_size": voxel_payload(stack.voxel_size),
+            "voxel_source": stack.voxel_source,
         }
 
     @app.post("/upload/analyze")
@@ -241,6 +245,7 @@ def create_app() -> FastAPI:
             "frame_count": len(analysis.frames),
             "valid_frame_count": len(analysis.valid_frames),
             "voxel_size": voxel_payload(stack.voxel_size),
+            "voxel_source": stack.voxel_source,
             "mesh": mesh,
             "summary": analysis_summary(analysis),
             "warnings": analysis_warnings(analysis),
@@ -251,6 +256,7 @@ def create_app() -> FastAPI:
                 roi=roi_payload(roi_from_optional_bounds(roi_xmin, roi_xmax, roi_ymin, roi_ymax)),
                 include_mesh=include_mesh,
                 prefer_opencv=prefer_opencv,
+                voxel_source=stack.voxel_source,
             ),
             "rows": analysis_rows(analysis),
         }
@@ -338,6 +344,7 @@ def create_app() -> FastAPI:
                         analysis,
                         source_path=source_name,
                         threshold=threshold,
+                        voxel_source=stack.voxel_source,
                     )
                 )
             except Exception as exc:

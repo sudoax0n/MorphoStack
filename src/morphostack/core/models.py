@@ -40,6 +40,7 @@ class ImageStack:
     grayscale: np.ndarray
     color: np.ndarray
     voxel_size: VoxelSize
+    voxel_source: str = "unknown"
 
     def __post_init__(self) -> None:
         if self.grayscale.ndim != 3:

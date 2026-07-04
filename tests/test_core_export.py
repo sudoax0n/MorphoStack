@@ -79,6 +79,7 @@ def test_analysis_manifest_records_run_settings():
         roi={"xmin": 1, "xmax": 4, "ymin": 2, "ymax": 6},
         include_mesh=False,
         prefer_opencv=False,
+        voxel_source="metadata",
     )
 
     assert manifest["source_path"] == "stack.tif"
@@ -86,6 +87,7 @@ def test_analysis_manifest_records_run_settings():
     assert manifest["threshold"] == 100
     assert manifest["roi"] == {"xmin": 1, "xmax": 4, "ymin": 2, "ymax": 6}
     assert manifest["voxel_size"] == {"x_um": 0.5, "y_um": 0.5, "z_um": 1.0}
+    assert manifest["voxel_source"] == "metadata"
     assert manifest["frame_count"] == 1
     assert manifest["summary"]["metrics"]["area_um2"]["mean"] == 2.25
     assert "created_at_utc" in manifest

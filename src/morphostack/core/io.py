@@ -33,12 +33,21 @@ def load_image_stack(
     else:
         raw, detected = read_czi(file_path)
 
-    voxel = voxel_override or detected or DEFAULT_VOXEL_SIZE
+    if voxel_override is not None:
+        voxel = voxel_override
+        voxel_source = "override"
+    elif detected is not None:
+        voxel = detected
+        voxel_source = "metadata"
+    else:
+        voxel = DEFAULT_VOXEL_SIZE
+        voxel_source = "default"
     return ImageStack(
         source_path=file_path,
         grayscale=as_grayscale_stack(raw),
         color=as_color_stack(raw),
         voxel_size=voxel,
+        voxel_source=voxel_source,
     )
 
 

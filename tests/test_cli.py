@@ -74,6 +74,7 @@ def test_inspect_prints_stack_metadata(monkeypatch, capsys):
         grayscale = type("Shape", (), {"shape": (3, 10, 20)})()
         color = type("Shape", (), {"shape": (3, 10, 20, 3)})()
         voxel_size = VoxelSize(0.1, 0.2, 0.3)
+        voxel_source = "metadata"
 
     monkeypatch.setattr(cli_main_module, "load_image_stack", lambda *_, **__: Stack())
     assert main(["inspect", "sample.tif"]) == 0
@@ -81,6 +82,7 @@ def test_inspect_prints_stack_metadata(monkeypatch, capsys):
     assert "MorphoStack Stack Inspection" in out
     assert "Grayscale shape: (3, 10, 20)" in out
     assert "x=0.1 um" in out
+    assert "Voxel source: metadata" in out
 
 
 def test_analyze_requires_complete_voxel_override(capsys):
@@ -142,6 +144,7 @@ def test_analyze_writes_csv_from_synthetic_tiff(tmp_path, capsys):
     assert "MorphoStack Analysis Complete" in out
     assert "Mean area: 9 um^2" in out
     assert "Mean circularity:" in out
+    assert "Voxel source: override" in out
     assert "Manifest:" in out
     assert output_path.exists()
     manifest_path = output_path.with_suffix(".csv.manifest.json")
@@ -149,6 +152,7 @@ def test_analyze_writes_csv_from_synthetic_tiff(tmp_path, capsys):
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["source_path"] == str(input_path)
     assert manifest["profile"] == "vesicle"
+    assert manifest["voxel_source"] == "override"
     assert manifest["summary"]["metrics"]["area_um2"]["mean"] == 9.0
     csv_text = output_path.read_text(encoding="utf-8")
     assert "frame_index,threshold,profile,method,has_contour" in csv_text
@@ -298,7 +302,8 @@ def test_batch_writes_summary_csv_from_directory(tmp_path, capsys):
     summary_csv = output_path.read_text(encoding="utf-8")
     assert "source_path,status,error_message,profile,threshold" in summary_csv
     assert "area_um2_mean" in summary_csv
-    assert summary_csv.count(",ok,,vesicle,100.0,2,2,1.0") == 2
+    assert "voxel_source" in summary_csv
+    assert summary_csv.count(",ok,,vesicle,100.0,override,2,2,1.0") == 2
     assert len(list(metrics_dir.glob("*_metrics.csv"))) == 2
 
 

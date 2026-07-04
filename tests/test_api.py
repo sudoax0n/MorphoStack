@@ -56,6 +56,7 @@ def test_inspect_stack(client, tmp_path):
     payload = response.json()
     assert payload["grayscale_shape"] == [3, 8, 8]
     assert payload["voxel_size"] == {"x_um": 0.1, "y_um": 0.2, "z_um": 0.3}
+    assert payload["voxel_source"] == "override"
 
 
 def test_analyze_stack_without_mesh(client, tmp_path):
@@ -81,6 +82,8 @@ def test_analyze_stack_without_mesh(client, tmp_path):
     assert payload["manifest"]["profile"] == "rbc"
     assert payload["manifest"]["source_path"] == str(path)
     assert payload["manifest"]["threshold"] == 100
+    assert payload["voxel_source"] == "override"
+    assert payload["manifest"]["voxel_source"] == "override"
     assert payload["warnings"] == []
     assert payload["manifest"]["warnings"] == []
     assert payload["summary"]["metrics"]["area_um2"]["mean"] == 9.0
@@ -185,6 +188,7 @@ def test_upload_inspect_stack(client):
     assert payload["source_path"] == "stack.tif"
     assert payload["grayscale_shape"] == [3, 8, 8]
     assert payload["voxel_size"] == {"x_um": 0.1, "y_um": 0.2, "z_um": 0.3}
+    assert payload["voxel_source"] == "override"
 
 
 def test_upload_analyze_stack_with_mesh(client):
@@ -211,6 +215,7 @@ def test_upload_analyze_stack_with_mesh(client):
     assert payload["profile"] == "rbc"
     assert payload["manifest"]["source_path"] == "stack.tif"
     assert payload["manifest"]["include_mesh"] is True
+    assert payload["manifest"]["voxel_source"] == "override"
     assert payload["warnings"] == []
     assert payload["summary"]["metrics"]["area_um2"]["mean"] == 9.0
     assert payload["frame_count"] == 3
@@ -248,6 +253,7 @@ def test_upload_batch_analyze_returns_summary_rows(client):
     assert payload["failed_count"] == 0
     assert payload["columns"][0] == "source_path"
     assert payload["rows"][0]["profile"] == "rbc"
+    assert payload["rows"][0]["voxel_source"] == "override"
     assert payload["rows"][0]["area_um2_mean"] == 9.0
     assert payload["rows"][0]["deformation_index_mean"] == 0.0
 

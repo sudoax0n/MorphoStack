@@ -332,6 +332,7 @@ def run_inspect(
         f"y={stack.voxel_size.y_um:g} um, "
         f"z={stack.voxel_size.z_um:g} um"
     )
+    print(f"Voxel source: {stack.voxel_source}")
     return 0
 
 
@@ -386,6 +387,7 @@ def run_analyze(
                     roi=roi_to_payload(rect_roi),
                     include_mesh=include_mesh,
                     prefer_opencv=prefer_opencv,
+                    voxel_source=stack.voxel_source,
                 ),
                 manifest_path,
             )
@@ -399,6 +401,7 @@ def run_analyze(
     print(f"Profile: {analysis.profile}")
     print(f"Frames: {len(analysis.frames)}")
     print(f"Valid frames: {len(analysis.valid_frames)}")
+    print(f"Voxel source: {stack.voxel_source}")
     metric_summary = summary["metrics"]
     if isinstance(metric_summary, dict) and metric_summary:
         area_summary = metric_summary.get("area_um2")
@@ -516,6 +519,7 @@ def run_batch(
                     analysis,
                     source_path=str(stack.source_path),
                     threshold=threshold,
+                    voxel_source=stack.voxel_source,
                 )
             )
             if frame_metrics_dir:
