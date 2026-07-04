@@ -14,17 +14,29 @@ from morphostack.core.io import load_image_stack
 from morphostack.core.mesh import MeshMeasurement, surface_area_volume
 from morphostack.core.metrics import ContourMetrics, contour_metrics
 from morphostack.core.models import ImageStack, VoxelSize
+from morphostack.core.pipeline import (
+    FrameAnalysis,
+    RectROI,
+    StackAnalysis,
+    analyze_frame,
+    analyze_stack,
+)
 from morphostack.core.segmentation import apply_rect_roi, threshold_mask
 
 __all__ = [
     "ContourMetrics",
+    "FrameAnalysis",
     "ImageStack",
     "MeshMeasurement",
+    "RectROI",
     "SegmentationPreview",
+    "StackAnalysis",
     "VoxelSize",
     "apply_rect_roi",
     "as_color_stack",
     "as_grayscale_stack",
+    "analyze_frame",
+    "analyze_stack",
     "contour_circularity",
     "contour_metrics",
     "largest_component_boundary",
