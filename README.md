@@ -37,3 +37,11 @@ dependencies into the active environment:
 - Later packaging through `pipx`, GitHub Releases, and a Windows installer.
 
 No GitHub remote is configured yet.
+
+## Core Migration Rules
+
+- Keep GUI behavior out of `morphostack.core`.
+- Store physical spacing as micrometers through `VoxelSize`.
+- Use `vx * vy` for areas and anisotropic segment lengths for perimeters.
+- Treat heavy analysis libraries such as OpenCV and scikit-image as optional until the pipeline needs them.
+- Ambiguous 3D arrays with final channel size 3 or 4 are treated as single color images; grayscale stacks should be shaped `(z, y, x)` without an RGB-like final channel.

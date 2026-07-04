@@ -1,0 +1,54 @@
+"""3D mesh measurement utilities."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import numpy as np
+
+from morphostack.core.models import VoxelSize
+
+
+@dataclass(frozen=True)
+class MeshMeasurement:
+    surface_area_um2: float
+    volume_um3: float
+
+
+def surface_area_volume(vertices: np.ndarray, faces: np.ndarray) -> MeshMeasurement:
+    """Calculate surface area and enclosed signed-volume magnitude from triangles."""
+
+    verts = np.asarray(vertices, dtype=np.float64)
+    face_idx = np.asarray(faces, dtype=np.int64)
+    if verts.ndim != 2 or verts.shape[1] != 3:
+        raise ValueError("vertices must have shape (n, 3)")
+    if face_idx.ndim != 2 or face_idx.shape[1] != 3:
+        raise ValueError("faces must have shape (n, 3)")
+
+    triangles = verts[face_idx]
+    vec1 = triangles[:, 1] - triangles[:, 0]
+    vec2 = triangles[:, 2] - triangles[:, 0]
+    cross = np.cross(vec1, vec2)
+    surface_area = float(np.sum(np.linalg.norm(cross, axis=1)) / 2.0)
+    volume = float(abs(np.sum(np.einsum("ij,ij->i", triangles[:, 0], cross)) / 6.0))
+    return MeshMeasurement(surface_area_um2=surface_area, volume_um3=volume)
+
+
+def marching_cubes_measurement(mask_stack: np.ndarray, voxel: VoxelSize) -> MeshMeasurement:
+    """Run marching cubes on a (z, y, x) binary stack and measure the mesh."""
+
+    try:
+        from skimage import measure
+    except Exception as exc:  # pragma: no cover - dependency-specific branch
+        raise RuntimeError("scikit-image is required for marching cubes") from exc
+
+    mask = np.asarray(mask_stack)
+    if mask.ndim != 3:
+        raise ValueError("marching cubes expects a 3D stack shaped as (z, y, x)")
+    verts, faces, _, _ = measure.marching_cubes(
+        mask.astype(np.uint8),
+        level=0.5,
+        spacing=voxel.marching_cubes_spacing,
+    )
+    return surface_area_volume(verts, faces)
+
