@@ -126,6 +126,24 @@ button:hover {
   background: #095cc7;
 }
 
+button.secondary {
+  color: #172033;
+  border-color: #cbd5e1;
+  background: #ffffff;
+}
+
+button.secondary:hover {
+  background: #f8fafc;
+}
+
+button:disabled,
+button:disabled:hover {
+  color: #8b95a7;
+  border-color: #d8e0ec;
+  background: #eef2f7;
+  cursor: not-allowed;
+}
+
 .grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -177,6 +195,13 @@ legend {
 .results {
   margin: 0 18px 18px;
   padding: 18px;
+}
+
+.results-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .table-wrap {
