@@ -20,9 +20,9 @@ from morphostack.core import (
     VoxelSize,
     analyze_stack,
     analysis_manifest,
+    analysis_run_warnings,
     analysis_summary,
     analysis_summary_row,
-    analysis_warnings,
     apply_rect_roi,
     failed_analysis_summary_row,
     load_image_stack,
@@ -370,7 +370,7 @@ def run_analyze(
             prefer_opencv=prefer_opencv,
             include_mesh=include_mesh,
         )
-        warnings = analysis_warnings(analysis)
+        warnings = analysis_run_warnings(analysis, voxel_source=stack.voxel_source)
         summary = analysis_summary(analysis)
         output_path = Path(out)
         output_path.parent.mkdir(parents=True, exist_ok=True)

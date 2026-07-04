@@ -124,6 +124,8 @@ solidity.
 The `Suggest` threshold tool uses Otsu thresholding when available and falls
 back to a percentile-based suggestion.
 Analysis warnings are shown in the UI and included in the run manifest.
+If voxel spacing falls back to MorphoStack defaults, analysis outputs include a
+`default_voxel_size` warning because physical units are uncalibrated.
 The analysis profile selector currently supports `vesicle` and `rbc`.
 
 ## Architecture Direction

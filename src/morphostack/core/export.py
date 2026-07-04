@@ -148,6 +148,19 @@ def analysis_warnings(analysis: StackAnalysis) -> list[dict[str, object]]:
     return warnings
 
 
+def analysis_run_warnings(analysis: StackAnalysis, *, voxel_source: str = "unknown") -> list[dict[str, object]]:
+    warnings = analysis_warnings(analysis)
+    if voxel_source == "default":
+        warnings.append(
+            {
+                "code": "default_voxel_size",
+                "severity": "warning",
+                "message": "Voxel spacing came from MorphoStack defaults. Physical units should be treated as uncalibrated.",
+            }
+        )
+    return warnings
+
+
 def analysis_summary(analysis: StackAnalysis) -> dict[str, object]:
     metric_values: dict[str, list[float]] = {name: [] for name in SUMMARY_METRICS}
     for frame in analysis.valid_frames:
@@ -228,7 +241,7 @@ def analysis_manifest(
         "valid_frame_count": len(analysis.valid_frames),
         "mesh": mesh,
         "summary": analysis_summary(analysis),
-        "warnings": analysis_warnings(analysis),
+        "warnings": analysis_run_warnings(analysis, voxel_source=voxel_source),
         "columns": list(CSV_COLUMNS),
     }
 
@@ -256,7 +269,7 @@ def analysis_summary_row(
         "mesh_volume_um3": analysis.mesh.volume_um3 if analysis.mesh else 0.0,
         "mesh_equivalent_sphere_diameter_um": analysis.mesh.equivalent_sphere_diameter_um if analysis.mesh else 0.0,
         "mesh_sphericity": analysis.mesh.sphericity if analysis.mesh else 0.0,
-        "warning_codes": ";".join(str(warning["code"]) for warning in analysis_warnings(analysis)),
+        "warning_codes": ";".join(str(warning["code"]) for warning in analysis_run_warnings(analysis, voxel_source=voxel_source)),
     }
     if isinstance(metrics, dict):
         for metric in SUMMARY_METRICS:

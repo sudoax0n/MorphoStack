@@ -9,6 +9,7 @@ from morphostack.core import VoxelSize, analyze_stack
 from morphostack.core.export import (
     analysis_manifest,
     analysis_rows,
+    analysis_run_warnings,
     analysis_summary,
     analysis_warnings,
     write_analysis_csv,
@@ -141,6 +142,30 @@ def test_analysis_warnings_report_no_valid_contours():
 
     assert warnings[0]["code"] == "no_valid_contours"
     assert warnings[0]["severity"] == "error"
+
+
+def test_analysis_run_warnings_report_default_voxel_source():
+    stack = np.zeros((1, 8, 8), dtype=np.uint8)
+    stack[0, 2:5, 1:4] = 200
+    analysis = analyze_stack(
+        stack,
+        thresholds=100,
+        voxel_size=VoxelSize(1.0, 1.0, 1.0),
+        prefer_opencv=False,
+    )
+
+    warnings = analysis_run_warnings(analysis, voxel_source="default")
+
+    assert warnings[0]["code"] == "default_voxel_size"
+    assert warnings[0]["severity"] == "warning"
+
+    manifest = analysis_manifest(
+        analysis,
+        source_path="uncalibrated.tif",
+        threshold=100,
+        voxel_source="default",
+    )
+    assert manifest["warnings"][0]["code"] == "default_voxel_size"
 
 
 def test_analysis_warnings_report_partial_contours():
