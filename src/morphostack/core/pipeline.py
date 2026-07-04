@@ -8,6 +8,7 @@ from typing import Sequence
 import numpy as np
 
 from morphostack.core.contours import SegmentationPreview, segmentation_preview
+from morphostack.core.mesh import MeshMeasurement, measure_contour_stack
 from morphostack.core.metrics import ContourMetrics, contour_metrics
 from morphostack.core.models import VoxelSize
 from morphostack.core.segmentation import apply_rect_roi
@@ -34,6 +35,7 @@ class FrameAnalysis:
 class StackAnalysis:
     voxel_size: VoxelSize
     frames: tuple[FrameAnalysis, ...]
+    mesh: MeshMeasurement | None = None
 
     @property
     def valid_frames(self) -> tuple[FrameAnalysis, ...]:
@@ -68,6 +70,7 @@ def analyze_stack(
     voxel_size: VoxelSize,
     roi: RectROI | None = None,
     prefer_opencv: bool = True,
+    include_mesh: bool = False,
 ) -> StackAnalysis:
     arr = np.asarray(stack)
     if arr.ndim != 3:
@@ -93,7 +96,14 @@ def analyze_stack(
         )
         for idx, frame in enumerate(arr)
     )
-    return StackAnalysis(voxel_size=voxel_size, frames=frames)
+    mesh = None
+    if include_mesh:
+        mesh = measure_contour_stack(
+            tuple(frame.contour for frame in frames),
+            shape=arr.shape,
+            voxel=voxel_size,
+        )
+    return StackAnalysis(voxel_size=voxel_size, frames=frames, mesh=mesh)
 
 
 def normalize_thresholds(thresholds: float | Sequence[float], *, frame_count: int) -> tuple[float, ...]:

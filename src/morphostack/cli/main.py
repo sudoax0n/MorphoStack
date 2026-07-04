@@ -77,6 +77,11 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.add_argument("--voxel-z", type=float, help="Override Z voxel size in micrometers.")
     analyze.add_argument("--roi", nargs=4, type=int, metavar=("XMIN", "XMAX", "YMIN", "YMAX"))
     analyze.add_argument(
+        "--mesh",
+        action="store_true",
+        help="Assemble contour masks and compute 3D surface area/volume.",
+    )
+    analyze.add_argument(
         "--fallback-contours",
         action="store_true",
         help="Use dependency-light rectangular fallback contours instead of OpenCV contours.",
@@ -112,6 +117,7 @@ def main(argv: list[str] | None = None) -> int:
             voxel_z=args.voxel_z,
             roi=args.roi,
             prefer_opencv=not args.fallback_contours,
+            include_mesh=args.mesh,
         )
 
     parser.print_help()
@@ -216,6 +222,7 @@ def run_analyze(
     voxel_z: float | None = None,
     roi: list[int] | None = None,
     prefer_opencv: bool = True,
+    include_mesh: bool = False,
 ) -> int:
     voxel_override_result = build_voxel_override(voxel_x, voxel_y, voxel_z)
     if voxel_override_result == "partial":
@@ -233,6 +240,7 @@ def run_analyze(
             voxel_size=stack.voxel_size,
             roi=rect_roi,
             prefer_opencv=prefer_opencv,
+            include_mesh=include_mesh,
         )
         output_path = Path(out)
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -246,6 +254,9 @@ def run_analyze(
     print(f"Source: {stack.source_path}")
     print(f"Frames: {len(analysis.frames)}")
     print(f"Valid frames: {len(analysis.valid_frames)}")
+    if analysis.mesh:
+        print(f"3D surface area: {analysis.mesh.surface_area_um2:g} um^2")
+        print(f"3D volume: {analysis.mesh.volume_um3:g} um^3")
     print(f"CSV: {output_path}")
     return 0
 

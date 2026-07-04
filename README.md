@@ -43,6 +43,8 @@ To run the current headless analysis pipeline and export per-frame metrics:
 .\.venv\Scripts\morphostack analyze path\to\stack.tif --threshold 100 --out metrics.csv --voxel-x 0.1 --voxel-y 0.1 --voxel-z 0.5
 ```
 
+Add `--mesh` to assemble contour masks and include marching-cubes 3D surface area and volume in the CSV.
+
 ## Architecture Direction
 
 - Python core package for scientific analysis.

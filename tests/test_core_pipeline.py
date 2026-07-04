@@ -54,6 +54,25 @@ def test_analyze_stack_uses_scalar_threshold_for_all_frames():
     assert [frame.threshold for frame in result.frames] == [100.0, 100.0]
 
 
+def test_analyze_stack_can_include_mesh_measurement():
+    pytest.importorskip("cv2")
+    pytest.importorskip("skimage")
+    stack = np.zeros((3, 8, 8), dtype=np.uint8)
+    stack[:, 2:5, 1:4] = 200
+
+    result = analyze_stack(
+        stack,
+        thresholds=100,
+        voxel_size=VoxelSize(1.0, 1.0, 1.0),
+        prefer_opencv=False,
+        include_mesh=True,
+    )
+
+    assert result.mesh is not None
+    assert result.mesh.surface_area_um2 > 0
+    assert result.mesh.volume_um3 > 0
+
+
 def test_analyze_stack_accepts_per_frame_thresholds():
     stack = np.zeros((2, 8, 8), dtype=np.uint8)
     stack[0, 2:5, 1:4] = 50

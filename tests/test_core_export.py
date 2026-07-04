@@ -41,4 +41,5 @@ def test_write_analysis_csv_writes_header_and_rows():
 
     csv_text = buffer.getvalue()
     assert "frame_index,threshold,method,has_contour" in csv_text
+    assert "mesh_surface_area_um2,mesh_volume_um3" in csv_text
     assert "0,100.0,fallback,True" in csv_text

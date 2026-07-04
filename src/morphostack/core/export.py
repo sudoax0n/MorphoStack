@@ -18,6 +18,8 @@ CSV_COLUMNS = (
     "area_um2",
     "perimeter_um",
     "circularity",
+    "mesh_surface_area_um2",
+    "mesh_volume_um3",
 )
 
 
@@ -25,6 +27,7 @@ def analysis_rows(analysis: StackAnalysis) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for frame in analysis.frames:
         metrics = frame.metrics
+        mesh = analysis.mesh
         rows.append(
             {
                 "frame_index": frame.frame_index,
@@ -36,6 +39,8 @@ def analysis_rows(analysis: StackAnalysis) -> list[dict[str, object]]:
                 "area_um2": metrics.area_um2 if metrics else 0.0,
                 "perimeter_um": metrics.perimeter_um if metrics else 0.0,
                 "circularity": metrics.circularity if metrics else 0.0,
+                "mesh_surface_area_um2": mesh.surface_area_um2 if mesh else 0.0,
+                "mesh_volume_um3": mesh.volume_um3 if mesh else 0.0,
             }
         )
     return rows

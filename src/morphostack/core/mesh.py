@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from morphostack.core.models import VoxelSize
+from morphostack.core.metrics import normalize_points
 
 
 @dataclass(frozen=True)
@@ -52,3 +53,52 @@ def marching_cubes_measurement(mask_stack: np.ndarray, voxel: VoxelSize) -> Mesh
     )
     return surface_area_volume(verts, faces)
 
+
+def contours_to_mask_stack(
+    contours: list[np.ndarray | None] | tuple[np.ndarray | None, ...],
+    *,
+    shape: tuple[int, int, int],
+) -> np.ndarray:
+    """Rasterize per-frame contours into a binary stack shaped as (z, y, x)."""
+
+    if len(shape) != 3:
+        raise ValueError("shape must be (z, y, x)")
+    if len(contours) != shape[0]:
+        raise ValueError("number of contours must match z dimension")
+
+    mask_stack = np.zeros(shape, dtype=np.uint8)
+    for idx, contour in enumerate(contours):
+        if contour is None:
+            continue
+        mask_stack[idx] = contour_to_mask(contour, shape=shape[1:])
+    return mask_stack
+
+
+def contour_to_mask(contour: np.ndarray, *, shape: tuple[int, int]) -> np.ndarray:
+    """Rasterize one contour into a 2D uint8 mask."""
+
+    try:
+        import cv2
+    except Exception as exc:  # pragma: no cover - dependency-specific branch
+        raise RuntimeError("opencv-python is required to rasterize contours") from exc
+
+    height, width = shape
+    mask = np.zeros((height, width), dtype=np.uint8)
+    pts = np.rint(normalize_points(contour)).astype(np.int32).reshape((-1, 1, 2))
+    if len(pts) >= 3:
+        cv2.drawContours(mask, [pts], contourIdx=-1, color=1, thickness=-1)
+    return mask
+
+
+def measure_contour_stack(
+    contours: list[np.ndarray | None] | tuple[np.ndarray | None, ...],
+    *,
+    shape: tuple[int, int, int],
+    voxel: VoxelSize,
+) -> MeshMeasurement | None:
+    """Rasterize contours and measure their 3D marching-cubes mesh."""
+
+    mask_stack = contours_to_mask_stack(contours, shape=shape)
+    if np.count_nonzero(mask_stack) == 0:
+        return None
+    return marching_cubes_measurement(mask_stack, voxel)
