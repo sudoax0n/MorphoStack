@@ -151,6 +151,7 @@ def contour_stack_mesh_geometry(
     if np.count_nonzero(mask_stack) == 0:
         return None
 
+    mask_stack = align_mask_stack(mask_stack)
     factor = max(1, int(downsample))
     display_mask = mask_stack
     display_voxel = voxel
@@ -163,3 +164,45 @@ def contour_stack_mesh_geometry(
         )
 
     return marching_cubes_geometry(display_mask, display_voxel, max_faces=max_faces)
+
+
+def align_mask_stack(mask_stack: np.ndarray) -> np.ndarray:
+    """Align binary mask slices by centroid, matching the old 3D HTML workflow."""
+
+    try:
+        import cv2
+    except Exception:
+        return mask_stack
+
+    arr = np.asarray(mask_stack, dtype=np.uint8)
+    reference = next((frame for frame in arr if np.count_nonzero(frame) > 0), None)
+    if reference is None:
+        return arr
+    reference_center = mask_centroid(reference)
+    aligned: list[np.ndarray] = []
+    for frame in arr:
+        if np.count_nonzero(frame) == 0:
+            aligned.append(frame)
+            continue
+        center = mask_centroid(frame)
+        dx = reference_center[0] - center[0]
+        dy = reference_center[1] - center[1]
+        translation = np.float32([[1, 0, dx], [0, 1, dy]])
+        rows, cols = frame.shape
+        aligned.append(cv2.warpAffine(frame, translation, (cols, rows)))
+    return np.stack(aligned, axis=0).astype(np.uint8)
+
+
+def mask_centroid(mask: np.ndarray) -> tuple[float, float]:
+    try:
+        import cv2
+    except Exception:
+        ys, xs = np.nonzero(mask)
+        if len(xs) == 0:
+            return (0.0, 0.0)
+        return (float(xs.mean()), float(ys.mean()))
+
+    moments = cv2.moments(mask.astype(np.uint8))
+    if moments["m00"] == 0:
+        return (0.0, 0.0)
+    return (float(moments["m10"] / moments["m00"]), float(moments["m01"] / moments["m00"]))

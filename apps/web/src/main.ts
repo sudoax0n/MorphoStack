@@ -548,6 +548,7 @@ let latestAnalysis: AnalyzeResponse | null = null;
 let latestBatch: BatchAnalyzeResponse | null = null;
 let latestSweep: SweepResponse | null = null;
 let inspectedFrameCount: number | null = null;
+let previewDebounce: number | null = null;
 
 mustElement<HTMLButtonElement>("inspect-btn").addEventListener("click", () => {
   void inspectStack();
@@ -579,10 +580,12 @@ mustElement<HTMLButtonElement>("use-full-range-btn").addEventListener("click", (
 
 frameSlider.addEventListener("input", () => {
   frameInput.value = frameSlider.value;
+  schedulePreview();
 });
 
 frameInput.addEventListener("input", () => {
   syncFrameSliderToInput();
+  schedulePreview();
 });
 
 zStartSlider.addEventListener("input", () => {
@@ -752,6 +755,23 @@ async function previewStack(): Promise<void> {
   } catch (error) {
     previewOutput.textContent = errorMessage(error);
   }
+}
+
+function schedulePreview(): void {
+  if (!hasStackInput()) {
+    return;
+  }
+  if (previewDebounce !== null) {
+    window.clearTimeout(previewDebounce);
+  }
+  previewDebounce = window.setTimeout(() => {
+    previewDebounce = null;
+    void previewStack();
+  }, 220);
+}
+
+function hasStackInput(): boolean {
+  return selectedFile() !== null || mustElement<HTMLInputElement>("path-input").value.trim() !== "";
 }
 
 async function previewMesh(): Promise<void> {
@@ -1136,7 +1156,7 @@ function renderMeshPreview(payload: MeshPreviewResponse): void {
     <div>
       <strong>${escapeHtml(payload.source_path)}</strong><br />
       Display mesh: ${payload.vertex_count} vertices, ${payload.face_count} faces, downsample x${payload.downsample}<br />
-      View: centered on mesh bounding box<br />
+      View: old-style Plotly scaling, aligned contour stack<br />
       Surface ${formatNumber(payload.surface_area_um2)} um2,
       volume ${formatNumber(payload.volume_um3)} um3,
       sphericity ${formatNumber(payload.sphericity)}
@@ -1159,7 +1179,7 @@ function meshPreviewHtml(payload: MeshPreviewResponse): string {
 <head>
   <meta charset="utf-8" />
   <style>
-    html, body, #plot { width: 100%; height: 100%; margin: 0; background: #0f172a; }
+    html, body, #plot { width: 100%; height: 100%; margin: 0; background: white; }
   </style>
   <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 </head>
@@ -1174,18 +1194,18 @@ function meshPreviewHtml(payload: MeshPreviewResponse): string {
       i: ${JSON.stringify(i)},
       j: ${JSON.stringify(j)},
       k: ${JSON.stringify(k)},
-      color: "#38bdf8",
-      opacity: 0.86,
+      color: "red",
+      opacity: 1,
       flatshading: true
     };
     const layout = {
       margin: { l: 0, r: 0, t: 0, b: 0 },
-      paper_bgcolor: "#0f172a",
+      paper_bgcolor: "white",
+      plot_bgcolor: "white",
       scene: {
-        aspectmode: "data",
-        xaxis: { title: "X (um)", color: "#e5e7eb", gridcolor: "rgba(255,255,255,0.18)", backgroundcolor: "#111827" },
-        yaxis: { title: "Y (um)", color: "#e5e7eb", gridcolor: "rgba(255,255,255,0.18)", backgroundcolor: "#111827" },
-        zaxis: { title: "Z (um)", color: "#e5e7eb", gridcolor: "rgba(255,255,255,0.18)", backgroundcolor: "#111827" }
+        xaxis: { title: "X (microns)", nticks: 4 },
+        yaxis: { title: "Y (microns)", nticks: 4 },
+        zaxis: { title: "Z (microns)", nticks: 4 }
       }
     };
     Plotly.newPlot("plot", [trace], layout, { responsive: true, displaylogo: false });
