@@ -9,7 +9,8 @@ build/
 *.egg-info/
 node_modules/
 apps/web/dist/
+.morphostack-dev.err.log
+.morphostack-dev.out.log
 .env
 .env.*
 !.env.example
-
