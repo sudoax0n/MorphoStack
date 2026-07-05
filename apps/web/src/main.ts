@@ -121,6 +121,26 @@ type SweepResponse = {
   rows: SweepSummaryRow[];
 };
 
+type ProjectSettings = {
+  version: 1;
+  profile?: AnalysisProfile;
+  threshold?: number;
+  voxel_size?: VoxelOverride;
+  roi?: {
+    xmin: number;
+    xmax: number;
+    ymin: number;
+    ymax: number;
+  };
+  include_mesh?: boolean;
+  prefer_opencv?: boolean;
+  sweep?: {
+    start?: number;
+    stop?: number;
+    step?: number;
+  };
+};
+
 type ValidationDifference = {
   row_id: string;
   column: string;
@@ -179,6 +199,18 @@ app.innerHTML = `
     </div>
     <div class="status" id="api-status">Checking API...</div>
   </header>
+
+  <section class="project-strip">
+    <label>
+      Project
+      <input id="project-file-input" type="file" accept=".json,application/json" />
+    </label>
+    <div class="button-row">
+      <button id="load-project-btn" class="secondary" type="button">Load Project</button>
+      <button id="download-project-btn" class="secondary" type="button">Download Project</button>
+    </div>
+    <div id="project-status" class="status">No project loaded</div>
+  </section>
 
   <main class="layout">
     <section class="panel">
@@ -419,6 +451,7 @@ app.innerHTML = `
 `;
 
 const apiStatus = mustElement<HTMLDivElement>("api-status");
+const projectStatus = mustElement<HTMLDivElement>("project-status");
 const inspectOutput = mustElement<HTMLDivElement>("inspect-output");
 const previewOutput = mustElement<HTMLDivElement>("preview-output");
 const analysisSummary = mustElement<HTMLDivElement>("analysis-summary");
@@ -457,6 +490,14 @@ mustElement<HTMLButtonElement>("batch-analyze-btn").addEventListener("click", ()
   void analyzeBatch();
 });
 
+mustElement<HTMLButtonElement>("load-project-btn").addEventListener("click", () => {
+  void loadProjectFromFile();
+});
+
+mustElement<HTMLButtonElement>("download-project-btn").addEventListener("click", () => {
+  downloadCurrentProject();
+});
+
 mustElement<HTMLButtonElement>("sweep-btn").addEventListener("click", () => {
   void runSweep();
 });
@@ -491,6 +532,41 @@ async function refreshHealth(): Promise<void> {
   } catch {
     apiStatus.textContent = "API offline";
     apiStatus.className = "status warn";
+  }
+}
+
+async function loadProjectFromFile(): Promise<void> {
+  try {
+    const file = selectedRequiredFile("project-file-input", "Project JSON");
+    const payload = JSON.parse(await file.text()) as unknown;
+    const settings = validateProjectSettings(payload);
+    applyProjectSettings(settings);
+    projectStatus.textContent = file.name;
+    projectStatus.className = "status ok";
+  } catch (error) {
+    projectStatus.textContent = errorMessage(error);
+    projectStatus.className = "status warn";
+  }
+}
+
+function downloadCurrentProject(): void {
+  try {
+    const project = currentProjectSettings();
+    const json = `${JSON.stringify(project, null, 2)}\n`;
+    const blob = new Blob([json], { type: "application/json;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "morphostack.project.json";
+    document.body.append(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+    projectStatus.textContent = "Project downloaded";
+    projectStatus.className = "status ok";
+  } catch (error) {
+    projectStatus.textContent = errorMessage(error);
+    projectStatus.className = "status warn";
   }
 }
 
@@ -886,6 +962,124 @@ function downloadLatestManifest(): void {
   URL.revokeObjectURL(url);
 }
 
+function currentProjectSettings(): ProjectSettings {
+  const roi = readRoi();
+  return {
+    version: 1,
+    profile: readProfile(),
+    threshold: readNumber("threshold-input"),
+    voxel_size: readVoxel(),
+    roi: roi ?? undefined,
+    include_mesh: mustElement<HTMLInputElement>("mesh-input").checked,
+    prefer_opencv: !mustElement<HTMLInputElement>("fallback-input").checked,
+    sweep: {
+      start: readNumber("sweep-start"),
+      stop: readNumber("sweep-stop"),
+      step: readNumber("sweep-step")
+    }
+  };
+}
+
+function validateProjectSettings(payload: unknown): ProjectSettings {
+  if (!isRecord(payload)) {
+    throw new Error("Project settings must be a JSON object.");
+  }
+  if (payload.version !== 1) {
+    throw new Error("Project settings version must be 1.");
+  }
+
+  const settings: ProjectSettings = { version: 1 };
+  if (payload.profile !== undefined) {
+    if (payload.profile !== "vesicle" && payload.profile !== "rbc") {
+      throw new Error("Project profile must be vesicle or rbc.");
+    }
+    settings.profile = payload.profile;
+  }
+  if (payload.threshold !== undefined) {
+    settings.threshold = finiteNumber(payload.threshold, "threshold");
+  }
+  if (payload.voxel_size !== undefined) {
+    if (!isRecord(payload.voxel_size)) {
+      throw new Error("Project voxel_size must be an object.");
+    }
+    settings.voxel_size = {
+      x_um: positiveNumber(payload.voxel_size.x_um, "voxel_size.x_um"),
+      y_um: positiveNumber(payload.voxel_size.y_um, "voxel_size.y_um"),
+      z_um: positiveNumber(payload.voxel_size.z_um, "voxel_size.z_um")
+    };
+  }
+  if (payload.roi !== undefined) {
+    if (!isRecord(payload.roi)) {
+      throw new Error("Project roi must be an object.");
+    }
+    settings.roi = {
+      xmin: finiteNumber(payload.roi.xmin, "roi.xmin"),
+      xmax: finiteNumber(payload.roi.xmax, "roi.xmax"),
+      ymin: finiteNumber(payload.roi.ymin, "roi.ymin"),
+      ymax: finiteNumber(payload.roi.ymax, "roi.ymax")
+    };
+  }
+  if (payload.include_mesh !== undefined) {
+    settings.include_mesh = booleanValue(payload.include_mesh, "include_mesh");
+  }
+  if (payload.prefer_opencv !== undefined) {
+    settings.prefer_opencv = booleanValue(payload.prefer_opencv, "prefer_opencv");
+  }
+  if (payload.sweep !== undefined) {
+    if (!isRecord(payload.sweep)) {
+      throw new Error("Project sweep must be an object.");
+    }
+    settings.sweep = {};
+    if (payload.sweep.start !== undefined) {
+      settings.sweep.start = finiteNumber(payload.sweep.start, "sweep.start");
+    }
+    if (payload.sweep.stop !== undefined) {
+      settings.sweep.stop = finiteNumber(payload.sweep.stop, "sweep.stop");
+    }
+    if (payload.sweep.step !== undefined) {
+      settings.sweep.step = positiveNumber(payload.sweep.step, "sweep.step");
+    }
+  }
+  return settings;
+}
+
+function applyProjectSettings(settings: ProjectSettings): void {
+  if (settings.profile !== undefined) {
+    mustElement<HTMLSelectElement>("profile-input").value = settings.profile;
+  }
+  if (settings.threshold !== undefined) {
+    mustElement<HTMLInputElement>("threshold-input").value = formatInputNumber(settings.threshold);
+  }
+  if (settings.voxel_size !== undefined) {
+    mustElement<HTMLInputElement>("voxel-x").value = formatInputNumber(settings.voxel_size.x_um);
+    mustElement<HTMLInputElement>("voxel-y").value = formatInputNumber(settings.voxel_size.y_um);
+    mustElement<HTMLInputElement>("voxel-z").value = formatInputNumber(settings.voxel_size.z_um);
+  }
+  if (settings.roi !== undefined) {
+    mustElement<HTMLInputElement>("roi-xmin").value = formatInputNumber(settings.roi.xmin);
+    mustElement<HTMLInputElement>("roi-xmax").value = formatInputNumber(settings.roi.xmax);
+    mustElement<HTMLInputElement>("roi-ymin").value = formatInputNumber(settings.roi.ymin);
+    mustElement<HTMLInputElement>("roi-ymax").value = formatInputNumber(settings.roi.ymax);
+  }
+  if (settings.include_mesh !== undefined) {
+    mustElement<HTMLInputElement>("mesh-input").checked = settings.include_mesh;
+  }
+  if (settings.prefer_opencv !== undefined) {
+    mustElement<HTMLInputElement>("fallback-input").checked = !settings.prefer_opencv;
+  }
+  if (settings.sweep !== undefined) {
+    if (settings.sweep.start !== undefined) {
+      mustElement<HTMLInputElement>("sweep-start").value = formatInputNumber(settings.sweep.start);
+    }
+    if (settings.sweep.stop !== undefined) {
+      mustElement<HTMLInputElement>("sweep-stop").value = formatInputNumber(settings.sweep.stop);
+    }
+    if (settings.sweep.step !== undefined) {
+      mustElement<HTMLInputElement>("sweep-step").value = formatInputNumber(settings.sweep.step);
+    }
+  }
+}
+
 function rowsToCsv(rows: AnalysisRow[]): string {
   const lines = [
     CSV_COLUMNS.join(","),
@@ -1163,6 +1357,33 @@ function formatUnknownNumber(value: unknown): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Unknown error";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function finiteNumber(value: unknown, name: string): number {
+  const numberValue = Number(value);
+  if (!Number.isFinite(numberValue)) {
+    throw new Error(`${name} must be a number.`);
+  }
+  return numberValue;
+}
+
+function positiveNumber(value: unknown, name: string): number {
+  const numberValue = finiteNumber(value, name);
+  if (numberValue <= 0) {
+    throw new Error(`${name} must be greater than zero.`);
+  }
+  return numberValue;
+}
+
+function booleanValue(value: unknown, name: string): boolean {
+  if (typeof value !== "boolean") {
+    throw new Error(`${name} must be true or false.`);
+  }
+  return value;
 }
 
 function escapeHtml(value: string): string {

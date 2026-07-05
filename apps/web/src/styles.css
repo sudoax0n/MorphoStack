@@ -70,6 +70,18 @@ select {
   padding: 18px;
 }
 
+.project-strip {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto minmax(160px, auto);
+  align-items: end;
+  gap: 12px;
+  padding: 18px 18px 0;
+}
+
+.project-strip label {
+  margin-bottom: 0;
+}
+
 .panel,
 .results {
   border: 1px solid #dde4f0;
@@ -294,7 +306,8 @@ th {
 
 @media (max-width: 900px) {
   .topbar,
-  .layout {
+  .layout,
+  .project-strip {
     grid-template-columns: 1fr;
   }
 
