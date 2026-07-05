@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import socket
 import subprocess
 import shutil
 import sys
@@ -1057,6 +1058,7 @@ def run_dev(
     check_only: bool = False,
 ) -> int:
     issues = dev_prerequisite_issues(WEB_APP_DIR)
+    issues.extend(port_availability_issues(host=host, api_port=api_port, web_port=web_port))
     if issues:
         print("MorphoStack dev environment is not ready:")
         for issue in issues:
@@ -1135,14 +1137,37 @@ def run_dev(
 def dev_prerequisite_issues(web_app_dir: Path) -> list[str]:
     issues: list[str] = []
     if shutil.which("npm") is None:
-        issues.append("npm was not found on PATH.")
+        issues.append("npm was not found on PATH. Install Node.js, then run morphostack init --web.")
     if not import_available("uvicorn"):
-        issues.append("uvicorn is not installed in this Python environment.")
+        issues.append("uvicorn is not installed in this Python environment. Run morphostack init --extras api.")
     if not (web_app_dir / "package.json").exists():
         issues.append(f"web package.json was not found at {web_app_dir}.")
     if not (web_app_dir / "node_modules").exists():
-        issues.append("web dependencies are not installed; run npm install in apps/web.")
+        issues.append("web dependencies are not installed. Run morphostack init --web.")
     return issues
+
+
+def port_availability_issues(*, host: str, api_port: int, web_port: int) -> list[str]:
+    issues: list[str] = []
+    for label, flag, port in (
+        ("Backend", "--api-port", api_port),
+        ("Web UI", "--web-port", web_port),
+    ):
+        if not can_bind(host, port):
+            issues.append(
+                f"{label} port {port} is already in use on {host}. "
+                f"Stop the existing process or pass {flag}."
+            )
+    return issues
+
+
+def can_bind(host: str, port: int) -> bool:
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind((host, port))
+    except OSError:
+        return False
+    return True
 
 
 def stop_processes(processes: list[subprocess.Popen[bytes]]) -> None:

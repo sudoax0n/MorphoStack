@@ -154,6 +154,8 @@ To start the local backend and web UI together during development:
 
 Use `.\.venv\Scripts\morphostack dev --check` to verify that Python API
 dependencies, npm, and web dependencies are available before launching.
+It also checks that the selected backend and web ports are free; use
+`--api-port` or `--web-port` if another process is already using the defaults.
 
 Current API endpoints:
 

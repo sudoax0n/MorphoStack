@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import socket
 from importlib import import_module
 from types import SimpleNamespace
 
@@ -138,6 +139,7 @@ def test_project_init_writes_settings_file(tmp_path, capsys):
 
 def test_dev_check_reports_ready(monkeypatch, capsys):
     monkeypatch.setattr(cli_main_module, "dev_prerequisite_issues", lambda _: [])
+    monkeypatch.setattr(cli_main_module, "port_availability_issues", lambda **_: [])
 
     assert main(["dev", "--check", "--no-open", "--api-port", "8123", "--web-port", "5123"]) == 0
 
@@ -149,12 +151,37 @@ def test_dev_check_reports_ready(monkeypatch, capsys):
 
 def test_dev_check_reports_missing_prerequisites(monkeypatch, capsys):
     monkeypatch.setattr(cli_main_module, "dev_prerequisite_issues", lambda _: ["npm was not found on PATH."])
+    monkeypatch.setattr(cli_main_module, "port_availability_issues", lambda **_: [])
 
     assert main(["dev", "--check"]) == 1
 
     out = capsys.readouterr().out
     assert "MorphoStack dev environment is not ready" in out
     assert "npm was not found" in out
+
+
+def test_dev_prerequisite_issues_suggest_setup_commands(monkeypatch, tmp_path):
+    monkeypatch.setattr(cli_main_module.shutil, "which", lambda _: None)
+    monkeypatch.setattr(cli_main_module, "import_available", lambda _: False)
+
+    issues = cli_main_module.dev_prerequisite_issues(tmp_path)
+
+    report = "\n".join(issues)
+    assert "morphostack init --web" in report
+    assert "morphostack init --extras api" in report
+
+
+def test_port_availability_issues_reports_used_port():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        sock.listen()
+        port = sock.getsockname()[1]
+
+        issues = cli_main_module.port_availability_issues(host="127.0.0.1", api_port=port, web_port=0)
+
+    assert issues == [
+        f"Backend port {port} is already in use on 127.0.0.1. Stop the existing process or pass --api-port."
+    ]
 
 
 def test_inspect_requires_complete_voxel_override(capsys):
