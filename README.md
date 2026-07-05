@@ -5,6 +5,8 @@ MorphoStack is a planned local morphometry toolkit for microscopy Z-stacks, star
 The first milestone is intentionally small: prove the project structure, command ownership, and diagnostics before migrating scientific code from the older Shape-Analysis prototype.
 See [improvements.md](improvements.md) for the current technical roadmap, known
 gaps, and distribution plan.
+See [docs/prototype_usage.md](docs/prototype_usage.md) for a practical
+presentation/demo workflow.
 
 ## Current Commands
 

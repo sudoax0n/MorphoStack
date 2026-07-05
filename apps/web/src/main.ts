@@ -216,10 +216,18 @@ app.innerHTML = `
     <div id="project-status" class="status">No project loaded</div>
   </section>
 
+  <nav class="workflow-strip" aria-label="Prototype workflow">
+    <span><strong>1</strong> Load stack</span>
+    <span><strong>2</strong> Set voxel/Z/ROI</span>
+    <span><strong>3</strong> Preview threshold</span>
+    <span><strong>4</strong> Analyze</span>
+    <span><strong>5</strong> Download outputs</span>
+  </nav>
+
   <main class="layout">
     <section class="panel">
       <div class="panel-title">
-        <h2>Stack Input</h2>
+        <h2><span class="step-badge">1</span> Stack</h2>
         <button id="inspect-btn" type="button">Inspect</button>
       </div>
       <label>
@@ -230,6 +238,7 @@ app.innerHTML = `
         Stack path (optional)
         <input id="path-input" type="text" placeholder="D:\\\\lab-data\\\\sample.tif" />
       </label>
+      <h3>Calibration</h3>
       <div class="grid">
         <label>
           Voxel X (um)
@@ -249,7 +258,7 @@ app.innerHTML = `
 
     <section class="panel">
       <div class="panel-title">
-        <h2>Analysis</h2>
+        <h2><span class="step-badge">2</span> Preview & Analyze</h2>
         <div class="button-row">
           <button id="preview-btn" class="secondary" type="button">Preview</button>
           <button id="analyze-btn" type="button">Analyze</button>
@@ -264,7 +273,7 @@ app.innerHTML = `
           </select>
         </label>
         <label>
-          Frame
+          Preview frame
           <input id="frame-input" type="number" min="0" step="1" value="0" />
         </label>
         <label>
@@ -272,8 +281,8 @@ app.innerHTML = `
           <input id="threshold-input" type="number" step="1" value="100" />
         </label>
         <label class="button-label">
-          Threshold tool
-          <button id="suggest-threshold-btn" class="secondary" type="button">Suggest</button>
+          Threshold
+          <button id="suggest-threshold-btn" class="secondary" type="button">Suggest Threshold</button>
         </label>
         <label class="checkbox-row">
           <input id="mesh-input" type="checkbox" />
@@ -285,7 +294,7 @@ app.innerHTML = `
         </label>
       </div>
       <fieldset>
-        <legend>ROI</legend>
+        <legend>XY ROI optional</legend>
         <div class="grid four">
           <input id="roi-xmin" type="number" placeholder="xmin" />
           <input id="roi-xmax" type="number" placeholder="xmax" />
@@ -294,7 +303,7 @@ app.innerHTML = `
         </div>
       </fieldset>
       <fieldset>
-        <legend>Z Range</legend>
+        <legend>Z range optional</legend>
         <div class="grid two">
           <input id="z-min" type="number" min="0" step="1" placeholder="start" />
           <input id="z-max" type="number" min="0" step="1" placeholder="stop" />
@@ -307,7 +316,7 @@ app.innerHTML = `
 
   <section class="results">
     <div class="results-header">
-      <h2>Batch Analysis</h2>
+      <h2><span class="step-badge">3</span> Batch</h2>
       <div class="button-row">
         <button id="batch-analyze-btn" type="button">Analyze Batch</button>
         <button id="download-batch-report-btn" class="secondary" type="button" disabled>Download Batch Report</button>
@@ -342,7 +351,7 @@ app.innerHTML = `
 
   <section class="results">
     <div class="results-header">
-      <h2>Threshold Sweep</h2>
+      <h2><span class="step-badge">3</span> Threshold Sweep</h2>
       <div class="button-row">
         <button id="sweep-btn" type="button">Run Sweep</button>
         <button id="download-sweep-report-btn" class="secondary" type="button" disabled>Download Sweep Report</button>
@@ -386,7 +395,7 @@ app.innerHTML = `
 
   <section class="results">
     <div class="results-header">
-      <h2>CSV Validation</h2>
+      <h2><span class="step-badge">4</span> CSV Validation</h2>
       <button id="validate-csv-btn" type="button">Validate</button>
     </div>
     <div class="grid validation-grid">
@@ -436,7 +445,7 @@ app.innerHTML = `
 
   <section class="results">
     <div class="results-header">
-      <h2>Frame Metrics</h2>
+      <h2><span class="step-badge">5</span> Frame Metrics</h2>
       <div class="button-row">
         <button id="download-report-btn" class="secondary" type="button" disabled>Download Report</button>
         <button id="download-manifest-btn" class="secondary" type="button" disabled>Download Manifest</button>
