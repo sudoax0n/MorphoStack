@@ -195,7 +195,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Analysis profile. Default: project profile or vesicle.",
     )
-    analyze.add_argument("--out", required=True, help="CSV output path.")
+    analyze.add_argument("--out", help="CSV output path.")
+    analyze.add_argument(
+        "--bundle-dir",
+        help="Directory where a run bundle folder should be created. Writes metrics.csv, manifest.json, and report.md.",
+    )
     analyze.add_argument("--voxel-x", type=float, help="Override X voxel size in micrometers.")
     analyze.add_argument("--voxel-y", type=float, help="Override Y voxel size in micrometers.")
     analyze.add_argument("--voxel-z", type=float, help="Override Z voxel size in micrometers.")
@@ -353,6 +357,7 @@ def main(argv: list[str] | None = None) -> int:
             threshold=args.threshold,
             profile=args.profile,
             out=args.out,
+            bundle_dir=args.bundle_dir,
             voxel_x=args.voxel_x,
             voxel_y=args.voxel_y,
             voxel_z=args.voxel_z,
@@ -557,7 +562,8 @@ def run_analyze(
     *,
     path: str,
     threshold: float | None,
-    out: str,
+    out: str | None,
+    bundle_dir: str | None = None,
     profile: str | None = None,
     voxel_x: float | None = None,
     voxel_y: float | None = None,
@@ -577,6 +583,9 @@ def run_analyze(
     if resolved_threshold is None:
         print("Analysis threshold is required. Pass --threshold or set threshold in --project.")
         return 2
+    if out is None and bundle_dir is None:
+        print("Analysis output is required. Pass --out or --bundle-dir.")
+        return 2
     resolved_profile = resolve_profile(project_settings, profile)
     resolved_mesh = resolve_bool(include_mesh, project_settings.include_mesh, False)
     resolved_prefer_opencv = resolve_bool(prefer_opencv, project_settings.prefer_opencv, True)
@@ -587,6 +596,7 @@ def run_analyze(
     voxel_override = voxel_override_result
 
     rect_roi = resolve_roi(project_settings, roi)
+    run_bundle_dir = None
 
     try:
         stack = load_image_stack(path, voxel_override=voxel_override)
@@ -601,12 +611,18 @@ def run_analyze(
         )
         warnings = analysis_run_warnings(analysis, voxel_source=stack.voxel_source)
         summary = analysis_summary(analysis)
-        output_path = Path(out)
+        run_bundle_dir = bundle_run_directory(bundle_dir, stack.source_path) if bundle_dir else None
+        output_path = Path(out) if out is not None else run_bundle_dir / "metrics.csv"
         output_path.parent.mkdir(parents=True, exist_ok=True)
         write_analysis_csv(analysis, output_path)
         manifest_path = None
         if write_manifest:
-            manifest_path = Path(manifest) if manifest else output_path.with_suffix(f"{output_path.suffix}.manifest.json")
+            if manifest:
+                manifest_path = Path(manifest)
+            elif run_bundle_dir is not None:
+                manifest_path = run_bundle_dir / "manifest.json"
+            else:
+                manifest_path = output_path.with_suffix(f"{output_path.suffix}.manifest.json")
             manifest_path.parent.mkdir(parents=True, exist_ok=True)
             write_analysis_manifest_json(
                 analysis_manifest(
@@ -621,8 +637,13 @@ def run_analyze(
                 manifest_path,
             )
         report_path = None
-        if report is not None:
-            report_path = Path(report) if report else output_path.with_suffix(f"{output_path.suffix}.report.md")
+        if report is not None or run_bundle_dir is not None:
+            if report:
+                report_path = Path(report)
+            elif run_bundle_dir is not None:
+                report_path = run_bundle_dir / "report.md"
+            else:
+                report_path = output_path.with_suffix(f"{output_path.suffix}.report.md")
             write_analysis_report_markdown(
                 analysis,
                 report_path,
@@ -660,6 +681,8 @@ def run_analyze(
         print(f"3D equivalent sphere diameter: {analysis.mesh.equivalent_sphere_diameter_um:g} um")
         print(f"3D sphericity: {analysis.mesh.sphericity:g}")
     print(f"CSV: {output_path}")
+    if run_bundle_dir:
+        print(f"Bundle: {run_bundle_dir}")
     if manifest_path:
         print(f"Manifest: {manifest_path}")
     if report_path:
@@ -906,6 +929,10 @@ def discover_stack_paths(directory: Path, *, recursive: bool = False) -> list[Pa
 def safe_output_stem(path: Path) -> str:
     raw = path.stem.strip() or "stack"
     return "".join(char if char.isalnum() or char in "._-" else "_" for char in raw)
+
+
+def bundle_run_directory(bundle_dir: str, source_path: str | Path) -> Path:
+    return Path(bundle_dir) / safe_output_stem(Path(source_path))
 
 
 def roi_to_payload(roi: RectROI | None) -> dict[str, int] | None:

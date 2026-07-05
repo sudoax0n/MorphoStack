@@ -141,6 +141,12 @@ def test_analyze_requires_threshold_without_project(capsys):
     assert "threshold is required" in out
 
 
+def test_analyze_requires_output_or_bundle(capsys):
+    assert main(["analyze", "sample.tif", "--threshold", "100"]) == 2
+    out = capsys.readouterr().out
+    assert "Pass --out or --bundle-dir" in out
+
+
 def test_threshold_requires_complete_voxel_override(capsys):
     assert main(["threshold", "sample.tif", "--voxel-x", "1.0"]) == 2
     out = capsys.readouterr().out
@@ -341,6 +347,45 @@ def test_analyze_can_write_markdown_report_from_synthetic_tiff(tmp_path, capsys)
     assert report.startswith("# MorphoStack Analysis Report")
     assert "- Valid frames: 2" in report
     assert "| area_um2 | 9 | 9 | 9 | 0 |" in report
+
+
+def test_analyze_bundle_writes_run_artifacts_from_synthetic_tiff(tmp_path, capsys):
+    tifffile = pytest.importorskip("tifffile")
+    stack = np.zeros((2, 8, 8), dtype=np.uint8)
+    stack[:, 2:5, 1:4] = 200
+    input_path = tmp_path / "stack.tif"
+    bundle_dir = tmp_path / "runs"
+    tifffile.imwrite(input_path, stack, photometric="minisblack")
+
+    result = main(
+        [
+            "analyze",
+            str(input_path),
+            "--threshold",
+            "100",
+            "--bundle-dir",
+            str(bundle_dir),
+            "--voxel-x",
+            "1.0",
+            "--voxel-y",
+            "1.0",
+            "--voxel-z",
+            "1.0",
+            "--fallback-contours",
+        ]
+    )
+
+    assert result == 0
+    run_dir = bundle_dir / "stack"
+    out = capsys.readouterr().out
+    assert f"Bundle: {run_dir}" in out
+    assert (run_dir / "metrics.csv").exists()
+    assert (run_dir / "manifest.json").exists()
+    assert (run_dir / "report.md").exists()
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["source_path"] == str(input_path)
+    report = (run_dir / "report.md").read_text(encoding="utf-8")
+    assert "# MorphoStack Analysis Report" in report
 
 
 def test_analyze_uses_project_defaults_from_synthetic_tiff(tmp_path, capsys):

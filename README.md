@@ -15,6 +15,7 @@ morphostack threshold path\to\stack.tif
 morphostack sweep path\to\stack.tif --start 50 --stop 200 --step 10 --out sweep.csv
 morphostack analyze path\to\stack.tif --threshold 100 --out metrics.csv
 morphostack analyze path\to\stack.tif --threshold 100 --out metrics.csv --report
+morphostack analyze path\to\stack.tif --threshold 100 --bundle-dir runs
 morphostack analyze path\to\stack.tif --threshold 100 --profile rbc --out metrics.csv
 morphostack batch path\to\stacks --threshold 100 --out batch_summary.csv
 morphostack validate reference_metrics.csv new_metrics.csv
@@ -97,6 +98,8 @@ Use `--no-manifest` to skip it or
 Add `--report` to also write a Markdown report at
 `<metrics.csv>.report.md`, or pass `--report path\to\report.md` to choose the
 path.
+Use `--bundle-dir runs` to create a run folder containing `metrics.csv`,
+`manifest.json`, and `report.md` together.
 
 To analyze a folder of stacks and produce one summary table:
 
