@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from morphostack import __version__
 from morphostack.core import (
     DEFAULT_PROFILE,
+    ObjectSeed,
     PROFILE_CHOICES,
     RectROI,
     SWEEP_COLUMNS,
@@ -58,6 +59,12 @@ class ZRangeRequest(BaseModel):
     zmax: int
 
 
+class ObjectSeedRequest(BaseModel):
+    x: int
+    y: int
+    frame_index: int
+
+
 class InspectRequest(BaseModel):
     path: str
     voxel: VoxelOverride | None = None
@@ -72,6 +79,7 @@ class AnalyzeRequest(BaseModel):
     z_range: ZRangeRequest | None = None
     include_mesh: bool = False
     prefer_opencv: bool = True
+    object_seed: ObjectSeedRequest | None = None
 
 
 class MeshPreviewRequest(BaseModel):
@@ -84,6 +92,7 @@ class MeshPreviewRequest(BaseModel):
     prefer_opencv: bool = True
     downsample: int = Field(default=2, ge=1, le=8)
     max_faces: int = Field(default=12000, ge=1000, le=50000)
+    object_seed: ObjectSeedRequest | None = None
 
 
 class PreviewRequest(BaseModel):
@@ -94,6 +103,7 @@ class PreviewRequest(BaseModel):
     roi: ROIRequest | None = None
     z_range: ZRangeRequest | None = None
     prefer_opencv: bool = True
+    object_seed: ObjectSeedRequest | None = None
 
 
 class ThresholdRequest(BaseModel):
@@ -153,6 +163,7 @@ def create_app() -> FastAPI:
                 profile=request.profile,
                 prefer_opencv=request.prefer_opencv,
                 include_mesh=request.include_mesh,
+                object_seed=to_object_seed(request.object_seed),
             )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -205,11 +216,14 @@ def create_app() -> FastAPI:
         try:
             stack = load_image_stack(request.path, voxel_override=to_voxel_size(request.voxel))
             grayscale = apply_preview_filters(stack.grayscale, to_rect_roi(request.roi), to_z_range(request.z_range))
+            seed = to_object_seed(request.object_seed)
+            object_seed_xy = (seed.x, seed.y) if seed is not None else None
             preview_image = render_segmentation_preview_png(
                 grayscale,
                 frame_index=request.frame_index,
                 threshold=request.threshold,
                 prefer_opencv=request.prefer_opencv,
+                object_seed=object_seed_xy,
             )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -231,6 +245,7 @@ def create_app() -> FastAPI:
                 profile=request.profile,
                 prefer_opencv=request.prefer_opencv,
                 include_mesh=False,
+                object_seed=to_object_seed(request.object_seed),
             )
             filtered = apply_preview_filters(stack.grayscale, roi, z_range)
             geometry = contour_stack_mesh_geometry(
@@ -662,6 +677,12 @@ def to_z_range(z_range: ZRangeRequest | None) -> ZRange | None:
     if z_range is None:
         return None
     return ZRange(z_range.zmin, z_range.zmax)
+
+
+def to_object_seed(seed: ObjectSeedRequest | None) -> ObjectSeed | None:
+    if seed is None:
+        return None
+    return ObjectSeed(x=seed.x, y=seed.y, frame_index=seed.frame_index)
 
 
 def roi_from_optional_bounds(

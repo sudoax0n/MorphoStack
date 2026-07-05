@@ -25,18 +25,28 @@ def segmentation_preview(
     threshold: float,
     *,
     prefer_opencv: bool = True,
+    object_seed: tuple[int, int] | None = None,
 ) -> SegmentationPreview:
-    """Threshold an image and return the largest contour-like boundary."""
+    """Threshold an image and return the largest contour-like boundary.
+
+    If object_seed (x, y) is given, selects the component at/nearest that pixel
+    instead of the largest component.
+    """
 
     mask = np.asarray(image) >= threshold
     contour = None
     method = "fallback"
-    if prefer_opencv:
+
+    if object_seed is not None:
+        contour = selected_component_contour(mask, seed_x=object_seed[0], seed_y=object_seed[1])
+        if contour is not None:
+            method = "seed"
+    elif prefer_opencv:
         contour = largest_opencv_contour(mask)
         if contour is not None:
             method = "opencv"
 
-    if contour is None:
+    if contour is None and object_seed is None:
         contour = largest_component_boundary(mask)
 
     if contour is None:
@@ -48,6 +58,121 @@ def segmentation_preview(
     if perimeter > 0:
         circularity = float((4.0 * np.pi * area) / (perimeter**2))
     return SegmentationPreview(threshold, contour, area, perimeter, circularity, method)
+
+
+def selected_component_contour(
+    mask: np.ndarray,
+    *,
+    seed_x: int,
+    seed_y: int,
+    min_area_px: int = 16,
+) -> np.ndarray | None:
+    """Return the contour of the component at/nearest (seed_x, seed_y).
+
+    Uses OpenCV connectedComponentsWithStats when available. Falls back to
+    picking the component whose bounding-box centre is nearest the seed.
+    """
+    try:
+        import cv2
+    except Exception:
+        return _seed_component_fallback(mask, seed_x=seed_x, seed_y=seed_y, min_area_px=min_area_px)
+
+    arr = np.asarray(mask, dtype=bool)
+    if arr.ndim != 2:
+        raise ValueError("selected_component_contour expects a 2D mask")
+
+    binary = arr.astype(np.uint8) * 255
+    n_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
+
+    if n_labels <= 1:
+        return None
+
+    height, width = arr.shape
+    sx = int(np.clip(seed_x, 0, width - 1))
+    sy = int(np.clip(seed_y, 0, height - 1))
+
+    # Filter out background (label 0) and tiny components.
+    label_ids = [
+        i for i in range(1, n_labels)
+        if int(stats[i, cv2.CC_STAT_AREA]) >= min_area_px
+    ]
+    if not label_ids:
+        return None
+
+    # If seed falls on a foreground pixel, use that label directly.
+    seed_label = int(labels[sy, sx])
+    if seed_label in label_ids:
+        chosen = seed_label
+    else:
+        # Choose the component whose centroid is nearest the seed.
+        def centroid_dist(lbl: int) -> float:
+            area = int(stats[lbl, cv2.CC_STAT_AREA])
+            if area == 0:
+                return float("inf")
+            region = labels == lbl
+            ys, xs = np.nonzero(region)
+            cx = float(xs.mean())
+            cy = float(ys.mean())
+            return float((cx - sx) ** 2 + (cy - sy) ** 2)
+
+        chosen = min(label_ids, key=centroid_dist)
+
+    component_mask = (labels == chosen).astype(np.uint8) * 255
+    contours, _ = cv2.findContours(component_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours or len(contours[0]) < 3:
+        return None
+    return normalize_points(contours[0])
+
+
+def _seed_component_fallback(
+    mask: np.ndarray,
+    *,
+    seed_x: int,
+    seed_y: int,
+    min_area_px: int,
+) -> np.ndarray | None:
+    """Pure-numpy fallback for seed-based component selection."""
+    arr = np.asarray(mask, dtype=bool)
+    height, width = arr.shape
+    sx = int(np.clip(seed_x, 0, width - 1))
+    sy = int(np.clip(seed_y, 0, height - 1))
+
+    visited = np.zeros_like(arr, dtype=bool)
+    components: list[list[tuple[int, int]]] = []
+    for y in range(height):
+        for x in range(width):
+            if arr[y, x] and not visited[y, x]:
+                pts = flood_component(arr, visited, y, x)
+                if len(pts) >= min_area_px:
+                    components.append(pts)
+    if not components:
+        return None
+
+    def seed_dist(pts: list[tuple[int, int]]) -> float:
+        ys = [p[0] for p in pts]
+        xs = [p[1] for p in pts]
+        cy = sum(ys) / len(ys)
+        cx = sum(xs) / len(xs)
+        return (cx - sx) ** 2 + (cy - sy) ** 2
+
+    # If seed lands on foreground, pick that component.
+    if arr[sy, sx]:
+        for comp in components:
+            if (sy, sx) in set(comp):
+                chosen_pts = comp
+                break
+        else:
+            chosen_pts = min(components, key=seed_dist)
+    else:
+        chosen_pts = min(components, key=seed_dist)
+
+    ys_arr = [p[0] for p in chosen_pts]
+    xs_arr = [p[1] for p in chosen_pts]
+    xmin = float(min(xs_arr))
+    xmax = float(max(xs_arr) + 1)
+    ymin = float(min(ys_arr))
+    ymax = float(max(ys_arr) + 1)
+    return np.array([[xmin, ymin], [xmax, ymin], [xmax, ymax], [xmin, ymax]], dtype=np.float64)
 
 
 def largest_opencv_contour(mask: np.ndarray) -> np.ndarray | None:

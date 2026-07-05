@@ -33,6 +33,7 @@ from morphostack.core.metrics import ContourMetrics, contour_metrics
 from morphostack.core.models import ImageStack, VoxelSize
 from morphostack.core.pipeline import (
     FrameAnalysis,
+    ObjectSeed,
     RectROI,
     StackAnalysis,
     ZRange,
@@ -73,6 +74,7 @@ __all__ = [
     "FrameAnalysis",
     "ImageStack",
     "MeshMeasurement",
+    "ObjectSeed",
     "PROFILE_CHOICES",
     "PROJECT_SETTINGS_VERSION",
     "ProjectSettings",

@@ -15,6 +15,12 @@ type RectRoi = {
   ymax: number;
 };
 
+type ObjectSeed = {
+  x: number;
+  y: number;
+  frame_index: number;
+};
+
 type InspectResponse = {
   source_path: string;
   grayscale_shape: number[];
@@ -314,6 +320,14 @@ app.innerHTML = `
         </label>
       </div>
       <fieldset>
+        <legend>Object selection (optional)</legend>
+        <div class="button-row fieldset-actions">
+          <button id="select-object-btn" class="secondary" type="button">Select Object</button>
+          <button id="clear-object-btn" class="secondary" type="button">Clear Object</button>
+          <span id="object-seed-status" class="inline-status">No object selected</span>
+        </div>
+      </fieldset>
+      <fieldset>
         <legend>XY ROI optional</legend>
         <div class="grid four">
           <input id="roi-xmin" type="number" placeholder="xmin" />
@@ -549,6 +563,8 @@ let latestBatch: BatchAnalyzeResponse | null = null;
 let latestSweep: SweepResponse | null = null;
 let inspectedFrameCount: number | null = null;
 let previewDebounce: number | null = null;
+let selectedObjectSeed: ObjectSeed | null = null;
+let selectObjectMode = false;
 
 mustElement<HTMLButtonElement>("inspect-btn").addEventListener("click", () => {
   void inspectStack();
@@ -572,6 +588,18 @@ mustElement<HTMLButtonElement>("suggest-threshold-btn").addEventListener("click"
 
 mustElement<HTMLButtonElement>("clear-roi-btn").addEventListener("click", () => {
   clearRoiFields();
+});
+
+mustElement<HTMLButtonElement>("select-object-btn").addEventListener("click", () => {
+  selectObjectMode = !selectObjectMode;
+  const btn = mustElement<HTMLButtonElement>("select-object-btn");
+  btn.textContent = selectObjectMode ? "Cancel Selection" : "Select Object";
+  btn.classList.toggle("active", selectObjectMode);
+  updateObjectSeedStatus();
+});
+
+mustElement<HTMLButtonElement>("clear-object-btn").addEventListener("click", () => {
+  clearObjectSeed();
 });
 
 mustElement<HTMLButtonElement>("use-full-range-btn").addEventListener("click", () => {
@@ -749,7 +777,8 @@ async function previewStack(): Promise<void> {
           voxel: readVoxel(),
           roi,
           z_range: zRange,
-          prefer_opencv: !mustElement<HTMLInputElement>("fallback-input").checked
+          prefer_opencv: !mustElement<HTMLInputElement>("fallback-input").checked,
+          object_seed: selectedObjectSeed
         });
     renderPreview(payload, roi);
   } catch (error) {
@@ -789,7 +818,8 @@ async function previewMesh(): Promise<void> {
           z_range: readZRange(),
           prefer_opencv: !mustElement<HTMLInputElement>("fallback-input").checked,
           downsample: 2,
-          max_faces: 12000
+          max_faces: 12000,
+          object_seed: selectedObjectSeed
         });
     renderMeshPreview(payload);
   } catch (error) {
@@ -839,7 +869,8 @@ async function analyzeStack(): Promise<void> {
           roi: readRoi(),
           z_range: readZRange(),
           include_mesh: mustElement<HTMLInputElement>("mesh-input").checked,
-          prefer_opencv: !mustElement<HTMLInputElement>("fallback-input").checked
+          prefer_opencv: !mustElement<HTMLInputElement>("fallback-input").checked,
+          object_seed: selectedObjectSeed
         });
     renderAnalysis(payload);
   } catch (error) {
@@ -957,6 +988,7 @@ function renderPreview(payload: PreviewResponse, renderedRoi: RectRoi | null): v
       Area ${formatNumber(payload.area_px2)} px2,
       perimeter ${formatNumber(payload.perimeter_px)} px,
       circularity ${formatNumber(payload.circularity)}
+      ${selectedObjectSeed ? `<br /><span style="color:#fde047">Object seed: (${selectedObjectSeed.x}, ${selectedObjectSeed.y}) frame ${selectedObjectSeed.frame_index}</span>` : ""}
     </div>
   `;
   attachPreviewRoiSelector(payload, renderedRoi);
@@ -971,11 +1003,13 @@ function attachPreviewRoiSelector(payload: PreviewResponse, renderedRoi: RectRoi
     event.preventDefault();
     start = pointerToImagePoint(event, image);
     image.setPointerCapture(event.pointerId);
-    drawSelection(selection, start.x, start.y, start.x, start.y);
+    if (!selectObjectMode) {
+      drawSelection(selection, start.x, start.y, start.x, start.y);
+    }
   });
 
   image.addEventListener("pointermove", (event) => {
-    if (!start) {
+    if (!start || selectObjectMode) {
       return;
     }
     const current = pointerToImagePoint(event, image);
@@ -988,6 +1022,14 @@ function attachPreviewRoiSelector(payload: PreviewResponse, renderedRoi: RectRoi
     }
     const end = pointerToImagePoint(event, image);
     image.releasePointerCapture(event.pointerId);
+
+    if (selectObjectMode) {
+      // Single-click sets the object seed.
+      applyObjectSeedClick(end, image, payload, renderedRoi);
+      start = null;
+      return;
+    }
+
     applyDraggedRoi(start, end, image, payload, renderedRoi);
     start = null;
   });
@@ -1048,6 +1090,54 @@ function applyDraggedRoi(
     ymin,
     ymax: Math.max(ymax, ymin + 1)
   });
+}
+
+function applyObjectSeedClick(
+  point: { x: number; y: number },
+  image: HTMLImageElement,
+  payload: PreviewResponse,
+  renderedRoi: RectRoi | null
+): void {
+  const rect = image.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) return;
+
+  const baseX = renderedRoi?.xmin ?? 0;
+  const baseY = renderedRoi?.ymin ?? 0;
+  const scaleX = payload.width / rect.width;
+  const scaleY = payload.height / rect.height;
+  const imgX = baseX + Math.round(point.x * scaleX);
+  const imgY = baseY + Math.round(point.y * scaleY);
+
+  selectedObjectSeed = { x: imgX, y: imgY, frame_index: payload.frame_index };
+  selectObjectMode = false;
+  const btn = mustElement<HTMLButtonElement>("select-object-btn");
+  btn.textContent = "Select Object";
+  btn.classList.remove("active");
+  updateObjectSeedStatus();
+  void previewStack();
+}
+
+function clearObjectSeed(): void {
+  selectedObjectSeed = null;
+  selectObjectMode = false;
+  const btn = mustElement<HTMLButtonElement>("select-object-btn");
+  btn.textContent = "Select Object";
+  btn.classList.remove("active");
+  updateObjectSeedStatus();
+}
+
+function updateObjectSeedStatus(): void {
+  const status = mustElement<HTMLSpanElement>("object-seed-status");
+  if (selectObjectMode) {
+    status.textContent = "Click on the target object in the preview";
+    status.className = "inline-status warn";
+  } else if (selectedObjectSeed) {
+    status.textContent = `Seed: (${selectedObjectSeed.x}, ${selectedObjectSeed.y}) frame ${selectedObjectSeed.frame_index}`;
+    status.className = "inline-status ok";
+  } else {
+    status.textContent = "No object selected";
+    status.className = "inline-status";
+  }
 }
 
 function updateFrameRange(): void {

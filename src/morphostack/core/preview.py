@@ -26,6 +26,7 @@ def render_segmentation_preview_png(
     frame_index: int,
     threshold: float,
     prefer_opencv: bool = True,
+    object_seed: tuple[int, int] | None = None,
 ) -> PreviewImage:
     """Render a PNG overlay for one thresholded stack frame."""
 
@@ -36,8 +37,8 @@ def render_segmentation_preview_png(
         raise ValueError(f"frame_index must be between 0 and {arr.shape[0] - 1}")
 
     frame = arr[frame_index]
-    preview = segmentation_preview(frame, threshold, prefer_opencv=prefer_opencv)
-    image = overlay_preview(frame, threshold=threshold, preview=preview)
+    preview = segmentation_preview(frame, threshold, prefer_opencv=prefer_opencv, object_seed=object_seed)
+    image = overlay_preview(frame, threshold=threshold, preview=preview, object_seed=object_seed)
     buffer = BytesIO()
     image.save(buffer, format="PNG")
     return PreviewImage(
@@ -49,7 +50,7 @@ def render_segmentation_preview_png(
     )
 
 
-def overlay_preview(frame: np.ndarray, *, threshold: float, preview: SegmentationPreview):
+def overlay_preview(frame: np.ndarray, *, threshold: float, preview: SegmentationPreview, object_seed: tuple[int, int] | None = None):
     try:
         from PIL import Image, ImageDraw
     except Exception as exc:
@@ -63,8 +64,14 @@ def overlay_preview(frame: np.ndarray, *, threshold: float, preview: Segmentatio
     rgb[mask, 2] = (rgb[mask, 2] * 0.55).astype(np.uint8)
 
     image = Image.fromarray(rgb, mode="RGB")
+    draw = ImageDraw.Draw(image)
     if preview.contour is not None and len(preview.contour) >= 2:
-        draw = ImageDraw.Draw(image)
         points = [(float(x), float(y)) for x, y in preview.contour]
         draw.line(points + [points[0]], fill=(31, 230, 137), width=2)
+    if object_seed is not None:
+        sx, sy = object_seed
+        r = 6
+        draw.ellipse([sx - r, sy - r, sx + r, sy + r], outline=(255, 220, 0), width=2)
+        draw.line([sx - r - 3, sy, sx + r + 3, sy], fill=(255, 220, 0), width=1)
+        draw.line([sx, sy - r - 3, sx, sy + r + 3], fill=(255, 220, 0), width=1)
     return image

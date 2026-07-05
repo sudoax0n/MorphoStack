@@ -36,6 +36,13 @@ class ZRange:
 
 
 @dataclass(frozen=True)
+class ObjectSeed:
+    x: int
+    y: int
+    frame_index: int
+
+
+@dataclass(frozen=True)
 class FrameAnalysis:
     frame_index: int
     threshold: float
@@ -66,9 +73,10 @@ def analyze_frame(
     voxel_size: VoxelSize,
     profile: str | None = DEFAULT_PROFILE,
     prefer_opencv: bool = True,
+    object_seed: tuple[int, int] | None = None,
 ) -> FrameAnalysis:
     analysis_profile = normalize_profile(profile)
-    preview = segmentation_preview(image, threshold, prefer_opencv=prefer_opencv)
+    preview = segmentation_preview(image, threshold, prefer_opencv=prefer_opencv, object_seed=object_seed)
     metrics = None
     if preview.contour is not None:
         metrics = contour_metrics(preview.contour, voxel_size)
@@ -92,6 +100,7 @@ def analyze_stack(
     profile: str | None = DEFAULT_PROFILE,
     prefer_opencv: bool = True,
     include_mesh: bool = False,
+    object_seed: ObjectSeed | None = None,
 ) -> StackAnalysis:
     analysis_profile = normalize_profile(profile)
     arr = np.asarray(stack)
@@ -113,6 +122,10 @@ def analyze_stack(
         )
 
     per_frame_thresholds = normalize_thresholds(thresholds, frame_count=arr.shape[0])
+
+    # Build per-frame seeds via centroid tracking when an object_seed is provided.
+    per_frame_seeds = _build_per_frame_seeds(arr, per_frame_thresholds, object_seed, frame_offset)
+
     frames = tuple(
         analyze_frame(
             frame,
@@ -121,6 +134,7 @@ def analyze_stack(
             voxel_size=voxel_size,
             profile=analysis_profile,
             prefer_opencv=prefer_opencv,
+            object_seed=per_frame_seeds[idx],
         )
         for idx, frame in enumerate(arr)
     )
@@ -132,6 +146,55 @@ def analyze_stack(
             voxel=voxel_size,
         )
     return StackAnalysis(voxel_size=voxel_size, profile=analysis_profile, frames=frames, mesh=mesh, z_range=z_range)
+
+
+def _build_per_frame_seeds(
+    arr: np.ndarray,
+    thresholds: tuple[float, ...],
+    object_seed: ObjectSeed | None,
+    frame_offset: int,
+) -> list[tuple[int, int] | None]:
+    """Build a per-frame (x, y) seed list from a single ObjectSeed using centroid tracking."""
+    n = arr.shape[0]
+    if object_seed is None:
+        return [None] * n
+
+    # Map the seed's frame_index into the (possibly trimmed) local index.
+    local_seed_idx = object_seed.frame_index - frame_offset
+    local_seed_idx = max(0, min(n - 1, local_seed_idx))
+
+    seeds: list[tuple[int, int] | None] = [None] * n
+    seeds[local_seed_idx] = (object_seed.x, object_seed.y)
+
+    # Track forward from the seed frame.
+    prev_seed: tuple[int, int] | None = seeds[local_seed_idx]
+    for idx in range(local_seed_idx + 1, n):
+        if prev_seed is None:
+            break
+        from morphostack.core.contours import selected_component_contour
+        mask = arr[idx] >= thresholds[idx]
+        contour = selected_component_contour(mask, seed_x=prev_seed[0], seed_y=prev_seed[1])
+        if contour is not None:
+            cx = float(contour[:, 0].mean())
+            cy = float(contour[:, 1].mean())
+            prev_seed = (int(round(cx)), int(round(cy)))
+        seeds[idx] = prev_seed
+
+    # Track backward from the seed frame.
+    prev_seed = seeds[local_seed_idx]
+    for idx in range(local_seed_idx - 1, -1, -1):
+        if prev_seed is None:
+            break
+        from morphostack.core.contours import selected_component_contour
+        mask = arr[idx] >= thresholds[idx]
+        contour = selected_component_contour(mask, seed_x=prev_seed[0], seed_y=prev_seed[1])
+        if contour is not None:
+            cx = float(contour[:, 0].mean())
+            cy = float(contour[:, 1].mean())
+            prev_seed = (int(round(cx)), int(round(cy)))
+        seeds[idx] = prev_seed
+
+    return seeds
 
 
 def normalize_thresholds(thresholds: float | Sequence[float], *, frame_count: int) -> tuple[float, ...]:
