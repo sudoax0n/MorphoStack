@@ -202,3 +202,102 @@ def test_api_analyze_with_seed_smaller_area(client, tmp_path):
     area_seed = sum(r["area_um2"] for r in rows_seed if r["has_contour"])
 
     assert area_seed < area_no_seed * 0.5
+
+
+def test_api_upload_mesh_preview_with_seed_selects_correct_object(client):
+    tiff_data = stack_tiff_bytes(n_frames=3)
+    # Seed 60, 20 is the small circle.
+    response = client.post(
+        "/upload/mesh-preview",
+        data={
+            "threshold": 100,
+            "object_seed_x": 60,
+            "object_seed_y": 20,
+            "object_seed_frame": 1,
+            "downsample": 1,
+        },
+        files={"file": ("stack.tif", tiff_data, "image/tiff")},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["has_mesh"] is True
+    # The small sphere should have a smaller volume than the full/default/largest sphere
+    volume = payload["volume_um3"]
+    
+    # Run with large circle seed
+    response_large = client.post(
+        "/upload/mesh-preview",
+        data={
+            "threshold": 100,
+            "object_seed_x": 20,
+            "object_seed_y": 20,
+            "object_seed_frame": 1,
+            "downsample": 1,
+        },
+        files={"file": ("stack.tif", tiff_data, "image/tiff")},
+    )
+    assert response_large.status_code == 200
+    volume_large = response_large.json()["volume_um3"]
+    assert volume < volume_large * 0.5
+
+
+def test_api_upload_analyze_with_seed_selects_correct_object(client):
+    tiff_data = stack_tiff_bytes(n_frames=3)
+    response = client.post(
+        "/upload/analyze",
+        data={
+            "threshold": 100,
+            "object_seed_x": 60,
+            "object_seed_y": 20,
+            "object_seed_frame": 1,
+        },
+        files={"file": ("stack.tif", tiff_data, "image/tiff")},
+    )
+    assert response.status_code == 200
+    rows = response.json()["rows"]
+    areas = [r["area_um2"] for r in rows if r["has_contour"]]
+    assert len(areas) == 3
+    # Centred at x=60, radius=5 => area approx pi*r^2 approx 78 px
+    assert all(a < 120 for a in areas)
+
+
+def test_api_upload_preview_with_seed_selects_correct_object(client):
+    tiff_data = stack_tiff_bytes(n_frames=3)
+    response = client.post(
+        "/upload/preview",
+        data={
+            "threshold": 100,
+            "frame_index": 0,
+            "object_seed_x": 60,
+            "object_seed_y": 20,
+            "object_seed_frame": 0,
+        },
+        files={"file": ("stack.tif", tiff_data, "image/tiff")},
+    )
+    assert response.status_code == 200
+    assert response.json()["method"] == "seed"
+
+
+def test_api_mesh_preview_different_seeds_different_geometry(client, tmp_path):
+    path = tmp_path / "stack.tif"
+    write_two_circle_tiff(path)
+    
+    resp_small = client.post("/mesh-preview", json={
+        "path": str(path),
+        "threshold": 100,
+        "object_seed": {"x": 60, "y": 20, "frame_index": 1},
+        "downsample": 1
+    })
+    resp_large = client.post("/mesh-preview", json={
+        "path": str(path),
+        "threshold": 100,
+        "object_seed": {"x": 20, "y": 20, "frame_index": 1},
+        "downsample": 1
+    })
+    assert resp_small.status_code == 200
+    assert resp_large.status_code == 200
+    
+    vol_small = resp_small.json()["volume_um3"]
+    vol_large = resp_large.json()["volume_um3"]
+    
+    assert vol_small < vol_large * 0.5

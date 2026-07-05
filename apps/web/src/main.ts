@@ -2002,6 +2002,14 @@ function inspectUploadForm(file: File): FormData {
   return formData;
 }
 
+function appendObjectSeedFields(formData: FormData): void {
+  if (selectedObjectSeed) {
+    formData.set("object_seed_x", String(selectedObjectSeed.x));
+    formData.set("object_seed_y", String(selectedObjectSeed.y));
+    formData.set("object_seed_frame", String(selectedObjectSeed.frame_index));
+  }
+}
+
 function analyzeUploadForm(file: File): FormData {
   const formData = new FormData();
   appendFileAndVoxel(formData, file);
@@ -2011,6 +2019,7 @@ function analyzeUploadForm(file: File): FormData {
   formData.set("prefer_opencv", String(!mustElement<HTMLInputElement>("fallback-input").checked));
   appendRoiFields(formData);
   appendZRangeFields(formData);
+  appendObjectSeedFields(formData);
   return formData;
 }
 
@@ -2022,6 +2031,7 @@ function previewUploadForm(file: File): FormData {
   formData.set("prefer_opencv", String(!mustElement<HTMLInputElement>("fallback-input").checked));
   appendRoiFields(formData);
   appendZRangeFields(formData);
+  appendObjectSeedFields(formData);
   return formData;
 }
 
@@ -2035,6 +2045,7 @@ function meshPreviewUploadForm(file: File): FormData {
   formData.set("max_faces", "12000");
   appendRoiFields(formData);
   appendZRangeFields(formData);
+  appendObjectSeedFields(formData);
   return formData;
 }
 

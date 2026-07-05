@@ -126,18 +126,41 @@ def analyze_stack(
     # Build per-frame seeds via centroid tracking when an object_seed is provided.
     per_frame_seeds = _build_per_frame_seeds(arr, per_frame_thresholds, object_seed, frame_offset)
 
-    frames = tuple(
-        analyze_frame(
-            frame,
-            frame_index=idx + frame_offset,
-            threshold=per_frame_thresholds[idx],
-            voxel_size=voxel_size,
-            profile=analysis_profile,
-            prefer_opencv=prefer_opencv,
-            object_seed=per_frame_seeds[idx],
-        )
-        for idx, frame in enumerate(arr)
-    )
+    frames_list = []
+    for idx, frame in enumerate(arr):
+        if object_seed is not None and per_frame_seeds[idx] is None:
+            # Seed was lost or not reached; do not fall back.
+            from morphostack.core.contours import SegmentationPreview
+            preview = SegmentationPreview(
+                threshold=per_frame_thresholds[idx],
+                contour=None,
+                area_px2=0.0,
+                perimeter_px=0.0,
+                circularity=0.0,
+                method="seed_lost"
+            )
+            fa = FrameAnalysis(
+                frame_index=idx + frame_offset,
+                threshold=per_frame_thresholds[idx],
+                profile=analysis_profile,
+                contour=None,
+                metrics=None,
+                preview=preview,
+            )
+            frames_list.append(fa)
+        else:
+            fa = analyze_frame(
+                frame,
+                frame_index=idx + frame_offset,
+                threshold=per_frame_thresholds[idx],
+                voxel_size=voxel_size,
+                profile=analysis_profile,
+                prefer_opencv=prefer_opencv,
+                object_seed=per_frame_seeds[idx],
+            )
+            frames_list.append(fa)
+    frames = tuple(frames_list)
+
     mesh = None
     if include_mesh:
         mesh = measure_contour_stack(
@@ -178,6 +201,8 @@ def _build_per_frame_seeds(
             cx = float(contour[:, 0].mean())
             cy = float(contour[:, 1].mean())
             prev_seed = (int(round(cx)), int(round(cy)))
+        else:
+            prev_seed = None
         seeds[idx] = prev_seed
 
     # Track backward from the seed frame.
@@ -192,6 +217,8 @@ def _build_per_frame_seeds(
             cx = float(contour[:, 0].mean())
             cy = float(contour[:, 1].mean())
             prev_seed = (int(round(cx)), int(round(cy)))
+        else:
+            prev_seed = None
         seeds[idx] = prev_seed
 
     return seeds

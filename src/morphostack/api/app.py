@@ -328,6 +328,9 @@ def create_app() -> FastAPI:
         roi_ymax: Annotated[int | None, Form()] = None,
         z_min: Annotated[int | None, Form()] = None,
         z_max: Annotated[int | None, Form()] = None,
+        object_seed_x: Annotated[int | None, Form()] = None,
+        object_seed_y: Annotated[int | None, Form()] = None,
+        object_seed_frame: Annotated[int | None, Form()] = None,
     ) -> dict[str, object]:
         temp_path = save_upload_to_temp(file)
         try:
@@ -336,6 +339,7 @@ def create_app() -> FastAPI:
                 temp_path,
                 voxel_override=VoxelSize(voxel_x_um, voxel_y_um, voxel_z_um),
             )
+            seed = object_seed_from_optional_fields(object_seed_x, object_seed_y, object_seed_frame)
             analysis = analyze_stack(
                 stack.grayscale,
                 thresholds=threshold,
@@ -345,6 +349,7 @@ def create_app() -> FastAPI:
                 profile=profile,
                 prefer_opencv=prefer_opencv,
                 include_mesh=include_mesh,
+                object_seed=seed,
             )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -398,6 +403,9 @@ def create_app() -> FastAPI:
         roi_ymax: Annotated[int | None, Form()] = None,
         z_min: Annotated[int | None, Form()] = None,
         z_max: Annotated[int | None, Form()] = None,
+        object_seed_x: Annotated[int | None, Form()] = None,
+        object_seed_y: Annotated[int | None, Form()] = None,
+        object_seed_frame: Annotated[int | None, Form()] = None,
     ) -> dict[str, object]:
         temp_path = save_upload_to_temp(file)
         try:
@@ -410,11 +418,14 @@ def create_app() -> FastAPI:
                 roi_from_optional_bounds(roi_xmin, roi_xmax, roi_ymin, roi_ymax),
                 z_range_from_optional_bounds(z_min, z_max),
             )
+            seed = object_seed_from_optional_fields(object_seed_x, object_seed_y, object_seed_frame)
+            object_seed_xy = (seed.x, seed.y) if seed is not None else None
             preview_image = render_segmentation_preview_png(
                 grayscale,
                 frame_index=frame_index,
                 threshold=threshold,
                 prefer_opencv=prefer_opencv,
+                object_seed=object_seed_xy,
             )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -440,6 +451,9 @@ def create_app() -> FastAPI:
         z_max: Annotated[int | None, Form()] = None,
         downsample: Annotated[int, Form(ge=1, le=8)] = 2,
         max_faces: Annotated[int, Form(ge=1000, le=50000)] = 12000,
+        object_seed_x: Annotated[int | None, Form()] = None,
+        object_seed_y: Annotated[int | None, Form()] = None,
+        object_seed_frame: Annotated[int | None, Form()] = None,
     ) -> dict[str, object]:
         temp_path = save_upload_to_temp(file)
         try:
@@ -449,6 +463,7 @@ def create_app() -> FastAPI:
             )
             roi = roi_from_optional_bounds(roi_xmin, roi_xmax, roi_ymin, roi_ymax)
             z_range = z_range_from_optional_bounds(z_min, z_max)
+            seed = object_seed_from_optional_fields(object_seed_x, object_seed_y, object_seed_frame)
             analysis = analyze_stack(
                 stack.grayscale,
                 thresholds=threshold,
@@ -458,6 +473,7 @@ def create_app() -> FastAPI:
                 profile=profile,
                 prefer_opencv=prefer_opencv,
                 include_mesh=False,
+                object_seed=seed,
             )
             filtered = apply_preview_filters(stack.grayscale, roi, z_range)
             geometry = contour_stack_mesh_geometry(
@@ -683,6 +699,19 @@ def to_object_seed(seed: ObjectSeedRequest | None) -> ObjectSeed | None:
     if seed is None:
         return None
     return ObjectSeed(x=seed.x, y=seed.y, frame_index=seed.frame_index)
+
+
+def object_seed_from_optional_fields(
+    x: int | None,
+    y: int | None,
+    frame_index: int | None,
+) -> ObjectSeed | None:
+    values = (x, y, frame_index)
+    if all(value is None for value in values):
+        return None
+    if any(value is None for value in values):
+        raise ValueError("Object seed requires object_seed_x, object_seed_y, and object_seed_frame")
+    return ObjectSeed(x=x, y=y, frame_index=frame_index)
 
 
 def roi_from_optional_bounds(
