@@ -7,11 +7,13 @@ import numpy as np
 
 from morphostack.core import VoxelSize, analyze_stack
 from morphostack.core.export import (
+    BATCH_SUMMARY_COLUMNS,
     analysis_manifest,
     analysis_report_markdown,
     analysis_rows,
     analysis_run_warnings,
     analysis_summary,
+    analysis_summary_row,
     analysis_warnings,
     write_analysis_csv,
     write_analysis_manifest_json,
@@ -132,6 +134,28 @@ def test_analysis_summary_handles_no_valid_frames():
     assert summary["valid_frame_count"] == 0
     assert summary["valid_fraction"] == 0.0
     assert summary["metrics"] == {}
+
+
+def test_analysis_summary_row_records_source_sha256():
+    stack = np.zeros((1, 8, 8), dtype=np.uint8)
+    stack[0, 2:5, 1:4] = 200
+    analysis = analyze_stack(
+        stack,
+        thresholds=100,
+        voxel_size=VoxelSize(1.0, 1.0, 1.0),
+        prefer_opencv=False,
+    )
+
+    row = analysis_summary_row(
+        analysis,
+        source_path="stack.tif",
+        threshold=100,
+        source_sha256="abc123",
+        voxel_source="override",
+    )
+
+    assert BATCH_SUMMARY_COLUMNS[1] == "source_sha256"
+    assert row["source_sha256"] == "abc123"
 
 
 def test_analysis_warnings_report_no_valid_contours():

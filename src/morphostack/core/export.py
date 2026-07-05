@@ -53,6 +53,7 @@ SUMMARY_METRICS = (
 
 BATCH_SUMMARY_COLUMNS = (
     "source_path",
+    "source_sha256",
     "status",
     "error_message",
     "profile",
@@ -253,12 +254,14 @@ def analysis_summary_row(
     *,
     source_path: str,
     threshold: float | list[float] | tuple[float, ...],
+    source_sha256: str | None = None,
     voxel_source: str = "unknown",
 ) -> dict[str, object]:
     summary = analysis_summary(analysis)
     metrics = summary["metrics"]
     row: dict[str, object] = {
         "source_path": source_path,
+        "source_sha256": source_sha256 or "",
         "status": "ok",
         "error_message": "",
         "profile": analysis.profile,
@@ -282,9 +285,15 @@ def analysis_summary_row(
     return {column: row.get(column, "") for column in BATCH_SUMMARY_COLUMNS}
 
 
-def failed_analysis_summary_row(source_path: str, error_message: str) -> dict[str, object]:
+def failed_analysis_summary_row(
+    source_path: str,
+    error_message: str,
+    *,
+    source_sha256: str | None = None,
+) -> dict[str, object]:
     row = {
         "source_path": source_path,
+        "source_sha256": source_sha256 or "",
         "status": "error",
         "error_message": error_message,
     }

@@ -1120,8 +1120,8 @@ function batchReportMarkdown(payload: BatchAnalyzeResponse): string {
     "",
     "## Stack Summary",
     "",
-    "| Source | Status | Profile | Frames | Valid | Valid fraction | Mean area (um2) | Mean circularity | Mean deformation index | Warnings |",
-    "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |"
+    "| Source | SHA-256 | Status | Profile | Frames | Valid | Valid fraction | Mean area (um2) | Mean circularity | Mean deformation index | Warnings |",
+    "| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |"
   ];
 
   payload.rows.forEach((row) => {
@@ -1129,6 +1129,7 @@ function batchReportMarkdown(payload: BatchAnalyzeResponse): string {
       [
         "|",
         markdownCell(String(row.source_path ?? "")),
+        markdownCell(String(row.source_sha256 ?? "")),
         markdownCell(String(row.status ?? "")),
         markdownCell(String(row.profile ?? "")),
         formatUnknownNumber(row.frame_count),

@@ -899,9 +899,10 @@ def run_batch(
     rows: list[dict[str, object]] = []
     failures = 0
     for stack_path in stack_paths:
+        source_sha256 = ""
         try:
+            source_sha256 = file_sha256(stack_path)
             stack = load_image_stack(stack_path, voxel_override=voxel_override)
-            source_sha256 = file_sha256(stack.source_path)
             analysis = analyze_stack(
                 stack.grayscale,
                 thresholds=resolved_threshold,
@@ -916,6 +917,7 @@ def run_batch(
                     analysis,
                     source_path=str(stack.source_path),
                     threshold=resolved_threshold,
+                    source_sha256=source_sha256,
                     voxel_source=stack.voxel_source,
                 )
             )
@@ -951,7 +953,7 @@ def run_batch(
                 )
         except Exception as exc:
             failures += 1
-            rows.append(failed_analysis_summary_row(str(stack_path), str(exc)))
+            rows.append(failed_analysis_summary_row(str(stack_path), str(exc), source_sha256=source_sha256))
 
     write_batch_summary_csv(rows, output_path)
 

@@ -266,11 +266,12 @@ def test_upload_analyze_stack_with_mesh(client):
 
 
 def test_upload_batch_analyze_returns_summary_rows(client):
+    upload_bytes = stack_upload_bytes()
     response = client.post(
         "/upload/batch",
         files=[
-            ("files", ("stack_a.tif", stack_upload_bytes(), "image/tiff")),
-            ("files", ("stack_b.tif", stack_upload_bytes(), "image/tiff")),
+            ("files", ("stack_a.tif", upload_bytes, "image/tiff")),
+            ("files", ("stack_b.tif", upload_bytes, "image/tiff")),
         ],
         data={
             "threshold": "100",
@@ -289,6 +290,7 @@ def test_upload_batch_analyze_returns_summary_rows(client):
     assert payload["failed_count"] == 0
     assert payload["columns"][0] == "source_path"
     assert payload["rows"][0]["profile"] == "rbc"
+    assert payload["rows"][0]["source_sha256"] == hashlib.sha256(upload_bytes).hexdigest()
     assert payload["rows"][0]["voxel_source"] == "override"
     assert payload["rows"][0]["area_um2_mean"] == 9.0
     assert payload["rows"][0]["deformation_index_mean"] == 0.0

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
 from importlib import import_module
@@ -594,10 +595,18 @@ def test_batch_writes_summary_csv_from_directory(tmp_path, capsys):
     assert "MorphoStack Batch Complete" in out
     assert "Succeeded: 2" in out
     summary_csv = output_path.read_text(encoding="utf-8")
-    assert "source_path,status,error_message,profile,threshold" in summary_csv
+    assert "source_path,source_sha256,status,error_message,profile,threshold" in summary_csv
     assert "area_um2_mean" in summary_csv
     assert "voxel_source" in summary_csv
-    assert summary_csv.count(",ok,,vesicle,100.0,override,2,2,1.0") == 2
+    with output_path.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert len(rows) == 2
+    for index, row in enumerate(rows):
+        input_path = input_dir / f"stack_{index}.tif"
+        assert row["source_sha256"] == hashlib.sha256(input_path.read_bytes()).hexdigest()
+        assert row["status"] == "ok"
+        assert row["profile"] == "vesicle"
+        assert row["valid_fraction"] == "1.0"
     assert len(list(metrics_dir.glob("*_metrics.csv"))) == 2
 
 

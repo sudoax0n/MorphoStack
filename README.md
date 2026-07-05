@@ -120,6 +120,8 @@ Add `--recursive` to include subdirectories, and `--metrics-dir path\to\frames`
 to also save each stack's per-frame metrics CSV.
 Add `--bundle-dir path\to\runs` to create one run bundle per stack, each with
 `metrics.csv`, `manifest.json`, and `report.md`.
+The batch summary includes each stack's source SHA-256 so exported rows can be
+matched back to exact input files.
 
 To compare a new CSV export against a reference export:
 

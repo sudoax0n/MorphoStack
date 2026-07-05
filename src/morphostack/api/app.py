@@ -373,7 +373,9 @@ def create_app() -> FastAPI:
         for file in files:
             temp_path = save_upload_to_temp(file)
             source_name = file.filename or str(temp_path.name)
+            source_sha256 = ""
             try:
+                source_sha256 = file_sha256(temp_path)
                 stack = load_image_stack(
                     temp_path,
                     voxel_override=VoxelSize(voxel_x_um, voxel_y_um, voxel_z_um),
@@ -392,11 +394,12 @@ def create_app() -> FastAPI:
                         analysis,
                         source_path=source_name,
                         threshold=threshold,
+                        source_sha256=source_sha256,
                         voxel_source=stack.voxel_source,
                     )
                 )
             except Exception as exc:
-                rows.append(failed_analysis_summary_row(source_name, str(exc)))
+                rows.append(failed_analysis_summary_row(source_name, str(exc), source_sha256=source_sha256))
             finally:
                 temp_path.unlink(missing_ok=True)
 
