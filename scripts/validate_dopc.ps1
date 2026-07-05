@@ -163,12 +163,16 @@ Write-Host ""
 Write-Host "[6/6] Writing summary JSON..." -ForegroundColor Yellow
 
 # The no-mesh bundle manifest is in the sub-directory
+# The no-mesh bundle manifest is in the sub-directory
 $ManifestJson = Join-Path $BundleSubDir "manifest.json"
+# The mesh manifest is at the run root (written with --out / --manifest flags)
+$ManifestMeshJson = $ManifestMesh  # already set above: Join-Path $OutDir "manifest_mesh.json"
 $FrameCount   = 0
 $ValidFrames  = 0
 $MeshSA       = $null
 $MeshVol      = $null
 $MeshSph      = $null
+$MeshEqDiam   = $null
 $VoxelSource  = "unknown"
 
 if (Test-Path $ManifestJson) {
@@ -176,10 +180,16 @@ if (Test-Path $ManifestJson) {
     $FrameCount  = $manifest.frame_count
     $ValidFrames = $manifest.valid_frame_count
     $VoxelSource = $manifest.voxel_source
-    if ($manifest.PSObject.Properties["mesh_surface_area_um2"]) {
-        $MeshSA  = $manifest.mesh_surface_area_um2
-        $MeshVol = $manifest.mesh_volume_um3
-        $MeshSph = $manifest.mesh_sphericity
+}
+
+# Mesh metrics live under the "mesh" sub-object in the mesh manifest
+if (Test-Path $ManifestMeshJson) {
+    $meshManifest = Get-Content $ManifestMeshJson -Raw | ConvertFrom-Json
+    if ($meshManifest.PSObject.Properties["mesh"] -and $meshManifest.mesh -ne $null) {
+        $MeshSA    = $meshManifest.mesh.surface_area_um2
+        $MeshVol   = $meshManifest.mesh.volume_um3
+        $MeshSph   = $meshManifest.mesh.sphericity
+        $MeshEqDiam= $meshManifest.mesh.equivalent_sphere_diameter_um
     }
 }
 
@@ -192,9 +202,10 @@ $Summary = [ordered]@{
     "calibration_note"   = "Surface area and volume are computational outputs using the configured voxel size; biological interpretation requires verified microscope calibration."
     "frame_count"        = $FrameCount
     "valid_frame_count"  = $ValidFrames
-    "mesh_surface_area_um2"  = $MeshSA
-    "mesh_volume_um3"        = $MeshVol
-    "mesh_sphericity"        = $MeshSph
+    "mesh_surface_area_um2"          = $MeshSA
+    "mesh_volume_um3"                = $MeshVol
+    "mesh_equivalent_sphere_diam_um" = $MeshEqDiam
+    "mesh_sphericity"                = $MeshSph
     "outputs" = [ordered]@{
         "metrics_csv"       = $CsvNoMesh
         "metrics_mesh_csv"  = $CsvMesh
