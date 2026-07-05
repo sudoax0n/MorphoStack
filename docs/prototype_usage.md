@@ -32,6 +32,7 @@ If the default ports are busy:
    - If unsure, leave `1`, but say that physical units are uncalibrated.
 3. Click **Inspect**.
    - Confirm the stack shape and voxel source.
+   - This sets the preview frame slider range.
 4. In **Preview & Analyze**, choose profile:
    - `RBC` for tomorrow's RBC prototype.
    - `Vesicle` for the older vesicle-style workflow.
@@ -40,11 +41,15 @@ If the default ports are busy:
    - Leave blank to use the full stack.
 6. Optional: set **XY ROI**.
    - Leave blank unless you need to isolate one object.
-7. Click **Suggest Threshold**.
-8. Click **Preview** and inspect the segmentation overlay.
-9. Adjust threshold or preview frame if needed.
-10. Click **Analyze**.
-11. Download:
+   - You can type `xmin`, `xmax`, `ymin`, and `ymax`, or click **Preview** and
+     drag a rectangle directly on the preview image.
+   - The ROI fields apply globally to preview, analyze, batch, and sweep.
+7. Use the preview frame slider to scrub through the stack.
+8. Click **Suggest Threshold**.
+9. Click **Preview** and inspect the segmentation overlay.
+10. Adjust threshold, preview frame, ROI, or Z range if needed.
+11. Click **Analyze**.
+12. Download:
    - **CSV** for frame metrics.
    - **Manifest** for run settings/provenance.
    - **Report** for lab notes or presentation backup.
@@ -140,9 +145,12 @@ Batch analysis:
 
 ## Current Limitations
 
-- Manual polygon correction is not yet in MorphoStack.
+- Manual ROI selection is rectangular. Polygon/freehand ROI and manual contour
+  correction are not yet in MorphoStack.
 - RBC-specific biological metrics still need lab validation.
 - Mesh values depend strongly on segmentation quality and voxel calibration.
+- Mesh values are reported, but the old interactive 3D preview HTML workflow
+  has not yet been rebuilt in the new web app.
 - If voxel spacing is unknown, physical units should be treated cautiously.
 
 ## Quick Troubleshooting

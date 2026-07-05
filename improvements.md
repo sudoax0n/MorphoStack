@@ -15,6 +15,8 @@ Supported workflow pieces include:
 - stack inspection for TIFF/CZI inputs
 - threshold suggestion and threshold sweeps
 - Z-range trimming for top/bottom stack slices
+- frame preview scrubbing in the web UI
+- global XY ROI controls, including drag-to-select ROI from the preview image
 - per-frame shape analysis
 - vesicle and RBC profile selection
 - optional 3D mesh measurements for surface area, volume, equivalent sphere
@@ -37,6 +39,12 @@ but still uses the same threshold-contour measurement engine as vesicles.
 - The web UI is functional, but it is still a developer-style interface. It
   needs stronger researcher ergonomics: clearer run state, better file/session
   organization, less dense controls, and friendlier error recovery.
+- Manual ROI selection now exists in the web preview, but it is still a simple
+  rectangular selector. It does not yet support ImageJ/Fiji-style polygon/freehand
+  ROIs, multiple ROIs, saved ROI presets, or manual contour correction.
+- The web UI does not yet include the old standalone 3D preview HTML workflow.
+  Mesh measurements can be computed and reported, but the next UI step is an
+  interactive 3D viewer for surface inspection and presentation.
 - Mesh measurements should be treated as optional and carefully documented.
   Surface area and volume depend on segmentation quality, voxel calibration, and
   stack sampling; reports should make those assumptions obvious.
@@ -167,6 +175,10 @@ High priority:
 - define RBC-specific outputs with the lab before adding too many metrics
 - collect small representative vesicle and RBC test datasets
 - create trusted reference CSV outputs for regression validation
+- add an interactive 3D preview panel for mesh/surface review, ideally reusing
+  the old proof-of-concept where it is scientifically useful
+- add manual contour correction after the preview overlay so users can fix
+  difficult RBC/vesicle segmentations before exporting final metrics
 - make voxel calibration unavoidable or visibly warned
 - improve threshold sweep guidance so users can choose thresholds defensibly
 - make reports suitable for lab notebooks and methods sections

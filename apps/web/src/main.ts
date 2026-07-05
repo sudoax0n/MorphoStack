@@ -8,6 +8,13 @@ type VoxelOverride = {
 
 type AnalysisProfile = "vesicle" | "rbc";
 
+type RectRoi = {
+  xmin: number;
+  xmax: number;
+  ymin: number;
+  ymax: number;
+};
+
 type InspectResponse = {
   source_path: string;
   grayscale_shape: number[];
@@ -126,12 +133,7 @@ type ProjectSettings = {
   profile?: AnalysisProfile;
   threshold?: number;
   voxel_size?: VoxelOverride;
-  roi?: {
-    xmin: number;
-    xmax: number;
-    ymin: number;
-    ymax: number;
-  };
+  roi?: RectRoi;
   z_range?: {
     zmin: number;
     zmax: number;
@@ -272,9 +274,12 @@ app.innerHTML = `
             <option value="rbc">RBC</option>
           </select>
         </label>
-        <label>
+        <label class="wide frame-control">
           Preview frame
-          <input id="frame-input" type="number" min="0" step="1" value="0" />
+          <div class="frame-control-row">
+            <input id="frame-slider" type="range" min="0" max="0" step="1" value="0" />
+            <input id="frame-input" type="number" min="0" step="1" value="0" />
+          </div>
         </label>
         <label>
           Threshold
@@ -300,6 +305,10 @@ app.innerHTML = `
           <input id="roi-xmax" type="number" placeholder="xmax" />
           <input id="roi-ymin" type="number" placeholder="ymin" />
           <input id="roi-ymax" type="number" placeholder="ymax" />
+        </div>
+        <div class="button-row fieldset-actions">
+          <button id="clear-roi-btn" class="secondary" type="button">Clear ROI</button>
+          <span id="roi-status" class="inline-status">Full XY frame</span>
         </div>
       </fieldset>
       <fieldset>
@@ -496,9 +505,13 @@ const downloadBatchButton = mustElement<HTMLButtonElement>("download-batch-btn")
 const downloadBatchReportButton = mustElement<HTMLButtonElement>("download-batch-report-btn");
 const downloadSweepButton = mustElement<HTMLButtonElement>("download-sweep-btn");
 const downloadSweepReportButton = mustElement<HTMLButtonElement>("download-sweep-report-btn");
+const frameInput = mustElement<HTMLInputElement>("frame-input");
+const frameSlider = mustElement<HTMLInputElement>("frame-slider");
+const roiStatus = mustElement<HTMLSpanElement>("roi-status");
 let latestAnalysis: AnalyzeResponse | null = null;
 let latestBatch: BatchAnalyzeResponse | null = null;
 let latestSweep: SweepResponse | null = null;
+let inspectedFrameCount: number | null = null;
 
 mustElement<HTMLButtonElement>("inspect-btn").addEventListener("click", () => {
   void inspectStack();
@@ -514,6 +527,30 @@ mustElement<HTMLButtonElement>("preview-btn").addEventListener("click", () => {
 
 mustElement<HTMLButtonElement>("suggest-threshold-btn").addEventListener("click", () => {
   void suggestThreshold();
+});
+
+mustElement<HTMLButtonElement>("clear-roi-btn").addEventListener("click", () => {
+  clearRoiFields();
+});
+
+frameSlider.addEventListener("input", () => {
+  frameInput.value = frameSlider.value;
+});
+
+frameInput.addEventListener("input", () => {
+  syncFrameSliderToInput();
+});
+
+["z-min", "z-max"].forEach((id) => {
+  mustElement<HTMLInputElement>(id).addEventListener("input", () => {
+    updateFrameRange();
+  });
+});
+
+["roi-xmin", "roi-xmax", "roi-ymin", "roi-ymax"].forEach((id) => {
+  mustElement<HTMLInputElement>(id).addEventListener("input", () => {
+    updateRoiStatus();
+  });
 });
 
 mustElement<HTMLButtonElement>("batch-analyze-btn").addEventListener("click", () => {
@@ -631,6 +668,8 @@ async function inspectStack(): Promise<void> {
       z=${formatNumber(payload.voxel_size.z_um)} um<br />
       Voxel source: ${escapeHtml(payload.voxel_source)}
     `;
+    inspectedFrameCount = payload.grayscale_shape[0] ?? null;
+    updateFrameRange();
   } catch (error) {
     inspectOutput.textContent = errorMessage(error);
   }
@@ -640,6 +679,8 @@ async function previewStack(): Promise<void> {
   previewOutput.textContent = "Rendering preview...";
   try {
     const file = selectedFile();
+    const roi = readRoi();
+    const zRange = readZRange();
     const payload = file
       ? await apiUploadPost<PreviewResponse>("/api/upload/preview", previewUploadForm(file))
       : await apiPost<PreviewResponse>("/api/preview", {
@@ -647,11 +688,11 @@ async function previewStack(): Promise<void> {
           threshold: readNumber("threshold-input"),
           frame_index: readInteger("frame-input"),
           voxel: readVoxel(),
-          roi: readRoi(),
-          z_range: readZRange(),
+          roi,
+          z_range: zRange,
           prefer_opencv: !mustElement<HTMLInputElement>("fallback-input").checked
         });
-    renderPreview(payload);
+    renderPreview(payload, roi);
   } catch (error) {
     previewOutput.textContent = errorMessage(error);
   }
@@ -799,14 +840,18 @@ function renderSweep(payload: SweepResponse): void {
     .join("");
 }
 
-function renderPreview(payload: PreviewResponse): void {
+function renderPreview(payload: PreviewResponse, renderedRoi: RectRoi | null): void {
   previewOutput.innerHTML = `
-    <img
-      src="data:image/png;base64,${payload.image_png_base64}"
-      width="${payload.width}"
-      height="${payload.height}"
-      alt="Segmentation preview for frame ${payload.frame_index}"
-    />
+    <div class="preview-canvas">
+      <img
+        id="preview-image"
+        src="data:image/png;base64,${payload.image_png_base64}"
+        width="${payload.width}"
+        height="${payload.height}"
+        alt="Segmentation preview for frame ${payload.frame_index}"
+      />
+      <div id="roi-selection" class="roi-selection" hidden></div>
+    </div>
     <div>
       <strong>${escapeHtml(payload.source_path)}</strong><br />
       Frame ${payload.frame_index}, ${escapeHtml(payload.method)} contour<br />
@@ -815,6 +860,153 @@ function renderPreview(payload: PreviewResponse): void {
       circularity ${formatNumber(payload.circularity)}
     </div>
   `;
+  attachPreviewRoiSelector(payload, renderedRoi);
+}
+
+function attachPreviewRoiSelector(payload: PreviewResponse, renderedRoi: RectRoi | null): void {
+  const image = mustElement<HTMLImageElement>("preview-image");
+  const selection = mustElement<HTMLDivElement>("roi-selection");
+  let start: { x: number; y: number } | null = null;
+
+  image.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    start = pointerToImagePoint(event, image);
+    image.setPointerCapture(event.pointerId);
+    drawSelection(selection, start.x, start.y, start.x, start.y);
+  });
+
+  image.addEventListener("pointermove", (event) => {
+    if (!start) {
+      return;
+    }
+    const current = pointerToImagePoint(event, image);
+    drawSelection(selection, start.x, start.y, current.x, current.y);
+  });
+
+  image.addEventListener("pointerup", (event) => {
+    if (!start) {
+      return;
+    }
+    const end = pointerToImagePoint(event, image);
+    image.releasePointerCapture(event.pointerId);
+    applyDraggedRoi(start, end, image, payload, renderedRoi);
+    start = null;
+  });
+
+  image.addEventListener("pointercancel", () => {
+    start = null;
+    selection.hidden = true;
+  });
+}
+
+function pointerToImagePoint(event: PointerEvent, image: HTMLImageElement): { x: number; y: number } {
+  const rect = image.getBoundingClientRect();
+  return {
+    x: clamp(event.clientX - rect.left, 0, rect.width),
+    y: clamp(event.clientY - rect.top, 0, rect.height)
+  };
+}
+
+function drawSelection(selection: HTMLDivElement, startX: number, startY: number, endX: number, endY: number): void {
+  const left = Math.min(startX, endX);
+  const top = Math.min(startY, endY);
+  const width = Math.abs(endX - startX);
+  const height = Math.abs(endY - startY);
+  selection.hidden = false;
+  selection.style.left = `${left}px`;
+  selection.style.top = `${top}px`;
+  selection.style.width = `${width}px`;
+  selection.style.height = `${height}px`;
+}
+
+function applyDraggedRoi(
+  start: { x: number; y: number },
+  end: { x: number; y: number },
+  image: HTMLImageElement,
+  payload: PreviewResponse,
+  renderedRoi: RectRoi | null
+): void {
+  const rect = image.getBoundingClientRect();
+  const dragWidth = Math.abs(end.x - start.x);
+  const dragHeight = Math.abs(end.y - start.y);
+  if (dragWidth < 4 || dragHeight < 4 || rect.width <= 0 || rect.height <= 0) {
+    mustElement<HTMLDivElement>("roi-selection").hidden = true;
+    return;
+  }
+
+  const baseX = renderedRoi?.xmin ?? 0;
+  const baseY = renderedRoi?.ymin ?? 0;
+  const scaleX = payload.width / rect.width;
+  const scaleY = payload.height / rect.height;
+  const xmin = baseX + Math.floor(Math.min(start.x, end.x) * scaleX);
+  const xmax = baseX + Math.ceil(Math.max(start.x, end.x) * scaleX);
+  const ymin = baseY + Math.floor(Math.min(start.y, end.y) * scaleY);
+  const ymax = baseY + Math.ceil(Math.max(start.y, end.y) * scaleY);
+
+  setRoiFields({
+    xmin,
+    xmax: Math.max(xmax, xmin + 1),
+    ymin,
+    ymax: Math.max(ymax, ymin + 1)
+  });
+}
+
+function updateFrameRange(): void {
+  const maxFrame = effectivePreviewFrameCount() - 1;
+  frameSlider.max = String(maxFrame);
+  frameInput.max = String(maxFrame);
+  const clamped = clamp(Math.trunc(Number(frameInput.value) || 0), 0, maxFrame);
+  frameInput.value = String(clamped);
+  frameSlider.value = String(clamped);
+}
+
+function effectivePreviewFrameCount(): number {
+  const fallbackCount = inspectedFrameCount ?? 1;
+  try {
+    const zRange = readZRange();
+    if (zRange) {
+      return Math.max(1, zRange.zmax - zRange.zmin);
+    }
+  } catch {
+    return Math.max(1, fallbackCount);
+  }
+  return Math.max(1, fallbackCount);
+}
+
+function syncFrameSliderToInput(): void {
+  const maxFrame = Number(frameSlider.max);
+  const clamped = clamp(Math.trunc(Number(frameInput.value) || 0), 0, Number.isFinite(maxFrame) ? maxFrame : 0);
+  frameSlider.value = String(clamped);
+}
+
+function setRoiFields(roi: RectRoi): void {
+  mustElement<HTMLInputElement>("roi-xmin").value = String(roi.xmin);
+  mustElement<HTMLInputElement>("roi-xmax").value = String(roi.xmax);
+  mustElement<HTMLInputElement>("roi-ymin").value = String(roi.ymin);
+  mustElement<HTMLInputElement>("roi-ymax").value = String(roi.ymax);
+  updateRoiStatus();
+}
+
+function clearRoiFields(): void {
+  ["roi-xmin", "roi-xmax", "roi-ymin", "roi-ymax"].forEach((id) => {
+    mustElement<HTMLInputElement>(id).value = "";
+  });
+  const selection = document.getElementById("roi-selection");
+  if (selection instanceof HTMLDivElement) {
+    selection.hidden = true;
+  }
+  updateRoiStatus();
+}
+
+function updateRoiStatus(): void {
+  try {
+    const roi = readRoi();
+    roiStatus.textContent = roi ? `ROI ${roi.xmin}:${roi.xmax}, ${roi.ymin}:${roi.ymax}` : "Full XY frame";
+    roiStatus.className = "inline-status";
+  } catch (error) {
+    roiStatus.textContent = errorMessage(error);
+    roiStatus.className = "inline-status warn";
+  }
 }
 
 function renderAnalysis(payload: AnalyzeResponse): void {
@@ -1353,10 +1545,12 @@ function applyProjectSettings(settings: ProjectSettings): void {
     mustElement<HTMLInputElement>("roi-xmax").value = formatInputNumber(settings.roi.xmax);
     mustElement<HTMLInputElement>("roi-ymin").value = formatInputNumber(settings.roi.ymin);
     mustElement<HTMLInputElement>("roi-ymax").value = formatInputNumber(settings.roi.ymax);
+    updateRoiStatus();
   }
   if (settings.z_range !== undefined) {
     mustElement<HTMLInputElement>("z-min").value = formatInputNumber(settings.z_range.zmin);
     mustElement<HTMLInputElement>("z-max").value = formatInputNumber(settings.z_range.zmax);
+    updateFrameRange();
   }
   if (settings.include_mesh !== undefined) {
     mustElement<HTMLInputElement>("mesh-input").checked = settings.include_mesh;
@@ -1631,7 +1825,7 @@ function readProfile(): AnalysisProfile {
   return value;
 }
 
-function readRoi(): null | { xmin: number; xmax: number; ymin: number; ymax: number } {
+function readRoi(): RectRoi | null {
   const ids = ["roi-xmin", "roi-xmax", "roi-ymin", "roi-ymax"] as const;
   const values = ids.map((id) => mustElement<HTMLInputElement>(id).value.trim());
   if (values.every((value) => value === "")) {
@@ -1682,6 +1876,10 @@ function readInteger(id: string): number {
     throw new Error(`${id} must be an integer.`);
   }
   return value;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
 }
 
 function mustElement<T extends HTMLElement>(id: string): T {
