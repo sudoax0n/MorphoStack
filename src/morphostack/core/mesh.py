@@ -147,6 +147,7 @@ def contour_stack_mesh_geometry(
 ) -> MeshGeometry | None:
     """Rasterize contours and return a decimated mesh suitable for web display."""
 
+    contours = _filter_outlier_contours(contours)
     mask_stack = contours_to_mask_stack(contours, shape=shape)
     if np.count_nonzero(mask_stack) == 0:
         return None
@@ -156,7 +157,7 @@ def contour_stack_mesh_geometry(
     display_mask = mask_stack
     display_voxel = voxel
     if factor > 1 and min(mask_stack.shape) >= factor * 2:
-        display_mask = mask_stack[::factor, ::factor, ::factor]
+        display_mask = _zoom_mask(mask_stack, 1.0 / factor)
         display_voxel = VoxelSize(
             x_um=voxel.x_um * factor,
             y_um=voxel.y_um * factor,
@@ -164,6 +165,18 @@ def contour_stack_mesh_geometry(
         )
 
     return marching_cubes_geometry(display_mask, display_voxel, max_faces=max_faces)
+
+
+def _zoom_mask(mask: np.ndarray, scale: float) -> np.ndarray:
+    """Downsample a binary mask with interpolation to preserve connectivity."""
+    try:
+        from scipy.ndimage import zoom
+        zoomed = zoom(mask.astype(np.float32), scale, order=1)
+        return (zoomed > 0.5).astype(np.uint8)
+    except Exception:
+        # Fall back to stride slicing if scipy unavailable
+        s = max(1, int(round(1.0 / scale)))
+        return mask[::s, ::s, ::s]
 
 
 def align_mask_stack(mask_stack: np.ndarray) -> np.ndarray:
@@ -206,3 +219,28 @@ def mask_centroid(mask: np.ndarray) -> tuple[float, float]:
     if moments["m00"] == 0:
         return (0.0, 0.0)
     return (float(moments["m10"] / moments["m00"]), float(moments["m01"] / moments["m00"]))
+
+
+def _filter_outlier_contours(
+    contours: list[np.ndarray | None] | tuple[np.ndarray | None, ...],
+) -> tuple[np.ndarray | None, ...]:
+    """Drop contours whose area is far below the median — removes junk/noise frames."""
+    from morphostack.core.metrics import polygon_area
+
+    areas = []
+    for c in contours:
+        if c is not None:
+            areas.append(polygon_area(c))
+
+    if not areas:
+        return tuple(contours)
+
+    median_area = float(np.median(areas))
+    if median_area <= 0:
+        return tuple(contours)
+
+    min_area = median_area * 0.10
+    return tuple(
+        c if (c is not None and polygon_area(c) >= min_area) else None
+        for c in contours
+    )
