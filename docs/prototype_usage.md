@@ -36,9 +36,10 @@ If the default ports are busy:
 4. In **Preview & Analyze**, choose profile:
    - `RBC` for tomorrow's RBC prototype.
    - `Vesicle` for the older vesicle-style workflow.
-5. Optional: set **Z range**.
+5. Optional: set **Frame range for analysis/3D**.
    - `start=5`, `stop=30` means frames 5 through 29.
    - Leave blank to use the full stack.
+   - Use this to skip weak top/bottom slices before analysis or 3D mesh preview.
 6. Optional: set **XY ROI**.
    - Leave blank unless you need to isolate one object.
    - You can type `xmin`, `xmax`, `ymin`, and `ymax`, or click **Preview** and
@@ -47,7 +48,7 @@ If the default ports are busy:
 7. Use the preview frame slider to scrub through the stack.
 8. Click **Suggest Threshold**.
 9. Click **Preview** and inspect the segmentation overlay.
-10. Adjust threshold, preview frame, ROI, or Z range if needed.
+10. Adjust threshold, preview frame, ROI, or frame range if needed.
 11. Click **Analyze**.
 12. Optional: enable **Include 3D mesh**, then click **View 3D Mesh**.
     - The browser renders an interactive Plotly mesh.

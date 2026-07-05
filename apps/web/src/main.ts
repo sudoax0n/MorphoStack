@@ -327,10 +327,24 @@ app.innerHTML = `
         </div>
       </fieldset>
       <fieldset>
-        <legend>Z range optional</legend>
+        <legend>Frame range for analysis/3D</legend>
+        <div class="range-pair">
+          <label>
+            Start frame
+            <input id="z-start-slider" type="range" min="0" max="1" step="1" value="0" />
+          </label>
+          <label>
+            Stop frame
+            <input id="z-stop-slider" type="range" min="1" max="1" step="1" value="1" />
+          </label>
+        </div>
         <div class="grid two">
           <input id="z-min" type="number" min="0" step="1" placeholder="start" />
           <input id="z-max" type="number" min="0" step="1" placeholder="stop" />
+        </div>
+        <div class="button-row fieldset-actions">
+          <button id="use-full-range-btn" class="secondary" type="button">Use Full Stack</button>
+          <span id="z-range-status" class="inline-status">Full stack</span>
         </div>
       </fieldset>
       <div id="preview-output" class="preview-output muted">No preview rendered yet.</div>
@@ -524,7 +538,12 @@ const downloadSweepButton = mustElement<HTMLButtonElement>("download-sweep-btn")
 const downloadSweepReportButton = mustElement<HTMLButtonElement>("download-sweep-report-btn");
 const frameInput = mustElement<HTMLInputElement>("frame-input");
 const frameSlider = mustElement<HTMLInputElement>("frame-slider");
+const zMinInput = mustElement<HTMLInputElement>("z-min");
+const zMaxInput = mustElement<HTMLInputElement>("z-max");
+const zStartSlider = mustElement<HTMLInputElement>("z-start-slider");
+const zStopSlider = mustElement<HTMLInputElement>("z-stop-slider");
 const roiStatus = mustElement<HTMLSpanElement>("roi-status");
+const zRangeStatus = mustElement<HTMLSpanElement>("z-range-status");
 let latestAnalysis: AnalyzeResponse | null = null;
 let latestBatch: BatchAnalyzeResponse | null = null;
 let latestSweep: SweepResponse | null = null;
@@ -554,6 +573,10 @@ mustElement<HTMLButtonElement>("clear-roi-btn").addEventListener("click", () => 
   clearRoiFields();
 });
 
+mustElement<HTMLButtonElement>("use-full-range-btn").addEventListener("click", () => {
+  useFullFrameRange();
+});
+
 frameSlider.addEventListener("input", () => {
   frameInput.value = frameSlider.value;
 });
@@ -562,9 +585,21 @@ frameInput.addEventListener("input", () => {
   syncFrameSliderToInput();
 });
 
-["z-min", "z-max"].forEach((id) => {
-  mustElement<HTMLInputElement>(id).addEventListener("input", () => {
-    updateFrameRange();
+zStartSlider.addEventListener("input", () => {
+  const start = Math.min(Number(zStartSlider.value), Number(zStopSlider.value) - 1);
+  zMinInput.value = String(Math.max(0, start));
+  syncZRangeControls();
+});
+
+zStopSlider.addEventListener("input", () => {
+  const stop = Math.max(Number(zStopSlider.value), Number(zStartSlider.value) + 1);
+  zMaxInput.value = String(stop);
+  syncZRangeControls();
+});
+
+[zMinInput, zMaxInput].forEach((input) => {
+  input.addEventListener("input", () => {
+    syncZRangeControls();
   });
 });
 
@@ -690,7 +725,7 @@ async function inspectStack(): Promise<void> {
       Voxel source: ${escapeHtml(payload.voxel_source)}
     `;
     inspectedFrameCount = payload.grayscale_shape[0] ?? null;
-    updateFrameRange();
+    syncZRangeControls({ initializeFullRange: true });
   } catch (error) {
     inspectOutput.textContent = errorMessage(error);
   }
@@ -1004,6 +1039,42 @@ function updateFrameRange(): void {
   frameSlider.value = String(clamped);
 }
 
+function syncZRangeControls(options: { initializeFullRange?: boolean } = {}): void {
+  const count = Math.max(1, inspectedFrameCount ?? 1);
+  zStartSlider.max = String(Math.max(0, count - 1));
+  zStopSlider.max = String(count);
+
+  if (options.initializeFullRange || (zMinInput.value.trim() === "" && zMaxInput.value.trim() === "")) {
+    zMinInput.value = "0";
+    zMaxInput.value = String(count);
+  }
+
+  try {
+    const zRange = readZRange();
+    if (zRange) {
+      const start = clamp(zRange.zmin, 0, Math.max(0, count - 1));
+      const stop = clamp(zRange.zmax, start + 1, count);
+      zMinInput.value = String(start);
+      zMaxInput.value = String(stop);
+      zStartSlider.value = String(start);
+      zStopSlider.value = String(stop);
+      zRangeStatus.textContent = `Using frames ${start} to ${stop - 1} (${stop - start} frames)`;
+      zRangeStatus.className = "inline-status";
+    }
+  } catch (error) {
+    zRangeStatus.textContent = errorMessage(error);
+    zRangeStatus.className = "inline-status warn";
+  }
+  updateFrameRange();
+}
+
+function useFullFrameRange(): void {
+  const count = Math.max(1, inspectedFrameCount ?? 1);
+  zMinInput.value = "0";
+  zMaxInput.value = String(count);
+  syncZRangeControls();
+}
+
 function effectivePreviewFrameCount(): number {
   const fallbackCount = inspectedFrameCount ?? 1;
   try {
@@ -1065,6 +1136,7 @@ function renderMeshPreview(payload: MeshPreviewResponse): void {
     <div>
       <strong>${escapeHtml(payload.source_path)}</strong><br />
       Display mesh: ${payload.vertex_count} vertices, ${payload.face_count} faces, downsample x${payload.downsample}<br />
+      View: centered on mesh bounding box<br />
       Surface ${formatNumber(payload.surface_area_um2)} um2,
       volume ${formatNumber(payload.volume_um3)} um3,
       sphericity ${formatNumber(payload.sphericity)}
@@ -1075,9 +1147,10 @@ function renderMeshPreview(payload: MeshPreviewResponse): void {
 }
 
 function meshPreviewHtml(payload: MeshPreviewResponse): string {
-  const x = payload.vertices.map((vertex) => vertex[0]);
-  const y = payload.vertices.map((vertex) => vertex[1]);
-  const z = payload.vertices.map((vertex) => vertex[2]);
+  const bounds = meshBounds(payload.vertices);
+  const x = payload.vertices.map((vertex) => vertex[0] - bounds.xmin);
+  const y = payload.vertices.map((vertex) => vertex[1] - bounds.ymin);
+  const z = payload.vertices.map((vertex) => vertex[2] - bounds.zmin);
   const i = payload.faces.map((face) => face[0]);
   const j = payload.faces.map((face) => face[1]);
   const k = payload.faces.map((face) => face[2]);
@@ -1119,6 +1192,21 @@ function meshPreviewHtml(payload: MeshPreviewResponse): string {
   </script>
 </body>
 </html>`;
+}
+
+function meshBounds(vertices: number[][]): {
+  xmin: number;
+  ymin: number;
+  zmin: number;
+} {
+  return vertices.reduce(
+    (bounds, vertex) => ({
+      xmin: Math.min(bounds.xmin, vertex[0]),
+      ymin: Math.min(bounds.ymin, vertex[1]),
+      zmin: Math.min(bounds.zmin, vertex[2])
+    }),
+    { xmin: Number.POSITIVE_INFINITY, ymin: Number.POSITIVE_INFINITY, zmin: Number.POSITIVE_INFINITY }
+  );
 }
 
 function renderAnalysis(payload: AnalyzeResponse): void {
@@ -1662,7 +1750,7 @@ function applyProjectSettings(settings: ProjectSettings): void {
   if (settings.z_range !== undefined) {
     mustElement<HTMLInputElement>("z-min").value = formatInputNumber(settings.z_range.zmin);
     mustElement<HTMLInputElement>("z-max").value = formatInputNumber(settings.z_range.zmax);
-    updateFrameRange();
+    syncZRangeControls();
   }
   if (settings.include_mesh !== undefined) {
     mustElement<HTMLInputElement>("mesh-input").checked = settings.include_mesh;
@@ -1974,15 +2062,15 @@ function readZRange(): null | { zmin: number; zmax: number } {
     return null;
   }
   if (values.some((value) => value === "")) {
-    throw new Error("Z range requires start and stop.");
+    throw new Error("Frame range requires start and stop.");
   }
   const zmin = Number(values[0]);
   const zmax = Number(values[1]);
   if (!Number.isInteger(zmin) || !Number.isInteger(zmax)) {
-    throw new Error("Z range values must be integers.");
+    throw new Error("Frame range values must be integers.");
   }
   if (zmin < 0 || zmax <= zmin) {
-    throw new Error("Z range stop must be greater than start, and start cannot be negative.");
+    throw new Error("Frame range stop must be greater than start, and start cannot be negative.");
   }
   return { zmin, zmax };
 }

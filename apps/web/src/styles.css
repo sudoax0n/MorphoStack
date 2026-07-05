@@ -235,6 +235,20 @@ button:disabled:hover {
   padding: 0;
 }
 
+.range-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.range-pair label {
+  margin-bottom: 10px;
+}
+
+.range-pair input[type="range"] {
+  padding: 0;
+}
+
 .checkbox-row {
   display: flex;
   align-items: center;
