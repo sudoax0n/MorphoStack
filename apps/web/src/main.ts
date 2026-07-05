@@ -132,6 +132,10 @@ type ProjectSettings = {
     ymin: number;
     ymax: number;
   };
+  z_range?: {
+    zmin: number;
+    zmax: number;
+  };
   include_mesh?: boolean;
   prefer_opencv?: boolean;
   sweep?: {
@@ -287,6 +291,13 @@ app.innerHTML = `
           <input id="roi-xmax" type="number" placeholder="xmax" />
           <input id="roi-ymin" type="number" placeholder="ymin" />
           <input id="roi-ymax" type="number" placeholder="ymax" />
+        </div>
+      </fieldset>
+      <fieldset>
+        <legend>Z Range</legend>
+        <div class="grid two">
+          <input id="z-min" type="number" min="0" step="1" placeholder="start" />
+          <input id="z-max" type="number" min="0" step="1" placeholder="stop" />
         </div>
       </fieldset>
       <div id="preview-output" class="preview-output muted">No preview rendered yet.</div>
@@ -628,6 +639,7 @@ async function previewStack(): Promise<void> {
           frame_index: readInteger("frame-input"),
           voxel: readVoxel(),
           roi: readRoi(),
+          z_range: readZRange(),
           prefer_opencv: !mustElement<HTMLInputElement>("fallback-input").checked
         });
     renderPreview(payload);
@@ -646,7 +658,8 @@ async function suggestThreshold(): Promise<void> {
           path: readPath(),
           method: "auto",
           voxel: readVoxel(),
-          roi: readRoi()
+          roi: readRoi(),
+          z_range: readZRange()
         });
     mustElement<HTMLInputElement>("threshold-input").value = formatInputNumber(payload.threshold);
     previewOutput.innerHTML = `
@@ -675,6 +688,7 @@ async function analyzeStack(): Promise<void> {
           profile: readProfile(),
           voxel: readVoxel(),
           roi: readRoi(),
+          z_range: readZRange(),
           include_mesh: mustElement<HTMLInputElement>("mesh-input").checked,
           prefer_opencv: !mustElement<HTMLInputElement>("fallback-input").checked
         });
@@ -719,6 +733,7 @@ async function runSweep(): Promise<void> {
           profile: readProfile(),
           voxel: readVoxel(),
           roi: readRoi(),
+          z_range: readZRange(),
           include_mesh: mustElement<HTMLInputElement>("mesh-input").checked,
           prefer_opencv: !mustElement<HTMLInputElement>("fallback-input").checked
         });
@@ -1053,6 +1068,7 @@ function analysisReportMarkdown(payload: AnalyzeResponse): string {
     `- Profile: \`${payload.profile}\``,
     `- Threshold: \`${String(manifest.threshold ?? "")}\``,
     `- ROI: \`${manifest.roi === null || manifest.roi === undefined ? "full stack" : JSON.stringify(manifest.roi)}\``,
+    `- Z range: \`${manifest.z_range === null || manifest.z_range === undefined ? "full stack" : JSON.stringify(manifest.z_range)}\``,
     `- Include mesh: \`${String(manifest.include_mesh ?? false)}\``,
     `- Prefer OpenCV contours: \`${String(manifest.prefer_opencv ?? true)}\``,
     `- Voxel source: \`${payload.voxel_source}\``,
@@ -1221,12 +1237,14 @@ function sweepReportMarkdown(payload: SweepResponse): string {
 
 function currentProjectSettings(): ProjectSettings {
   const roi = readRoi();
+  const zRange = readZRange();
   return {
     version: 1,
     profile: readProfile(),
     threshold: readNumber("threshold-input"),
     voxel_size: readVoxel(),
     roi: roi ?? undefined,
+    z_range: zRange ?? undefined,
     include_mesh: mustElement<HTMLInputElement>("mesh-input").checked,
     prefer_opencv: !mustElement<HTMLInputElement>("fallback-input").checked,
     sweep: {
@@ -1276,6 +1294,15 @@ function validateProjectSettings(payload: unknown): ProjectSettings {
       ymax: finiteNumber(payload.roi.ymax, "roi.ymax")
     };
   }
+  if (payload.z_range !== undefined) {
+    if (!isRecord(payload.z_range)) {
+      throw new Error("Project z_range must be an object.");
+    }
+    settings.z_range = {
+      zmin: finiteNumber(payload.z_range.zmin, "z_range.zmin"),
+      zmax: finiteNumber(payload.z_range.zmax, "z_range.zmax")
+    };
+  }
   if (payload.include_mesh !== undefined) {
     settings.include_mesh = booleanValue(payload.include_mesh, "include_mesh");
   }
@@ -1317,6 +1344,10 @@ function applyProjectSettings(settings: ProjectSettings): void {
     mustElement<HTMLInputElement>("roi-xmax").value = formatInputNumber(settings.roi.xmax);
     mustElement<HTMLInputElement>("roi-ymin").value = formatInputNumber(settings.roi.ymin);
     mustElement<HTMLInputElement>("roi-ymax").value = formatInputNumber(settings.roi.ymax);
+  }
+  if (settings.z_range !== undefined) {
+    mustElement<HTMLInputElement>("z-min").value = formatInputNumber(settings.z_range.zmin);
+    mustElement<HTMLInputElement>("z-max").value = formatInputNumber(settings.z_range.zmax);
   }
   if (settings.include_mesh !== undefined) {
     mustElement<HTMLInputElement>("mesh-input").checked = settings.include_mesh;
@@ -1464,6 +1495,7 @@ function analyzeUploadForm(file: File): FormData {
   formData.set("include_mesh", String(mustElement<HTMLInputElement>("mesh-input").checked));
   formData.set("prefer_opencv", String(!mustElement<HTMLInputElement>("fallback-input").checked));
   appendRoiFields(formData);
+  appendZRangeFields(formData);
   return formData;
 }
 
@@ -1474,6 +1506,7 @@ function previewUploadForm(file: File): FormData {
   formData.set("frame_index", String(readInteger("frame-input")));
   formData.set("prefer_opencv", String(!mustElement<HTMLInputElement>("fallback-input").checked));
   appendRoiFields(formData);
+  appendZRangeFields(formData);
   return formData;
 }
 
@@ -1482,6 +1515,7 @@ function thresholdUploadForm(file: File): FormData {
   appendFileAndVoxel(formData, file);
   formData.set("method", "auto");
   appendRoiFields(formData);
+  appendZRangeFields(formData);
   return formData;
 }
 
@@ -1496,6 +1530,7 @@ function batchUploadForm(files: File[]): FormData {
   formData.set("include_mesh", String(mustElement<HTMLInputElement>("mesh-input").checked));
   formData.set("prefer_opencv", String(!mustElement<HTMLInputElement>("fallback-input").checked));
   appendRoiFields(formData);
+  appendZRangeFields(formData);
   return formData;
 }
 
@@ -1509,6 +1544,7 @@ function sweepUploadForm(file: File): FormData {
   formData.set("include_mesh", String(mustElement<HTMLInputElement>("mesh-input").checked));
   formData.set("prefer_opencv", String(!mustElement<HTMLInputElement>("fallback-input").checked));
   appendRoiFields(formData);
+  appendZRangeFields(formData);
   return formData;
 }
 
@@ -1553,6 +1589,15 @@ function appendRoiFields(formData: FormData): void {
   });
 }
 
+function appendZRangeFields(formData: FormData): void {
+  const zRange = readZRange();
+  if (zRange === null) {
+    return;
+  }
+  formData.set("z_min", String(zRange.zmin));
+  formData.set("z_max", String(zRange.zmax));
+}
+
 function readPath(): string {
   const value = mustElement<HTMLInputElement>("path-input").value.trim();
   if (!value) {
@@ -1592,6 +1637,26 @@ function readRoi(): null | { xmin: number; xmax: number; ymin: number; ymax: num
     ymin: Number(values[2]),
     ymax: Number(values[3])
   };
+}
+
+function readZRange(): null | { zmin: number; zmax: number } {
+  const ids = ["z-min", "z-max"] as const;
+  const values = ids.map((id) => mustElement<HTMLInputElement>(id).value.trim());
+  if (values.every((value) => value === "")) {
+    return null;
+  }
+  if (values.some((value) => value === "")) {
+    throw new Error("Z range requires start and stop.");
+  }
+  const zmin = Number(values[0]);
+  const zmax = Number(values[1]);
+  if (!Number.isInteger(zmin) || !Number.isInteger(zmax)) {
+    throw new Error("Z range values must be integers.");
+  }
+  if (zmin < 0 || zmax <= zmin) {
+    throw new Error("Z range stop must be greater than start, and start cannot be negative.");
+  }
+  return { zmin, zmax };
 }
 
 function readNumber(id: string): number {

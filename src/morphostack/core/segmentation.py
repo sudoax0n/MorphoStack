@@ -76,3 +76,18 @@ def apply_rect_roi(
     else:
         arr[:, ~mask, :] = 0
     return arr
+
+
+def apply_z_range(stack: np.ndarray, *, zmin: int, zmax: int) -> np.ndarray:
+    """Return a stack trimmed to an inclusive-exclusive Z slice range."""
+
+    arr = np.asarray(stack)
+    if arr.ndim < 3:
+        raise ValueError("Z range trimming expects a stack with at least 3 dimensions")
+
+    frame_count = arr.shape[0]
+    z0 = max(0, min(frame_count, zmin))
+    z1 = max(0, min(frame_count, zmax))
+    if z1 <= z0:
+        raise ValueError("Z range bounds must define at least one frame")
+    return arr[z0:z1]

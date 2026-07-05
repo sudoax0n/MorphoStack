@@ -103,6 +103,28 @@ def test_analyze_stack_without_mesh(client, tmp_path):
     assert payload["rows"][0]["solidity"] == 1.0
 
 
+def test_analyze_stack_accepts_z_range(client, tmp_path):
+    path = tmp_path / "stack.tif"
+    write_stack(path)
+
+    response = client.post(
+        "/analyze",
+        json={
+            "path": str(path),
+            "threshold": 100,
+            "voxel": {"x_um": 1.0, "y_um": 1.0, "z_um": 1.0},
+            "z_range": {"zmin": 1, "zmax": 3},
+            "prefer_opencv": False,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["frame_count"] == 2
+    assert payload["manifest"]["z_range"] == {"zmin": 1, "zmax": 3}
+    assert [row["frame_index"] for row in payload["rows"]] == [1, 2]
+
+
 def test_analyze_stack_with_mesh(client, tmp_path):
     pytest.importorskip("cv2")
     pytest.importorskip("skimage")

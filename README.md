@@ -19,7 +19,7 @@ morphostack sweep path\to\stack.tif --start 50 --stop 200 --step 10 --out sweep.
 morphostack analyze path\to\stack.tif --threshold 100 --out metrics.csv
 morphostack analyze path\to\stack.tif --threshold 100 --out metrics.csv --report
 morphostack analyze path\to\stack.tif --threshold 100 --bundle-dir runs
-morphostack analyze path\to\stack.tif --threshold 100 --profile rbc --out metrics.csv
+morphostack analyze path\to\stack.tif --threshold 100 --profile rbc --z-range 5 30 --out metrics.csv
 morphostack batch path\to\stacks --threshold 100 --out batch_summary.csv
 morphostack batch path\to\stacks --threshold 100 --out batch_summary.csv --bundle-dir runs
 morphostack validate reference_metrics.csv new_metrics.csv
@@ -94,7 +94,7 @@ To run the current headless analysis pipeline and export per-frame metrics:
 ```
 
 With a project file, the same command can reuse stored threshold, profile,
-voxel size, ROI, mesh, and contour settings:
+voxel size, ROI, Z range, mesh, and contour settings:
 
 ```bash
 .\.venv\Scripts\morphostack analyze path\to\stack.tif --out metrics.csv --project morphostack.project.json
@@ -105,10 +105,14 @@ profile. The current RBC profile shares the same threshold-contour engine while
 providing a clean branch point for RBC-specific metrics.
 
 Add `--mesh` to assemble contour masks and include marching-cubes 3D surface area, volume, equivalent sphere diameter, and sphericity in the CSV.
+Use `--z-range ZMIN ZMAX` to trim top/bottom stack slices before thresholding,
+preview, sweep, analysis, or batch processing. Bounds are inclusive-exclusive,
+so `--z-range 5 30` analyzes source frames 5 through 29 and preserves those
+source frame indices in exported rows.
 By default, `morphostack analyze` also writes `<metrics.csv>.manifest.json`
-with source path, version, profile, voxel size, ROI, threshold, mesh settings,
-source SHA-256, voxel source, run-level summary statistics, quality warnings,
-and CSV columns.
+with source path, version, profile, voxel size, ROI, Z range, threshold, mesh
+settings, source SHA-256, voxel source, run-level summary statistics, quality
+warnings, and CSV columns.
 Use `--no-manifest` to skip it or
 `--manifest path\to\run.json` to choose the JSON path.
 Add `--report` to also write a Markdown report at

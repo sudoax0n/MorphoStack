@@ -18,6 +18,7 @@ from morphostack.core import (
     RectROI,
     SWEEP_COLUMNS,
     VoxelSize,
+    ZRange,
     analyze_stack,
     analysis_manifest,
     analysis_run_warnings,
@@ -35,7 +36,7 @@ from morphostack.core import (
 )
 from morphostack.core.export import BATCH_SUMMARY_COLUMNS, analysis_rows
 from morphostack.core.preview import PreviewImage, render_segmentation_preview_png
-from morphostack.core.segmentation import apply_rect_roi
+from morphostack.core.segmentation import apply_rect_roi, apply_z_range
 
 
 class VoxelOverride(BaseModel):
@@ -51,6 +52,11 @@ class ROIRequest(BaseModel):
     ymax: int
 
 
+class ZRangeRequest(BaseModel):
+    zmin: int
+    zmax: int
+
+
 class InspectRequest(BaseModel):
     path: str
     voxel: VoxelOverride | None = None
@@ -62,6 +68,7 @@ class AnalyzeRequest(BaseModel):
     profile: str = DEFAULT_PROFILE
     voxel: VoxelOverride | None = None
     roi: ROIRequest | None = None
+    z_range: ZRangeRequest | None = None
     include_mesh: bool = False
     prefer_opencv: bool = True
 
@@ -72,6 +79,7 @@ class PreviewRequest(BaseModel):
     frame_index: int = Field(default=0, ge=0)
     voxel: VoxelOverride | None = None
     roi: ROIRequest | None = None
+    z_range: ZRangeRequest | None = None
     prefer_opencv: bool = True
 
 
@@ -80,6 +88,7 @@ class ThresholdRequest(BaseModel):
     method: str = "auto"
     voxel: VoxelOverride | None = None
     roi: ROIRequest | None = None
+    z_range: ZRangeRequest | None = None
 
 
 class SweepRequest(BaseModel):
@@ -90,6 +99,7 @@ class SweepRequest(BaseModel):
     profile: str = DEFAULT_PROFILE
     voxel: VoxelOverride | None = None
     roi: ROIRequest | None = None
+    z_range: ZRangeRequest | None = None
     include_mesh: bool = False
     prefer_opencv: bool = True
 
@@ -126,6 +136,7 @@ def create_app() -> FastAPI:
                 thresholds=request.threshold,
                 voxel_size=stack.voxel_size,
                 roi=to_rect_roi(request.roi),
+                z_range=to_z_range(request.z_range),
                 profile=request.profile,
                 prefer_opencv=request.prefer_opencv,
                 include_mesh=request.include_mesh,
@@ -157,6 +168,7 @@ def create_app() -> FastAPI:
                 source_sha256=source_sha256,
                 threshold=request.threshold,
                 roi=roi_payload(to_rect_roi(request.roi)),
+                z_range=z_range_payload(to_z_range(request.z_range)),
                 include_mesh=request.include_mesh,
                 prefer_opencv=request.prefer_opencv,
                 voxel_source=stack.voxel_source,
@@ -168,7 +180,7 @@ def create_app() -> FastAPI:
     def threshold(request: ThresholdRequest) -> dict[str, object]:
         try:
             stack = load_image_stack(request.path, voxel_override=to_voxel_size(request.voxel))
-            grayscale = apply_preview_roi(stack.grayscale, to_rect_roi(request.roi))
+            grayscale = apply_preview_filters(stack.grayscale, to_rect_roi(request.roi), to_z_range(request.z_range))
             value, method = suggest_threshold(grayscale, method=request.method)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -179,7 +191,7 @@ def create_app() -> FastAPI:
     def preview(request: PreviewRequest) -> dict[str, object]:
         try:
             stack = load_image_stack(request.path, voxel_override=to_voxel_size(request.voxel))
-            grayscale = apply_preview_roi(stack.grayscale, to_rect_roi(request.roi))
+            grayscale = apply_preview_filters(stack.grayscale, to_rect_roi(request.roi), to_z_range(request.z_range))
             preview_image = render_segmentation_preview_png(
                 grayscale,
                 frame_index=request.frame_index,
@@ -201,6 +213,7 @@ def create_app() -> FastAPI:
                 thresholds=thresholds,
                 voxel_size=stack.voxel_size,
                 roi=to_rect_roi(request.roi),
+                z_range=to_z_range(request.z_range),
                 profile=request.profile,
                 prefer_opencv=request.prefer_opencv,
                 include_mesh=request.include_mesh,
@@ -256,6 +269,8 @@ def create_app() -> FastAPI:
         roi_xmax: Annotated[int | None, Form()] = None,
         roi_ymin: Annotated[int | None, Form()] = None,
         roi_ymax: Annotated[int | None, Form()] = None,
+        z_min: Annotated[int | None, Form()] = None,
+        z_max: Annotated[int | None, Form()] = None,
     ) -> dict[str, object]:
         temp_path = save_upload_to_temp(file)
         try:
@@ -269,6 +284,7 @@ def create_app() -> FastAPI:
                 thresholds=threshold,
                 voxel_size=stack.voxel_size,
                 roi=roi_from_optional_bounds(roi_xmin, roi_xmax, roi_ymin, roi_ymax),
+                z_range=z_range_from_optional_bounds(z_min, z_max),
                 profile=profile,
                 prefer_opencv=prefer_opencv,
                 include_mesh=include_mesh,
@@ -302,6 +318,7 @@ def create_app() -> FastAPI:
                 source_sha256=source_sha256,
                 threshold=threshold,
                 roi=roi_payload(roi_from_optional_bounds(roi_xmin, roi_xmax, roi_ymin, roi_ymax)),
+                z_range=z_range_payload(z_range_from_optional_bounds(z_min, z_max)),
                 include_mesh=include_mesh,
                 prefer_opencv=prefer_opencv,
                 voxel_source=stack.voxel_source,
@@ -322,6 +339,8 @@ def create_app() -> FastAPI:
         roi_xmax: Annotated[int | None, Form()] = None,
         roi_ymin: Annotated[int | None, Form()] = None,
         roi_ymax: Annotated[int | None, Form()] = None,
+        z_min: Annotated[int | None, Form()] = None,
+        z_max: Annotated[int | None, Form()] = None,
     ) -> dict[str, object]:
         temp_path = save_upload_to_temp(file)
         try:
@@ -329,9 +348,10 @@ def create_app() -> FastAPI:
                 temp_path,
                 voxel_override=VoxelSize(voxel_x_um, voxel_y_um, voxel_z_um),
             )
-            grayscale = apply_preview_roi(
+            grayscale = apply_preview_filters(
                 stack.grayscale,
                 roi_from_optional_bounds(roi_xmin, roi_xmax, roi_ymin, roi_ymax),
+                z_range_from_optional_bounds(z_min, z_max),
             )
             preview_image = render_segmentation_preview_png(
                 grayscale,
@@ -360,12 +380,15 @@ def create_app() -> FastAPI:
         roi_xmax: Annotated[int | None, Form()] = None,
         roi_ymin: Annotated[int | None, Form()] = None,
         roi_ymax: Annotated[int | None, Form()] = None,
+        z_min: Annotated[int | None, Form()] = None,
+        z_max: Annotated[int | None, Form()] = None,
     ) -> dict[str, object]:
         if not files:
             raise HTTPException(status_code=400, detail="At least one stack file is required.")
 
         try:
             roi = roi_from_optional_bounds(roi_xmin, roi_xmax, roi_ymin, roi_ymax)
+            z_range = z_range_from_optional_bounds(z_min, z_max)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -385,6 +408,7 @@ def create_app() -> FastAPI:
                     thresholds=threshold,
                     voxel_size=stack.voxel_size,
                     roi=roi,
+                    z_range=z_range,
                     profile=profile,
                     prefer_opencv=prefer_opencv,
                     include_mesh=include_mesh,
@@ -455,6 +479,8 @@ def create_app() -> FastAPI:
         roi_xmax: Annotated[int | None, Form()] = None,
         roi_ymin: Annotated[int | None, Form()] = None,
         roi_ymax: Annotated[int | None, Form()] = None,
+        z_min: Annotated[int | None, Form()] = None,
+        z_max: Annotated[int | None, Form()] = None,
     ) -> dict[str, object]:
         temp_path = save_upload_to_temp(file)
         try:
@@ -462,9 +488,10 @@ def create_app() -> FastAPI:
                 temp_path,
                 voxel_override=VoxelSize(voxel_x_um, voxel_y_um, voxel_z_um),
             )
-            grayscale = apply_preview_roi(
+            grayscale = apply_preview_filters(
                 stack.grayscale,
                 roi_from_optional_bounds(roi_xmin, roi_xmax, roi_ymin, roi_ymax),
+                z_range_from_optional_bounds(z_min, z_max),
             )
             value, used_method = suggest_threshold(grayscale, method=method)
         except Exception as exc:
@@ -490,6 +517,8 @@ def create_app() -> FastAPI:
         roi_xmax: Annotated[int | None, Form()] = None,
         roi_ymin: Annotated[int | None, Form()] = None,
         roi_ymax: Annotated[int | None, Form()] = None,
+        z_min: Annotated[int | None, Form()] = None,
+        z_max: Annotated[int | None, Form()] = None,
     ) -> dict[str, object]:
         temp_path = save_upload_to_temp(file)
         try:
@@ -503,6 +532,7 @@ def create_app() -> FastAPI:
                 thresholds=thresholds,
                 voxel_size=stack.voxel_size,
                 roi=roi_from_optional_bounds(roi_xmin, roi_xmax, roi_ymin, roi_ymax),
+                z_range=z_range_from_optional_bounds(z_min, z_max),
                 profile=profile,
                 prefer_opencv=prefer_opencv,
                 include_mesh=include_mesh,
@@ -535,6 +565,12 @@ def to_rect_roi(roi: ROIRequest | None) -> RectROI | None:
     return RectROI(roi.xmin, roi.xmax, roi.ymin, roi.ymax)
 
 
+def to_z_range(z_range: ZRangeRequest | None) -> ZRange | None:
+    if z_range is None:
+        return None
+    return ZRange(z_range.zmin, z_range.zmax)
+
+
 def roi_from_optional_bounds(
     xmin: int | None,
     xmax: int | None,
@@ -549,13 +585,30 @@ def roi_from_optional_bounds(
     return RectROI(xmin, xmax, ymin, ymax)
 
 
+def z_range_from_optional_bounds(z_min: int | None, z_max: int | None) -> ZRange | None:
+    values = (z_min, z_max)
+    if all(value is None for value in values):
+        return None
+    if any(value is None for value in values):
+        raise ValueError("Z range requires z_min and z_max")
+    return ZRange(z_min, z_max)
+
+
 def roi_payload(roi: RectROI | None) -> dict[str, int] | None:
     if roi is None:
         return None
     return {"xmin": roi.xmin, "xmax": roi.xmax, "ymin": roi.ymin, "ymax": roi.ymax}
 
 
-def apply_preview_roi(stack, roi: RectROI | None):
+def z_range_payload(z_range: ZRange | None) -> dict[str, int] | None:
+    if z_range is None:
+        return None
+    return {"zmin": z_range.zmin, "zmax": z_range.zmax}
+
+
+def apply_preview_filters(stack, roi: RectROI | None, z_range: ZRange | None):
+    if z_range is not None:
+        stack = apply_z_range(stack, zmin=z_range.zmin, zmax=z_range.zmax)
     if roi is None:
         return stack
     return apply_rect_roi(

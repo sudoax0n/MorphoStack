@@ -10,6 +10,7 @@ from morphostack.core import (
     RectROI,
     SweepSettings,
     VoxelSize,
+    ZRange,
     load_project_settings,
     write_project_settings,
 )
@@ -22,6 +23,7 @@ def test_project_settings_round_trip_json(tmp_path):
         threshold=100,
         voxel_size=VoxelSize(0.1, 0.2, 0.5),
         roi=RectROI(1, 7, 2, 8),
+        z_range=ZRange(2, 9),
         include_mesh=True,
         prefer_opencv=False,
         sweep=SweepSettings(start=50, stop=150, step=25),
@@ -36,6 +38,7 @@ def test_project_settings_round_trip_json(tmp_path):
     assert payload["profile"] == "rbc"
     assert payload["voxel_size"] == {"x_um": 0.1, "y_um": 0.2, "z_um": 0.5}
     assert payload["roi"] == {"xmin": 1, "xmax": 7, "ymin": 2, "ymax": 8}
+    assert payload["z_range"] == {"zmin": 2, "zmax": 9}
     assert payload["sweep"] == {"start": 50, "stop": 150, "step": 25}
 
 

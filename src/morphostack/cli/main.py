@@ -21,12 +21,14 @@ from morphostack.core import (
     RectROI,
     SweepSettings,
     VoxelSize,
+    ZRange,
     analyze_stack,
     analysis_manifest,
     analysis_run_warnings,
     analysis_summary,
     analysis_summary_row,
     apply_rect_roi,
+    apply_z_range,
     best_sweep_result,
     failed_analysis_summary_row,
     file_sha256,
@@ -111,6 +113,7 @@ def build_parser() -> argparse.ArgumentParser:
     project_init.add_argument("--voxel-y", type=float, help="Default Y voxel size in micrometers.")
     project_init.add_argument("--voxel-z", type=float, help="Default Z voxel size in micrometers.")
     project_init.add_argument("--roi", nargs=4, type=int, metavar=("XMIN", "XMAX", "YMIN", "YMAX"))
+    project_init.add_argument("--z-range", nargs=2, type=int, metavar=("ZMIN", "ZMAX"))
     project_init.add_argument("--mesh", action="store_true", help="Default to 3D mesh measurements.")
     project_init.add_argument(
         "--fallback-contours",
@@ -153,6 +156,7 @@ def build_parser() -> argparse.ArgumentParser:
     threshold.add_argument("--voxel-y", type=float, help="Override Y voxel size in micrometers.")
     threshold.add_argument("--voxel-z", type=float, help="Override Z voxel size in micrometers.")
     threshold.add_argument("--roi", nargs=4, type=int, metavar=("XMIN", "XMAX", "YMIN", "YMAX"))
+    threshold.add_argument("--z-range", nargs=2, type=int, metavar=("ZMIN", "ZMAX"))
     threshold.add_argument("--project", help="Project settings JSON path.")
     sweep = subparsers.add_parser(
         "sweep",
@@ -173,6 +177,7 @@ def build_parser() -> argparse.ArgumentParser:
     sweep.add_argument("--voxel-y", type=float, help="Override Y voxel size in micrometers.")
     sweep.add_argument("--voxel-z", type=float, help="Override Z voxel size in micrometers.")
     sweep.add_argument("--roi", nargs=4, type=int, metavar=("XMIN", "XMAX", "YMIN", "YMAX"))
+    sweep.add_argument("--z-range", nargs=2, type=int, metavar=("ZMIN", "ZMAX"))
     sweep.add_argument("--project", help="Project settings JSON path.")
     sweep.add_argument(
         "--mesh",
@@ -211,6 +216,7 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.add_argument("--voxel-y", type=float, help="Override Y voxel size in micrometers.")
     analyze.add_argument("--voxel-z", type=float, help="Override Z voxel size in micrometers.")
     analyze.add_argument("--roi", nargs=4, type=int, metavar=("XMIN", "XMAX", "YMIN", "YMAX"))
+    analyze.add_argument("--z-range", nargs=2, type=int, metavar=("ZMIN", "ZMAX"))
     analyze.add_argument("--manifest", help="Manifest JSON output path. Default: <csv>.manifest.json.")
     analyze.add_argument("--no-manifest", action="store_true", help="Do not write a manifest JSON sidecar.")
     analyze.add_argument(
@@ -259,6 +265,7 @@ def build_parser() -> argparse.ArgumentParser:
     batch.add_argument("--voxel-y", type=float, help="Override Y voxel size in micrometers.")
     batch.add_argument("--voxel-z", type=float, help="Override Z voxel size in micrometers.")
     batch.add_argument("--roi", nargs=4, type=int, metavar=("XMIN", "XMAX", "YMIN", "YMAX"))
+    batch.add_argument("--z-range", nargs=2, type=int, metavar=("ZMIN", "ZMAX"))
     batch.add_argument("--project", help="Project settings JSON path.")
     batch.add_argument(
         "--mesh",
@@ -326,6 +333,7 @@ def main(argv: list[str] | None = None) -> int:
                 voxel_y=args.voxel_y,
                 voxel_z=args.voxel_z,
                 roi=args.roi,
+                z_range=args.z_range,
                 include_mesh=args.mesh,
                 prefer_opencv=not args.fallback_contours,
                 sweep_start=args.sweep_start,
@@ -355,6 +363,7 @@ def main(argv: list[str] | None = None) -> int:
             voxel_y=args.voxel_y,
             voxel_z=args.voxel_z,
             roi=args.roi,
+            z_range=args.z_range,
             project=args.project,
         )
 
@@ -378,6 +387,7 @@ def main(argv: list[str] | None = None) -> int:
             voxel_y=args.voxel_y,
             voxel_z=args.voxel_z,
             roi=args.roi,
+            z_range=args.z_range,
             manifest=args.manifest,
             report=args.report,
             write_manifest=not args.no_manifest,
@@ -398,6 +408,7 @@ def main(argv: list[str] | None = None) -> int:
             voxel_y=args.voxel_y,
             voxel_z=args.voxel_z,
             roi=args.roi,
+            z_range=args.z_range,
             prefer_opencv=prefer_opencv_from_flag(args.fallback_contours),
             include_mesh=args.include_mesh,
             project=args.project,
@@ -416,6 +427,7 @@ def main(argv: list[str] | None = None) -> int:
             voxel_y=args.voxel_y,
             voxel_z=args.voxel_z,
             roi=args.roi,
+            z_range=args.z_range,
             prefer_opencv=prefer_opencv_from_flag(args.fallback_contours),
             include_mesh=args.include_mesh,
             project=args.project,
@@ -562,6 +574,7 @@ def run_project_init(
     voxel_y: float | None = None,
     voxel_z: float | None = None,
     roi: list[int] | None = None,
+    z_range: list[int] | None = None,
     include_mesh: bool = False,
     prefer_opencv: bool = True,
     sweep_start: float | None = None,
@@ -584,6 +597,7 @@ def run_project_init(
             threshold=threshold,
             voxel_size=voxel_override_result if isinstance(voxel_override_result, VoxelSize) else None,
             roi=RectROI(*roi) if roi is not None else None,
+            z_range=ZRange(*z_range) if z_range is not None else None,
             include_mesh=include_mesh,
             prefer_opencv=prefer_opencv,
             sweep=SweepSettings(start=sweep_start, stop=sweep_stop, step=sweep_step),
@@ -614,6 +628,7 @@ def run_analyze(
     voxel_y: float | None = None,
     voxel_z: float | None = None,
     roi: list[int] | None = None,
+    z_range: list[int] | None = None,
     manifest: str | None = None,
     report: str | None = None,
     write_manifest: bool = True,
@@ -641,6 +656,7 @@ def run_analyze(
     voxel_override = voxel_override_result
 
     rect_roi = resolve_roi(project_settings, roi)
+    resolved_z_range = resolve_z_range(project_settings, z_range)
     run_bundle_dir = None
 
     try:
@@ -651,6 +667,7 @@ def run_analyze(
             thresholds=resolved_threshold,
             voxel_size=stack.voxel_size,
             roi=rect_roi,
+            z_range=resolved_z_range,
             profile=resolved_profile,
             prefer_opencv=resolved_prefer_opencv,
             include_mesh=resolved_mesh,
@@ -677,6 +694,7 @@ def run_analyze(
                     source_sha256=source_sha256,
                     threshold=resolved_threshold,
                     roi=roi_to_payload(rect_roi),
+                    z_range=z_range_to_payload(resolved_z_range),
                     include_mesh=resolved_mesh,
                     prefer_opencv=resolved_prefer_opencv,
                     voxel_source=stack.voxel_source,
@@ -698,6 +716,7 @@ def run_analyze(
                 source_sha256=source_sha256,
                 threshold=resolved_threshold,
                 roi=roi_to_payload(rect_roi),
+                z_range=z_range_to_payload(resolved_z_range),
                 include_mesh=resolved_mesh,
                 prefer_opencv=resolved_prefer_opencv,
                 voxel_source=stack.voxel_source,
@@ -746,6 +765,7 @@ def run_threshold(
     voxel_y: float | None = None,
     voxel_z: float | None = None,
     roi: list[int] | None = None,
+    z_range: list[int] | None = None,
     project: str | None = None,
 ) -> int:
     project_settings = load_project_for_command(project)
@@ -757,10 +777,17 @@ def run_threshold(
         return 2
     voxel_override = voxel_override_result
     rect_roi = resolve_roi(project_settings, roi)
+    resolved_z_range = resolve_z_range(project_settings, z_range)
 
     try:
         stack = load_image_stack(path, voxel_override=voxel_override)
         grayscale = stack.grayscale
+        if resolved_z_range is not None:
+            grayscale = apply_z_range(
+                grayscale,
+                zmin=resolved_z_range.zmin,
+                zmax=resolved_z_range.zmax,
+            )
         if rect_roi is not None:
             grayscale = apply_rect_roi(
                 grayscale,
@@ -794,6 +821,7 @@ def run_sweep(
     voxel_y: float | None = None,
     voxel_z: float | None = None,
     roi: list[int] | None = None,
+    z_range: list[int] | None = None,
     prefer_opencv: bool | None = None,
     include_mesh: bool | None = None,
     project: str | None = None,
@@ -816,6 +844,7 @@ def run_sweep(
         return 2
     voxel_override = voxel_override_result
     rect_roi = resolve_roi(project_settings, roi)
+    resolved_z_range = resolve_z_range(project_settings, z_range)
 
     try:
         thresholds = threshold_values(start, stop, step)
@@ -825,6 +854,7 @@ def run_sweep(
             thresholds=thresholds,
             voxel_size=stack.voxel_size,
             roi=rect_roi,
+            z_range=resolved_z_range,
             profile=resolved_profile,
             prefer_opencv=resolved_prefer_opencv,
             include_mesh=resolved_mesh,
@@ -865,6 +895,7 @@ def run_batch(
     voxel_y: float | None = None,
     voxel_z: float | None = None,
     roi: list[int] | None = None,
+    z_range: list[int] | None = None,
     prefer_opencv: bool | None = None,
     include_mesh: bool | None = None,
     project: str | None = None,
@@ -885,6 +916,7 @@ def run_batch(
         return 2
     voxel_override = voxel_override_result
     rect_roi = resolve_roi(project_settings, roi)
+    resolved_z_range = resolve_z_range(project_settings, z_range)
     input_dir = Path(directory)
     if not input_dir.is_dir():
         print(f"Batch directory does not exist: {input_dir}")
@@ -916,6 +948,7 @@ def run_batch(
                 thresholds=resolved_threshold,
                 voxel_size=stack.voxel_size,
                 roi=rect_roi,
+                z_range=resolved_z_range,
                 profile=resolved_profile,
                 prefer_opencv=resolved_prefer_opencv,
                 include_mesh=resolved_mesh,
@@ -942,6 +975,7 @@ def run_batch(
                         source_sha256=source_sha256,
                         threshold=resolved_threshold,
                         roi=roi_to_payload(rect_roi),
+                        z_range=z_range_to_payload(resolved_z_range),
                         include_mesh=resolved_mesh,
                         prefer_opencv=resolved_prefer_opencv,
                         voxel_source=stack.voxel_source,
@@ -955,6 +989,7 @@ def run_batch(
                     source_sha256=source_sha256,
                     threshold=resolved_threshold,
                     roi=roi_to_payload(rect_roi),
+                    z_range=z_range_to_payload(resolved_z_range),
                     include_mesh=resolved_mesh,
                     prefer_opencv=resolved_prefer_opencv,
                     voxel_source=stack.voxel_source,
@@ -1036,6 +1071,12 @@ def roi_to_payload(roi: RectROI | None) -> dict[str, int] | None:
     if roi is None:
         return None
     return {"xmin": roi.xmin, "xmax": roi.xmax, "ymin": roi.ymin, "ymax": roi.ymax}
+
+
+def z_range_to_payload(z_range: ZRange | None) -> dict[str, int] | None:
+    if z_range is None:
+        return None
+    return {"zmin": z_range.zmin, "zmax": z_range.zmax}
 
 
 def run_serve(*, host: str, port: int) -> int:
@@ -1218,6 +1259,12 @@ def resolve_roi(settings: ProjectSettings, roi: list[int] | None) -> RectROI | N
     if roi is not None:
         return RectROI(*roi)
     return settings.roi
+
+
+def resolve_z_range(settings: ProjectSettings, z_range: list[int] | None) -> ZRange | None:
+    if z_range is not None:
+        return ZRange(*z_range)
+    return settings.z_range
 
 
 def resolve_voxel_override(

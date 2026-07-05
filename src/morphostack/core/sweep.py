@@ -11,7 +11,7 @@ import numpy as np
 
 from morphostack.core.export import SUMMARY_METRICS, analysis_run_warnings, analysis_summary
 from morphostack.core.models import VoxelSize
-from morphostack.core.pipeline import RectROI, StackAnalysis, analyze_stack
+from morphostack.core.pipeline import RectROI, StackAnalysis, ZRange, analyze_stack
 from morphostack.core.profiles import DEFAULT_PROFILE
 
 SWEEP_COLUMNS = (
@@ -60,6 +60,7 @@ def threshold_sweep(
     thresholds: tuple[float, ...] | list[float],
     voxel_size: VoxelSize,
     roi: RectROI | None = None,
+    z_range: ZRange | None = None,
     profile: str | None = DEFAULT_PROFILE,
     prefer_opencv: bool = True,
     include_mesh: bool = False,
@@ -75,6 +76,7 @@ def threshold_sweep(
             thresholds=float(threshold),
             voxel_size=voxel_size,
             roi=roi,
+            z_range=z_range,
             profile=profile,
             prefer_opencv=prefer_opencv,
             include_mesh=include_mesh,

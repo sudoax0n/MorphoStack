@@ -35,6 +35,7 @@ from morphostack.core.pipeline import (
     FrameAnalysis,
     RectROI,
     StackAnalysis,
+    ZRange,
     analyze_frame,
     analyze_stack,
 )
@@ -46,7 +47,7 @@ from morphostack.core.project import (
     write_project_settings,
 )
 from morphostack.core.profiles import DEFAULT_PROFILE, PROFILE_CHOICES, AnalysisProfile, normalize_profile
-from morphostack.core.segmentation import apply_rect_roi, suggest_threshold, threshold_mask
+from morphostack.core.segmentation import apply_rect_roi, apply_z_range, suggest_threshold, threshold_mask
 from morphostack.core.sweep import (
     SWEEP_COLUMNS,
     ThresholdSweepResult,
@@ -82,9 +83,11 @@ __all__ = [
     "SweepSettings",
     "ThresholdSweepResult",
     "VoxelSize",
+    "ZRange",
     "ValidationDifference",
     "ValidationReport",
     "apply_rect_roi",
+    "apply_z_range",
     "as_color_stack",
     "as_grayscale_stack",
     "analyze_frame",

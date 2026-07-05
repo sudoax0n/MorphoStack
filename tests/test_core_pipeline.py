@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from morphostack.core import RectROI, VoxelSize, analyze_frame, analyze_stack
+from morphostack.core import RectROI, VoxelSize, ZRange, analyze_frame, analyze_stack
 from morphostack.core.pipeline import normalize_thresholds
 
 
@@ -133,6 +133,23 @@ def test_analyze_stack_applies_roi_before_analysis():
 
     assert result.frames[0].contour is not None
     assert result.frames[0].contour[:, 0].max() <= 3
+
+
+def test_analyze_stack_applies_z_range_and_preserves_source_frame_indices():
+    stack = np.zeros((4, 8, 8), dtype=np.uint8)
+    stack[1:3, 2:5, 1:4] = 200
+
+    result = analyze_stack(
+        stack,
+        thresholds=100,
+        voxel_size=VoxelSize(1.0, 1.0, 1.0),
+        z_range=ZRange(zmin=1, zmax=3),
+        prefer_opencv=False,
+    )
+
+    assert [frame.frame_index for frame in result.frames] == [1, 2]
+    assert len(result.valid_frames) == 2
+    assert result.z_range == ZRange(1, 3)
 
 
 def test_analyze_stack_rejects_non_stack_input():

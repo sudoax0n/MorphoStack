@@ -14,6 +14,7 @@ Supported workflow pieces include:
 
 - stack inspection for TIFF/CZI inputs
 - threshold suggestion and threshold sweeps
+- Z-range trimming for top/bottom stack slices
 - per-frame shape analysis
 - vesicle and RBC profile selection
 - optional 3D mesh measurements for surface area, volume, equivalent sphere

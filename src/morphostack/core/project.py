@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from morphostack.core.models import VoxelSize
-from morphostack.core.pipeline import RectROI
+from morphostack.core.pipeline import RectROI, ZRange
 from morphostack.core.profiles import DEFAULT_PROFILE, normalize_profile
 
 PROJECT_SETTINGS_VERSION = 1
@@ -49,6 +49,7 @@ class ProjectSettings:
     threshold: float | None = None
     voxel_size: VoxelSize | None = None
     roi: RectROI | None = None
+    z_range: ZRange | None = None
     include_mesh: bool | None = None
     prefer_opencv: bool | None = None
     sweep: SweepSettings = SweepSettings()
@@ -71,6 +72,7 @@ class ProjectSettings:
             threshold=optional_float(payload.get("threshold"), "threshold"),
             voxel_size=voxel_from_mapping(payload.get("voxel_size")),
             roi=roi_from_mapping(payload.get("roi")),
+            z_range=z_range_from_mapping(payload.get("z_range")),
             include_mesh=optional_bool(payload.get("include_mesh"), "include_mesh"),
             prefer_opencv=optional_bool(payload.get("prefer_opencv"), "prefer_opencv"),
             sweep=SweepSettings.from_mapping(payload.get("sweep")),
@@ -95,6 +97,11 @@ class ProjectSettings:
                 "xmax": self.roi.xmax,
                 "ymin": self.roi.ymin,
                 "ymax": self.roi.ymax,
+            }
+        if self.z_range is not None:
+            payload["z_range"] = {
+                "zmin": self.z_range.zmin,
+                "zmax": self.z_range.zmax,
             }
         if self.include_mesh is not None:
             payload["include_mesh"] = self.include_mesh
@@ -168,4 +175,15 @@ def roi_from_mapping(payload: Any) -> RectROI | None:
         xmax=int(payload["xmax"]),
         ymin=int(payload["ymin"]),
         ymax=int(payload["ymax"]),
+    )
+
+
+def z_range_from_mapping(payload: Any) -> ZRange | None:
+    if payload is None:
+        return None
+    if not isinstance(payload, dict):
+        raise ValueError("project z_range must be an object")
+    return ZRange(
+        zmin=int(payload["zmin"]),
+        zmax=int(payload["zmax"]),
     )
