@@ -18,6 +18,7 @@ morphostack analyze path\to\stack.tif --threshold 100 --out metrics.csv --report
 morphostack analyze path\to\stack.tif --threshold 100 --bundle-dir runs
 morphostack analyze path\to\stack.tif --threshold 100 --profile rbc --out metrics.csv
 morphostack batch path\to\stacks --threshold 100 --out batch_summary.csv
+morphostack batch path\to\stacks --threshold 100 --out batch_summary.csv --bundle-dir runs
 morphostack validate reference_metrics.csv new_metrics.csv
 morphostack serve
 morphostack dev
@@ -109,6 +110,8 @@ To analyze a folder of stacks and produce one summary table:
 
 Add `--recursive` to include subdirectories, and `--metrics-dir path\to\frames`
 to also save each stack's per-frame metrics CSV.
+Add `--bundle-dir path\to\runs` to create one run bundle per stack, each with
+`metrics.csv`, `manifest.json`, and `report.md`.
 
 To compare a new CSV export against a reference export:
 

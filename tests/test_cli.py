@@ -570,6 +570,85 @@ def test_batch_writes_summary_csv_from_directory(tmp_path, capsys):
     assert len(list(metrics_dir.glob("*_metrics.csv"))) == 2
 
 
+def test_batch_can_write_per_stack_run_bundles(tmp_path, capsys):
+    tifffile = pytest.importorskip("tifffile")
+    input_dir = tmp_path / "stacks"
+    input_dir.mkdir()
+    for index in range(2):
+        stack = np.zeros((2, 8, 8), dtype=np.uint8)
+        stack[:, 2:5, 1:4] = 200
+        tifffile.imwrite(input_dir / f"stack_{index}.tif", stack, photometric="minisblack")
+    output_path = tmp_path / "batch_summary.csv"
+    bundle_dir = tmp_path / "runs"
+
+    result = main(
+        [
+            "batch",
+            str(input_dir),
+            "--threshold",
+            "100",
+            "--out",
+            str(output_path),
+            "--bundle-dir",
+            str(bundle_dir),
+            "--voxel-x",
+            "1.0",
+            "--voxel-y",
+            "1.0",
+            "--voxel-z",
+            "1.0",
+            "--fallback-contours",
+        ]
+    )
+
+    assert result == 0
+    out = capsys.readouterr().out
+    assert f"Run bundles: {bundle_dir}" in out
+    for index in range(2):
+        run_dir = bundle_dir / f"stack_{index}"
+        assert (run_dir / "metrics.csv").exists()
+        assert (run_dir / "manifest.json").exists()
+        assert (run_dir / "report.md").exists()
+
+
+def test_batch_recursive_bundles_preserve_relative_paths(tmp_path):
+    tifffile = pytest.importorskip("tifffile")
+    input_dir = tmp_path / "stacks"
+    nested_dir = input_dir / "day_1"
+    nested_dir.mkdir(parents=True)
+    stack = np.zeros((2, 8, 8), dtype=np.uint8)
+    stack[:, 2:5, 1:4] = 200
+    tifffile.imwrite(nested_dir / "cell.tif", stack, photometric="minisblack")
+    output_path = tmp_path / "batch_summary.csv"
+    bundle_dir = tmp_path / "runs"
+
+    result = main(
+        [
+            "batch",
+            str(input_dir),
+            "--threshold",
+            "100",
+            "--out",
+            str(output_path),
+            "--bundle-dir",
+            str(bundle_dir),
+            "--recursive",
+            "--voxel-x",
+            "1.0",
+            "--voxel-y",
+            "1.0",
+            "--voxel-z",
+            "1.0",
+            "--fallback-contours",
+        ]
+    )
+
+    assert result == 0
+    assert (bundle_dir / "day_1" / "cell" / "metrics.csv").exists()
+    assert (bundle_dir / "day_1" / "cell" / "manifest.json").exists()
+    assert (bundle_dir / "day_1" / "cell" / "report.md").exists()
+
+
 def test_batch_reports_when_no_supported_stacks(tmp_path, capsys):
     result = main(["batch", str(tmp_path), "--threshold", "100", "--out", str(tmp_path / "summary.csv")])
 

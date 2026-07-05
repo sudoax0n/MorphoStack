@@ -239,6 +239,10 @@ def build_parser() -> argparse.ArgumentParser:
     batch.add_argument("--recursive", action="store_true", help="Search subdirectories too.")
     batch.add_argument("--metrics-dir", help="Optional directory for per-stack frame CSV files.")
     batch.add_argument(
+        "--bundle-dir",
+        help="Optional directory for per-stack run bundles with metrics.csv, manifest.json, and report.md.",
+    )
+    batch.add_argument(
         "--profile",
         choices=PROFILE_CHOICES,
         default=None,
@@ -394,6 +398,7 @@ def main(argv: list[str] | None = None) -> int:
             out=args.out,
             recursive=args.recursive,
             metrics_dir=args.metrics_dir,
+            bundle_dir=args.bundle_dir,
             profile=args.profile,
             voxel_x=args.voxel_x,
             voxel_y=args.voxel_y,
@@ -811,6 +816,7 @@ def run_batch(
     out: str,
     recursive: bool = False,
     metrics_dir: str | None = None,
+    bundle_dir: str | None = None,
     profile: str | None = None,
     voxel_x: float | None = None,
     voxel_y: float | None = None,
@@ -851,6 +857,9 @@ def run_batch(
     frame_metrics_dir = Path(metrics_dir) if metrics_dir else None
     if frame_metrics_dir:
         frame_metrics_dir.mkdir(parents=True, exist_ok=True)
+    run_bundles_dir = Path(bundle_dir) if bundle_dir else None
+    if run_bundles_dir:
+        run_bundles_dir.mkdir(parents=True, exist_ok=True)
 
     rows: list[dict[str, object]] = []
     failures = 0
@@ -876,6 +885,32 @@ def run_batch(
             )
             if frame_metrics_dir:
                 write_analysis_csv(analysis, frame_metrics_dir / f"{safe_output_stem(stack_path)}_metrics.csv")
+            if run_bundles_dir:
+                run_dir = bundle_run_directory(run_bundles_dir, stack_path, relative_to=input_dir)
+                run_dir.mkdir(parents=True, exist_ok=True)
+                write_analysis_csv(analysis, run_dir / "metrics.csv")
+                write_analysis_manifest_json(
+                    analysis_manifest(
+                        analysis,
+                        source_path=str(stack.source_path),
+                        threshold=resolved_threshold,
+                        roi=roi_to_payload(rect_roi),
+                        include_mesh=resolved_mesh,
+                        prefer_opencv=resolved_prefer_opencv,
+                        voxel_source=stack.voxel_source,
+                    ),
+                    run_dir / "manifest.json",
+                )
+                write_analysis_report_markdown(
+                    analysis,
+                    run_dir / "report.md",
+                    source_path=str(stack.source_path),
+                    threshold=resolved_threshold,
+                    roi=roi_to_payload(rect_roi),
+                    include_mesh=resolved_mesh,
+                    prefer_opencv=resolved_prefer_opencv,
+                    voxel_source=stack.voxel_source,
+                )
         except Exception as exc:
             failures += 1
             rows.append(failed_analysis_summary_row(str(stack_path), str(exc)))
@@ -890,6 +925,8 @@ def run_batch(
     print(f"Summary CSV: {output_path}")
     if frame_metrics_dir:
         print(f"Frame metrics: {frame_metrics_dir}")
+    if run_bundles_dir:
+        print(f"Run bundles: {run_bundles_dir}")
     return 1 if failures else 0
 
 
@@ -931,8 +968,18 @@ def safe_output_stem(path: Path) -> str:
     return "".join(char if char.isalnum() or char in "._-" else "_" for char in raw)
 
 
-def bundle_run_directory(bundle_dir: str, source_path: str | Path) -> Path:
-    return Path(bundle_dir) / safe_output_stem(Path(source_path))
+def bundle_run_directory(
+    bundle_dir: str | Path,
+    source_path: str | Path,
+    *,
+    relative_to: str | Path | None = None,
+) -> Path:
+    source = Path(source_path)
+    if relative_to is None:
+        return Path(bundle_dir) / safe_output_stem(source)
+
+    relative = source.relative_to(relative_to).with_suffix("")
+    return Path(bundle_dir).joinpath(*(safe_output_stem(Path(part)) for part in relative.parts))
 
 
 def roi_to_payload(roi: RectROI | None) -> dict[str, int] | None:
