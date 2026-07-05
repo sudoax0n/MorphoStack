@@ -1,0 +1,125 @@
+{
+  "columns": [
+    "frame_index",
+    "threshold",
+    "profile",
+    "method",
+    "has_contour",
+    "area_px2",
+    "perimeter_px",
+    "area_um2",
+    "perimeter_um",
+    "circularity",
+    "bbox_width_um",
+    "bbox_height_um",
+    "aspect_ratio",
+    "elongation",
+    "deformation_index",
+    "extent",
+    "equivalent_diameter_um",
+    "solidity",
+    "mesh_surface_area_um2",
+    "mesh_volume_um3",
+    "mesh_equivalent_sphere_diameter_um",
+    "mesh_sphericity"
+  ],
+  "created_at_utc": "2026-07-05T18:27:35.841436+00:00",
+  "frame_count": 26,
+  "include_mesh": false,
+  "mesh": null,
+  "morphostack_version": "0.1.0",
+  "prefer_opencv": true,
+  "profile": "vesicle",
+  "roi": null,
+  "source_path": "D:\\lab-data\\paper-data\\syst202400052-sup-0001-movie1-dopc.tif",
+  "source_sha256": "84a07dfc5d0eb71c8640112efa2c710fb31b5ec0adc646dfbfc60020fd6d0f92",
+  "summary": {
+    "frame_count": 26,
+    "metrics": {
+      "area_um2": {
+        "max": 26.5,
+        "mean": 26.5,
+        "min": 26.5,
+        "std": 0.0
+      },
+      "aspect_ratio": {
+        "max": 1.2857142857142858,
+        "mean": 1.2857142857142856,
+        "min": 1.2857142857142858,
+        "std": 2.220446049250313e-16
+      },
+      "bbox_height_um": {
+        "max": 7.0,
+        "mean": 7.0,
+        "min": 7.0,
+        "std": 0.0
+      },
+      "bbox_width_um": {
+        "max": 9.0,
+        "mean": 9.0,
+        "min": 9.0,
+        "std": 0.0
+      },
+      "circularity": {
+        "max": 0.11118285455213564,
+        "mean": 0.11118285455213563,
+        "min": 0.11118285455213564,
+        "std": 1.3877787807814457e-17
+      },
+      "deformation_index": {
+        "max": 0.125,
+        "mean": 0.125,
+        "min": 0.125,
+        "std": 0.0
+      },
+      "elongation": {
+        "max": 0.2222222222222222,
+        "mean": 0.2222222222222223,
+        "min": 0.2222222222222222,
+        "std": 8.326672684688674e-17
+      },
+      "equivalent_diameter_um": {
+        "max": 5.808687281605183,
+        "mean": 5.808687281605184,
+        "min": 5.808687281605183,
+        "std": 1.7763568394002505e-15
+      },
+      "extent": {
+        "max": 0.42063492063492064,
+        "mean": 0.4206349206349208,
+        "min": 0.42063492063492064,
+        "std": 1.6653345369377348e-16
+      },
+      "perimeter_um": {
+        "max": 54.727922061357845,
+        "mean": 54.727922061357816,
+        "min": 54.727922061357845,
+        "std": 2.842170943040401e-14
+      },
+      "solidity": {
+        "max": 0.424,
+        "mean": 0.424,
+        "min": 0.424,
+        "std": 0.0
+      }
+    },
+    "valid_fraction": 1.0,
+    "valid_frame_count": 26
+  },
+  "threshold": 127.002,
+  "valid_frame_count": 26,
+  "voxel_size": {
+    "x_um": 1.0,
+    "y_um": 1.0,
+    "z_um": 1.0
+  },
+  "voxel_source": "default",
+  "warnings": [
+    {
+      "code": "default_voxel_size",
+      "message": "Voxel spacing came from MorphoStack defaults. Physical units should be treated as uncalibrated.",
+      "severity": "warning"
+    }
+  ],
+  "z_range": null
+}

@@ -1,0 +1,22 @@
+{
+  "generated_at": "2026-07-05T23:57:40.4404677+05:30",
+  "input_file": "D:\\lab-data\\paper-data\\syst202400052-sup-0001-movie1-dopc.tif",
+  "threshold_used": 127.002,
+  "voxel_size_um": "1.0 x 1.0 x 1.0 (default)",
+  "voxel_source": "unknown",
+  "calibration_note": "Surface area and volume are computational outputs using the configured voxel size; biological interpretation requires verified microscope calibration.",
+  "frame_count": 0,
+  "valid_frame_count": 0,
+  "mesh_surface_area_um2": null,
+  "mesh_volume_um3": null,
+  "mesh_sphericity": null,
+  "outputs": {
+    "metrics_csv": "D:\\MorphoStack\\validation\\runs\\dopc-smoke-test\\metrics.csv",
+    "metrics_mesh_csv": "D:\\MorphoStack\\validation\\runs\\dopc-smoke-test\\metrics_mesh.csv",
+    "manifest_json": "D:\\MorphoStack\\validation\\runs\\dopc-smoke-test\\manifest.json",
+    "report_md": "D:\\MorphoStack\\validation\\runs\\dopc-smoke-test\\report.md",
+    "sweep_csv": "D:\\MorphoStack\\validation\\runs\\dopc-smoke-test\\sweep.csv",
+    "threshold_txt": "D:\\MorphoStack\\validation\\runs\\dopc-smoke-test\\threshold.txt",
+    "summary_json": "D:\\MorphoStack\\validation\\runs\\dopc-smoke-test\\summary.json"
+  }
+}
