@@ -89,6 +89,11 @@ def build_parser() -> argparse.ArgumentParser:
         default="analysis,api",
         help="Comma-separated optional dependency groups to install. Default: analysis,api.",
     )
+    init.add_argument(
+        "--web",
+        action="store_true",
+        help="Also install browser UI dependencies with npm install in apps/web.",
+    )
     project = subparsers.add_parser("project", help="Create and inspect MorphoStack project settings.")
     project_subparsers = project.add_subparsers(dest="project_command")
     project_init = project_subparsers.add_parser("init", help="Write a reusable project settings JSON file.")
@@ -302,7 +307,7 @@ def main(argv: list[str] | None = None) -> int:
         return run_doctor(as_json=args.json)
 
     if args.command == "init":
-        return run_init(yes=args.yes, extras=args.extras)
+        return run_init(yes=args.yes, extras=args.extras, web=args.web)
 
     if args.command == "project":
         if args.project_command == "init":
@@ -439,7 +444,7 @@ def run_doctor(as_json: bool = False) -> int:
     return 0
 
 
-def run_init(yes: bool = False, extras: str = "analysis,api") -> int:
+def run_init(yes: bool = False, extras: str = "analysis,api", web: bool = False) -> int:
     print("MorphoStack first-run setup")
     print("==========================")
     print("")
@@ -447,31 +452,57 @@ def run_init(yes: bool = False, extras: str = "analysis,api") -> int:
     print("")
 
     extras_list = [item.strip() for item in extras.split(",") if item.strip()]
-    if not extras_list:
-        print("No optional dependency groups selected.")
-        return 0
+    if extras_list:
+        target = f".[{','.join(extras_list)}]"
+        prompt = (
+            "MorphoStack can install/update optional dependencies "
+            f"({', '.join(extras_list)}) into the active Python environment. Continue? [y/N] "
+        )
+        if yes or confirm(prompt):
+            print(f"Installing {target} with {sys.executable} ...")
+            result = subprocess.run(
+                [sys.executable, "-m", "pip", "install", "-e", target],
+                check=False,
+            )
+            if result.returncode != 0:
+                print("Dependency installation failed.")
+                return result.returncode
+        else:
+            print("Skipped Python dependency installation.")
+    else:
+        print("No optional Python dependency groups selected.")
 
-    target = f".[{','.join(extras_list)}]"
-    prompt = (
-        "MorphoStack can install/update optional dependencies "
-        f"({', '.join(extras_list)}) into the active Python environment. Continue? [y/N] "
-    )
-    if not yes:
-        answer = input(prompt).strip().lower()
-        if answer not in {"y", "yes"}:
-            print("Skipped dependency installation.")
-            return 0
-
-    print(f"Installing {target} with {sys.executable} ...")
-    result = subprocess.run(
-        [sys.executable, "-m", "pip", "install", "-e", target],
-        check=False,
-    )
-    if result.returncode != 0:
-        print("Dependency installation failed.")
-        return result.returncode
+    if web:
+        prompt = "MorphoStack can install/update browser UI dependencies with npm install. Continue? [y/N] "
+        if yes or confirm(prompt):
+            result_code = install_web_dependencies()
+            if result_code != 0:
+                return result_code
+        else:
+            print("Skipped web dependency installation.")
 
     print("MorphoStack setup completed.")
+    return 0
+
+
+def confirm(prompt: str) -> bool:
+    return input(prompt).strip().lower() in {"y", "yes"}
+
+
+def install_web_dependencies() -> int:
+    npm_command = shutil.which("npm")
+    if npm_command is None:
+        print("npm is required to install browser UI dependencies.")
+        return 1
+    if not WEB_APP_DIR.exists():
+        print(f"Web app directory was not found: {WEB_APP_DIR}")
+        return 1
+
+    print(f"Installing browser UI dependencies in {WEB_APP_DIR} ...")
+    result = subprocess.run([npm_command, "install"], cwd=WEB_APP_DIR, check=False)
+    if result.returncode != 0:
+        print("Web dependency installation failed.")
+        return result.returncode
     return 0
 
 

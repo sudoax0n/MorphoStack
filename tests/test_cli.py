@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from importlib import import_module
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -38,7 +39,33 @@ def test_init_can_skip_dependency_install(monkeypatch, capsys):
     assert main(["init"]) == 0
     out = capsys.readouterr().out
     assert "MorphoStack first-run setup" in out
-    assert "Skipped dependency installation" in out
+    assert "Skipped Python dependency installation" in out
+
+
+def test_init_can_install_web_dependencies(monkeypatch, capsys):
+    calls = []
+    monkeypatch.setattr(cli_main_module.shutil, "which", lambda name: "npm.cmd" if name == "npm" else None)
+    monkeypatch.setattr(
+        cli_main_module.subprocess,
+        "run",
+        lambda command, **kwargs: calls.append((command, kwargs)) or SimpleNamespace(returncode=0),
+    )
+
+    assert main(["init", "--yes", "--extras", "", "--web"]) == 0
+
+    out = capsys.readouterr().out
+    assert "No optional Python dependency groups selected." in out
+    assert "Installing browser UI dependencies" in out
+    assert calls == [(["npm.cmd", "install"], {"cwd": cli_main_module.WEB_APP_DIR, "check": False})]
+
+
+def test_init_web_reports_missing_npm(monkeypatch, capsys):
+    monkeypatch.setattr(cli_main_module.shutil, "which", lambda _: None)
+
+    assert main(["init", "--yes", "--extras", "", "--web"]) == 1
+
+    out = capsys.readouterr().out
+    assert "npm is required to install browser UI dependencies" in out
 
 
 def test_project_init_writes_settings_file(tmp_path, capsys):

@@ -23,7 +23,7 @@ dev = [
 ]
 api = [
   "fastapi",
-  "httpx2",
+  "httpx",
   "python-multipart",
   "uvicorn",
 ]

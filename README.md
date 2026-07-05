@@ -9,6 +9,7 @@ The first milestone is intentionally small: prove the project structure, command
 ```bash
 morphostack doctor
 morphostack init
+morphostack init --web
 morphostack project init --out morphostack.project.json
 morphostack inspect path\to\stack.tif
 morphostack threshold path\to\stack.tif
@@ -40,6 +41,12 @@ dependencies into the active environment:
 
 ```bash
 .\.venv\Scripts\morphostack init
+```
+
+Add `--web` to also install browser UI dependencies in `apps\web`:
+
+```bash
+.\.venv\Scripts\morphostack init --web
 ```
 
 To inspect a stack after installing analysis dependencies:

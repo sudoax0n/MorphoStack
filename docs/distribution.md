@@ -9,7 +9,9 @@ MorphoStack should grow through these stages:
 5. Optional desktop wrapper around the same local web app.
 
 The canonical command is `morphostack`. The short alias is `mst`.
+First-run setup is owned by `morphostack init`; pass `--web` to include the
+browser UI's npm dependencies and `--yes` for unattended setup in a known-safe
+environment.
 
 Remote script installation such as `irm ... | iex` can be convenient, but should
 be optional because institutional systems may block or distrust it.
-
