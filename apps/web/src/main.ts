@@ -254,7 +254,7 @@ app.innerHTML = `
       </div>
       <label>
         Stack file
-        <input id="file-input" type="file" accept=".tif,.tiff,.czi,image/tiff" />
+        <input id="file-input" type="file" accept=".tif,.tiff,.lsm,.czi,image/tiff" />
       </label>
       <label>
         Stack path (optional)
@@ -378,7 +378,7 @@ app.innerHTML = `
     </div>
     <label class="batch-file-label">
       Stack files
-      <input id="batch-file-input" type="file" accept=".tif,.tiff,.czi,image/tiff" multiple />
+      <input id="batch-file-input" type="file" accept=".tif,.tiff,.lsm,.czi,image/tiff" multiple />
     </label>
     <div id="batch-summary" class="output muted">No batch run yet.</div>
     <div class="table-wrap">

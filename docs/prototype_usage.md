@@ -26,7 +26,7 @@ If the default ports are busy:
 
 ## Normal Demo Workflow
 
-1. In **Stack**, choose a `.tif`, `.tiff`, or `.czi` file.
+1. In **Stack**, choose a `.tif`, `.tiff`, `.lsm`, or `.czi` file.
 2. Enter voxel calibration in micrometers.
    - Use metadata values if known.
    - If unsure, leave `1`, but say that physical units are uncalibrated.

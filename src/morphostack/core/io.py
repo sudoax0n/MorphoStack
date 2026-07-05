@@ -12,7 +12,7 @@ import numpy as np
 from morphostack.core.images import as_color_stack, as_grayscale_stack
 from morphostack.core.models import ImageStack, VoxelSize
 
-SUPPORTED_EXTENSIONS = {".tif", ".tiff", ".czi"}
+SUPPORTED_EXTENSIONS = {".tif", ".tiff", ".lsm", ".czi"}
 DEFAULT_VOXEL_SIZE = VoxelSize(x_um=1.0, y_um=1.0, z_um=1.0)
 
 
@@ -29,7 +29,7 @@ def load_image_stack(
         supported = ", ".join(sorted(SUPPORTED_EXTENSIONS))
         raise ValueError(f"Unsupported image format {ext!r}; expected one of {supported}")
 
-    if ext in {".tif", ".tiff"}:
+    if ext in {".tif", ".tiff", ".lsm"}:
         raw, detected = read_tiff(file_path)
     else:
         raw, detected = read_czi(file_path)

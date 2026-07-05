@@ -55,6 +55,17 @@ def test_load_image_stack_uses_default_voxel_when_metadata_missing(monkeypatch):
     assert loaded.voxel_source == "default"
 
 
+def test_load_image_stack_reads_lsm_as_tiff_like(monkeypatch):
+    raw = np.arange(16, dtype=np.uint8).reshape(1, 4, 4)
+    monkeypatch.setattr(io, "read_tiff", lambda _: (raw, None))
+
+    loaded = load_image_stack("sample.lsm")
+
+    assert loaded.source_path == Path("sample.lsm")
+    assert loaded.grayscale.shape == (1, 4, 4)
+    assert loaded.voxel_source == "default"
+
+
 def test_load_image_stack_records_metadata_voxel_source(monkeypatch):
     raw = np.arange(16, dtype=np.uint8).reshape(1, 4, 4)
     detected = VoxelSize(x_um=0.5, y_um=0.5, z_um=2.0)

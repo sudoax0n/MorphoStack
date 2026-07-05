@@ -136,7 +136,7 @@ def build_parser() -> argparse.ArgumentParser:
         "inspect",
         help="Load an image stack and print basic metadata.",
     )
-    inspect.add_argument("path", help="Path to a .tif, .tiff, or .czi file.")
+    inspect.add_argument("path", help="Path to a .tif, .tiff, .lsm, or .czi file.")
     inspect.add_argument("--voxel-x", type=float, help="Override X voxel size in micrometers.")
     inspect.add_argument("--voxel-y", type=float, help="Override Y voxel size in micrometers.")
     inspect.add_argument("--voxel-z", type=float, help="Override Z voxel size in micrometers.")
@@ -145,7 +145,7 @@ def build_parser() -> argparse.ArgumentParser:
         "threshold",
         help="Suggest an intensity threshold for an image stack.",
     )
-    threshold.add_argument("path", help="Path to a .tif, .tiff, or .czi file.")
+    threshold.add_argument("path", help="Path to a .tif, .tiff, .lsm, or .czi file.")
     threshold.add_argument(
         "--method",
         choices=("auto", "otsu", "percentile"),
@@ -162,7 +162,7 @@ def build_parser() -> argparse.ArgumentParser:
         "sweep",
         help="Run the analysis pipeline across a range of thresholds and write summary CSV rows.",
     )
-    sweep.add_argument("path", help="Path to a .tif, .tiff, or .czi file.")
+    sweep.add_argument("path", help="Path to a .tif, .tiff, .lsm, or .czi file.")
     sweep.add_argument("--start", type=float, help="First threshold to analyze.")
     sweep.add_argument("--stop", type=float, help="Last threshold to analyze.")
     sweep.add_argument("--step", type=float, help="Threshold increment.")
@@ -199,7 +199,7 @@ def build_parser() -> argparse.ArgumentParser:
         "analyze",
         help="Run headless threshold analysis on an image stack and write CSV metrics.",
     )
-    analyze.add_argument("path", help="Path to a .tif, .tiff, or .czi file.")
+    analyze.add_argument("path", help="Path to a .tif, .tiff, .lsm, or .czi file.")
     analyze.add_argument("--threshold", type=float, help="Global intensity threshold.")
     analyze.add_argument(
         "--profile",
@@ -246,7 +246,7 @@ def build_parser() -> argparse.ArgumentParser:
         "batch",
         help="Analyze every supported stack in a directory and write one summary CSV.",
     )
-    batch.add_argument("directory", help="Directory containing .tif, .tiff, or .czi stacks.")
+    batch.add_argument("directory", help="Directory containing .tif, .tiff, .lsm, or .czi stacks.")
     batch.add_argument("--threshold", type=float, help="Global intensity threshold.")
     batch.add_argument("--out", required=True, help="Batch summary CSV output path.")
     batch.add_argument("--recursive", action="store_true", help="Search subdirectories too.")
@@ -1044,7 +1044,7 @@ def discover_stack_paths(directory: Path, *, recursive: bool = False) -> list[Pa
     return sorted(
         path
         for path in directory.glob(pattern)
-        if path.is_file() and path.suffix.lower() in {".tif", ".tiff", ".czi"}
+        if path.is_file() and path.suffix.lower() in {".tif", ".tiff", ".lsm", ".czi"}
     )
 
 
