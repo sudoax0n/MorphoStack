@@ -172,7 +172,7 @@ CSV.
 Project settings JSON can be loaded into the browser controls or downloaded
 from the current controls for reuse in the CLI.
 Multiple uploaded stacks can be batch analyzed into one spreadsheet-friendly
-summary CSV.
+summary CSV and a Markdown batch report.
 CSV validation is available in the browser for comparing new exports against
 reference metric files.
 The analysis summary reports valid-frame means, minima, maxima, and standard

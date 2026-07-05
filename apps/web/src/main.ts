@@ -299,6 +299,7 @@ app.innerHTML = `
       <h2>Batch Analysis</h2>
       <div class="button-row">
         <button id="batch-analyze-btn" type="button">Analyze Batch</button>
+        <button id="download-batch-report-btn" class="secondary" type="button" disabled>Download Batch Report</button>
         <button id="download-batch-btn" class="secondary" type="button" disabled>Download Batch CSV</button>
       </div>
     </div>
@@ -467,6 +468,7 @@ const downloadCsvButton = mustElement<HTMLButtonElement>("download-csv-btn");
 const downloadReportButton = mustElement<HTMLButtonElement>("download-report-btn");
 const downloadManifestButton = mustElement<HTMLButtonElement>("download-manifest-btn");
 const downloadBatchButton = mustElement<HTMLButtonElement>("download-batch-btn");
+const downloadBatchReportButton = mustElement<HTMLButtonElement>("download-batch-report-btn");
 const downloadSweepButton = mustElement<HTMLButtonElement>("download-sweep-btn");
 let latestAnalysis: AnalyzeResponse | null = null;
 let latestBatch: BatchAnalyzeResponse | null = null;
@@ -522,6 +524,10 @@ downloadReportButton.addEventListener("click", () => {
 
 downloadBatchButton.addEventListener("click", () => {
   downloadLatestBatchCsv();
+});
+
+downloadBatchReportButton.addEventListener("click", () => {
+  downloadLatestBatchReport();
 });
 
 downloadSweepButton.addEventListener("click", () => {
@@ -672,6 +678,7 @@ async function analyzeStack(): Promise<void> {
 async function analyzeBatch(): Promise<void> {
   latestBatch = null;
   downloadBatchButton.disabled = true;
+  downloadBatchReportButton.disabled = true;
   batchSummary.textContent = "Analyzing batch...";
   batchResultsBody.innerHTML = `<tr><td colspan="8" class="muted">Running batch analysis...</td></tr>`;
   try {
@@ -844,6 +851,7 @@ function renderSummaryMetrics(summary: AnalysisSummary): string {
 function renderBatch(payload: BatchAnalyzeResponse): void {
   latestBatch = payload;
   downloadBatchButton.disabled = payload.rows.length === 0;
+  downloadBatchReportButton.disabled = payload.rows.length === 0;
   batchSummary.innerHTML = `
     Files: ${payload.file_count}<br />
     Succeeded: ${payload.succeeded_count}, failed: ${payload.failed_count}
@@ -930,6 +938,23 @@ function downloadLatestBatchCsv(): void {
   const anchor = document.createElement("a");
   anchor.href = url;
   anchor.download = "morphostack_batch_summary.csv";
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
+function downloadLatestBatchReport(): void {
+  if (!latestBatch || latestBatch.rows.length === 0) {
+    return;
+  }
+
+  const markdown = batchReportMarkdown(latestBatch);
+  const blob = new Blob([markdown], { type: "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = "morphostack_batch_report.md";
   document.body.append(anchor);
   anchor.click();
   anchor.remove();
@@ -1050,6 +1075,54 @@ function analysisReportMarkdown(payload: AnalyzeResponse): string {
       lines.push(
         `| ${row.frame_index} | ${row.has_contour ? "yes" : "no"} | ${formatNumber(row.area_um2)} | ${formatNumber(row.perimeter_um)} | ${formatNumber(row.circularity)} | ${formatNumber(row.deformation_index)} |`
       );
+    });
+    lines.push("");
+  }
+
+  return `${lines.join("\n").trim()}\n`;
+}
+
+function batchReportMarkdown(payload: BatchAnalyzeResponse): string {
+  const lines = [
+    "# MorphoStack Batch Report",
+    "",
+    "## Batch Summary",
+    "",
+    `- Files: ${payload.file_count}`,
+    `- Succeeded: ${payload.succeeded_count}`,
+    `- Failed: ${payload.failed_count}`,
+    "",
+    "## Stack Summary",
+    "",
+    "| Source | Status | Profile | Frames | Valid | Valid fraction | Mean area (um2) | Mean circularity | Mean deformation index | Warnings |",
+    "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |"
+  ];
+
+  payload.rows.forEach((row) => {
+    lines.push(
+      [
+        "|",
+        markdownCell(String(row.source_path ?? "")),
+        markdownCell(String(row.status ?? "")),
+        markdownCell(String(row.profile ?? "")),
+        formatUnknownNumber(row.frame_count),
+        formatUnknownNumber(row.valid_frame_count),
+        formatUnknownNumber(row.valid_fraction),
+        formatUnknownNumber(row.area_um2_mean),
+        formatUnknownNumber(row.circularity_mean),
+        formatUnknownNumber(row.deformation_index_mean),
+        markdownCell(String(row.warning_codes ?? "")),
+        "|"
+      ].join(" ")
+    );
+  });
+  lines.push("");
+
+  const failedRows = payload.rows.filter((row) => row.status !== "ok");
+  if (failedRows.length > 0) {
+    lines.push("## Failures", "");
+    failedRows.forEach((row) => {
+      lines.push(`- ${String(row.source_path ?? "")}: ${String(row.error_message ?? "")}`);
     });
     lines.push("");
   }
@@ -1197,6 +1270,10 @@ function csvCell(value: unknown): string {
     return text;
   }
   return `"${text.replace(/"/g, "\"\"")}"`;
+}
+
+function markdownCell(value: string): string {
+  return value.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
 }
 
 function csvFilename(sourcePath: string): string {
