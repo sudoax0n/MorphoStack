@@ -35,6 +35,7 @@ from morphostack.core import (
     threshold_values,
 )
 from morphostack.core.export import BATCH_SUMMARY_COLUMNS, analysis_rows
+from morphostack.core.mesh import MeshGeometry, contour_stack_mesh_geometry
 from morphostack.core.preview import PreviewImage, render_segmentation_preview_png
 from morphostack.core.segmentation import apply_rect_roi, apply_z_range
 
@@ -71,6 +72,18 @@ class AnalyzeRequest(BaseModel):
     z_range: ZRangeRequest | None = None
     include_mesh: bool = False
     prefer_opencv: bool = True
+
+
+class MeshPreviewRequest(BaseModel):
+    path: str
+    threshold: float
+    profile: str = DEFAULT_PROFILE
+    voxel: VoxelOverride | None = None
+    roi: ROIRequest | None = None
+    z_range: ZRangeRequest | None = None
+    prefer_opencv: bool = True
+    downsample: int = Field(default=2, ge=1, le=8)
+    max_faces: int = Field(default=12000, ge=1000, le=50000)
 
 
 class PreviewRequest(BaseModel):
@@ -202,6 +215,35 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         return preview_payload(str(stack.source_path), preview_image)
+
+    @app.post("/mesh-preview")
+    def mesh_preview(request: MeshPreviewRequest) -> dict[str, object]:
+        try:
+            stack = load_image_stack(request.path, voxel_override=to_voxel_size(request.voxel))
+            roi = to_rect_roi(request.roi)
+            z_range = to_z_range(request.z_range)
+            analysis = analyze_stack(
+                stack.grayscale,
+                thresholds=request.threshold,
+                voxel_size=stack.voxel_size,
+                roi=roi,
+                z_range=z_range,
+                profile=request.profile,
+                prefer_opencv=request.prefer_opencv,
+                include_mesh=False,
+            )
+            filtered = apply_preview_filters(stack.grayscale, roi, z_range)
+            geometry = contour_stack_mesh_geometry(
+                tuple(frame.contour for frame in analysis.frames),
+                shape=filtered.shape,
+                voxel=stack.voxel_size,
+                downsample=request.downsample,
+                max_faces=request.max_faces,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        return mesh_preview_payload(str(stack.source_path), geometry, downsample=request.downsample)
 
     @app.post("/sweep")
     def sweep(request: SweepRequest) -> dict[str, object]:
@@ -365,6 +407,57 @@ def create_app() -> FastAPI:
             temp_path.unlink(missing_ok=True)
 
         return preview_payload(file.filename or str(temp_path.name), preview_image)
+
+    @app.post("/upload/mesh-preview")
+    def upload_mesh_preview(
+        file: Annotated[UploadFile, File()],
+        threshold: Annotated[float, Form()],
+        profile: Annotated[str, Form()] = DEFAULT_PROFILE,
+        voxel_x_um: Annotated[float, Form(gt=0)] = 1.0,
+        voxel_y_um: Annotated[float, Form(gt=0)] = 1.0,
+        voxel_z_um: Annotated[float, Form(gt=0)] = 1.0,
+        prefer_opencv: Annotated[bool, Form()] = True,
+        roi_xmin: Annotated[int | None, Form()] = None,
+        roi_xmax: Annotated[int | None, Form()] = None,
+        roi_ymin: Annotated[int | None, Form()] = None,
+        roi_ymax: Annotated[int | None, Form()] = None,
+        z_min: Annotated[int | None, Form()] = None,
+        z_max: Annotated[int | None, Form()] = None,
+        downsample: Annotated[int, Form(ge=1, le=8)] = 2,
+        max_faces: Annotated[int, Form(ge=1000, le=50000)] = 12000,
+    ) -> dict[str, object]:
+        temp_path = save_upload_to_temp(file)
+        try:
+            stack = load_image_stack(
+                temp_path,
+                voxel_override=VoxelSize(voxel_x_um, voxel_y_um, voxel_z_um),
+            )
+            roi = roi_from_optional_bounds(roi_xmin, roi_xmax, roi_ymin, roi_ymax)
+            z_range = z_range_from_optional_bounds(z_min, z_max)
+            analysis = analyze_stack(
+                stack.grayscale,
+                thresholds=threshold,
+                voxel_size=stack.voxel_size,
+                roi=roi,
+                z_range=z_range,
+                profile=profile,
+                prefer_opencv=prefer_opencv,
+                include_mesh=False,
+            )
+            filtered = apply_preview_filters(stack.grayscale, roi, z_range)
+            geometry = contour_stack_mesh_geometry(
+                tuple(frame.contour for frame in analysis.frames),
+                shape=filtered.shape,
+                voxel=stack.voxel_size,
+                downsample=downsample,
+                max_faces=max_faces,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        finally:
+            temp_path.unlink(missing_ok=True)
+
+        return mesh_preview_payload(file.filename or str(temp_path.name), geometry, downsample=downsample)
 
     @app.post("/upload/batch")
     def upload_batch_analyze(
@@ -648,6 +741,39 @@ def preview_payload(source_path: str, preview_image: PreviewImage) -> dict[str, 
         "perimeter_px": preview.perimeter_px,
         "circularity": preview.circularity,
         "image_png_base64": b64encode(preview_image.png_bytes).decode("ascii"),
+    }
+
+
+def mesh_preview_payload(source_path: str, geometry: MeshGeometry | None, *, downsample: int) -> dict[str, object]:
+    if geometry is None:
+        return {
+            "source_path": source_path,
+            "has_mesh": False,
+            "downsample": downsample,
+            "vertex_count": 0,
+            "face_count": 0,
+            "vertices": [],
+            "faces": [],
+            "surface_area_um2": 0.0,
+            "volume_um3": 0.0,
+            "equivalent_sphere_diameter_um": 0.0,
+            "sphericity": 0.0,
+        }
+    measurement = geometry.measurement
+    vertices = geometry.vertices_xyz.round(6).tolist()
+    faces = geometry.faces.astype(int).tolist()
+    return {
+        "source_path": source_path,
+        "has_mesh": True,
+        "downsample": downsample,
+        "vertex_count": int(len(vertices)),
+        "face_count": int(len(faces)),
+        "vertices": vertices,
+        "faces": faces,
+        "surface_area_um2": measurement.surface_area_um2,
+        "volume_um3": measurement.volume_um3,
+        "equivalent_sphere_diameter_um": measurement.equivalent_sphere_diameter_um,
+        "sphericity": measurement.sphericity,
     }
 
 

@@ -30,6 +30,13 @@ class MeshMeasurement:
         return float(min(raw, 1.0))
 
 
+@dataclass(frozen=True)
+class MeshGeometry:
+    vertices_xyz: np.ndarray
+    faces: np.ndarray
+    measurement: MeshMeasurement
+
+
 def surface_area_volume(vertices: np.ndarray, faces: np.ndarray) -> MeshMeasurement:
     """Calculate surface area and enclosed signed-volume magnitude from triangles."""
 
@@ -49,8 +56,8 @@ def surface_area_volume(vertices: np.ndarray, faces: np.ndarray) -> MeshMeasurem
     return MeshMeasurement(surface_area_um2=surface_area, volume_um3=volume)
 
 
-def marching_cubes_measurement(mask_stack: np.ndarray, voxel: VoxelSize) -> MeshMeasurement:
-    """Run marching cubes on a (z, y, x) binary stack and measure the mesh."""
+def marching_cubes_geometry(mask_stack: np.ndarray, voxel: VoxelSize, *, max_faces: int | None = None) -> MeshGeometry:
+    """Run marching cubes on a (z, y, x) binary stack and return display geometry."""
 
     try:
         from skimage import measure
@@ -65,7 +72,19 @@ def marching_cubes_measurement(mask_stack: np.ndarray, voxel: VoxelSize) -> Mesh
         level=0.5,
         spacing=voxel.marching_cubes_spacing,
     )
-    return surface_area_volume(verts, faces)
+    measurement = surface_area_volume(verts, faces)
+    display_faces = faces
+    if max_faces is not None and max_faces > 0 and len(display_faces) > max_faces:
+        stride = int(np.ceil(len(display_faces) / max_faces))
+        display_faces = display_faces[::stride]
+    vertices_xyz = verts[:, [2, 1, 0]]
+    return MeshGeometry(vertices_xyz=vertices_xyz, faces=display_faces, measurement=measurement)
+
+
+def marching_cubes_measurement(mask_stack: np.ndarray, voxel: VoxelSize) -> MeshMeasurement:
+    """Run marching cubes on a (z, y, x) binary stack and measure the mesh."""
+
+    return marching_cubes_geometry(mask_stack, voxel).measurement
 
 
 def contours_to_mask_stack(
@@ -116,3 +135,31 @@ def measure_contour_stack(
     if np.count_nonzero(mask_stack) == 0:
         return None
     return marching_cubes_measurement(mask_stack, voxel)
+
+
+def contour_stack_mesh_geometry(
+    contours: list[np.ndarray | None] | tuple[np.ndarray | None, ...],
+    *,
+    shape: tuple[int, int, int],
+    voxel: VoxelSize,
+    downsample: int = 2,
+    max_faces: int = 12000,
+) -> MeshGeometry | None:
+    """Rasterize contours and return a decimated mesh suitable for web display."""
+
+    mask_stack = contours_to_mask_stack(contours, shape=shape)
+    if np.count_nonzero(mask_stack) == 0:
+        return None
+
+    factor = max(1, int(downsample))
+    display_mask = mask_stack
+    display_voxel = voxel
+    if factor > 1 and min(mask_stack.shape) >= factor * 2:
+        display_mask = mask_stack[::factor, ::factor, ::factor]
+        display_voxel = VoxelSize(
+            x_um=voxel.x_um * factor,
+            y_um=voxel.y_um * factor,
+            z_um=voxel.z_um * factor,
+        )
+
+    return marching_cubes_geometry(display_mask, display_voxel, max_faces=max_faces)

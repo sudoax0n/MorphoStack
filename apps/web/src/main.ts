@@ -100,6 +100,20 @@ type PreviewResponse = {
   image_png_base64: string;
 };
 
+type MeshPreviewResponse = {
+  source_path: string;
+  has_mesh: boolean;
+  downsample: number;
+  vertex_count: number;
+  face_count: number;
+  vertices: number[][];
+  faces: number[][];
+  surface_area_um2: number;
+  volume_um3: number;
+  equivalent_sphere_diameter_um: number;
+  sphericity: number;
+};
+
 type ThresholdResponse = {
   source_path: string;
   threshold: number;
@@ -263,6 +277,7 @@ app.innerHTML = `
         <h2><span class="step-badge">2</span> Preview & Analyze</h2>
         <div class="button-row">
           <button id="preview-btn" class="secondary" type="button">Preview</button>
+          <button id="mesh-preview-btn" class="secondary" type="button">View 3D Mesh</button>
           <button id="analyze-btn" type="button">Analyze</button>
         </div>
       </div>
@@ -319,6 +334,7 @@ app.innerHTML = `
         </div>
       </fieldset>
       <div id="preview-output" class="preview-output muted">No preview rendered yet.</div>
+      <div id="mesh-output" class="mesh-output muted">No 3D mesh rendered yet.</div>
       <div id="analysis-summary" class="output muted">No analysis run yet.</div>
     </section>
   </main>
@@ -490,6 +506,7 @@ const apiStatus = mustElement<HTMLDivElement>("api-status");
 const projectStatus = mustElement<HTMLDivElement>("project-status");
 const inspectOutput = mustElement<HTMLDivElement>("inspect-output");
 const previewOutput = mustElement<HTMLDivElement>("preview-output");
+const meshOutput = mustElement<HTMLDivElement>("mesh-output");
 const analysisSummary = mustElement<HTMLDivElement>("analysis-summary");
 const batchSummary = mustElement<HTMLDivElement>("batch-summary");
 const sweepSummary = mustElement<HTMLDivElement>("sweep-summary");
@@ -523,6 +540,10 @@ mustElement<HTMLButtonElement>("analyze-btn").addEventListener("click", () => {
 
 mustElement<HTMLButtonElement>("preview-btn").addEventListener("click", () => {
   void previewStack();
+});
+
+mustElement<HTMLButtonElement>("mesh-preview-btn").addEventListener("click", () => {
+  void previewMesh();
 });
 
 mustElement<HTMLButtonElement>("suggest-threshold-btn").addEventListener("click", () => {
@@ -695,6 +716,29 @@ async function previewStack(): Promise<void> {
     renderPreview(payload, roi);
   } catch (error) {
     previewOutput.textContent = errorMessage(error);
+  }
+}
+
+async function previewMesh(): Promise<void> {
+  meshOutput.textContent = "Rendering 3D mesh...";
+  try {
+    const file = selectedFile();
+    const payload = file
+      ? await apiUploadPost<MeshPreviewResponse>("/api/upload/mesh-preview", meshPreviewUploadForm(file))
+      : await apiPost<MeshPreviewResponse>("/api/mesh-preview", {
+          path: readPath(),
+          threshold: readNumber("threshold-input"),
+          profile: readProfile(),
+          voxel: readVoxel(),
+          roi: readRoi(),
+          z_range: readZRange(),
+          prefer_opencv: !mustElement<HTMLInputElement>("fallback-input").checked,
+          downsample: 2,
+          max_faces: 12000
+        });
+    renderMeshPreview(payload);
+  } catch (error) {
+    meshOutput.textContent = errorMessage(error);
   }
 }
 
@@ -1007,6 +1051,74 @@ function updateRoiStatus(): void {
     roiStatus.textContent = errorMessage(error);
     roiStatus.className = "inline-status warn";
   }
+}
+
+function renderMeshPreview(payload: MeshPreviewResponse): void {
+  if (!payload.has_mesh || payload.vertices.length === 0 || payload.faces.length === 0) {
+    meshOutput.textContent = "No 3D mesh could be created from the current threshold/ROI/Z range.";
+    meshOutput.className = "mesh-output muted";
+    return;
+  }
+
+  meshOutput.className = "mesh-output";
+  meshOutput.innerHTML = `
+    <div>
+      <strong>${escapeHtml(payload.source_path)}</strong><br />
+      Display mesh: ${payload.vertex_count} vertices, ${payload.face_count} faces, downsample x${payload.downsample}<br />
+      Surface ${formatNumber(payload.surface_area_um2)} um2,
+      volume ${formatNumber(payload.volume_um3)} um3,
+      sphericity ${formatNumber(payload.sphericity)}
+    </div>
+    <iframe id="mesh-frame" title="3D mesh preview"></iframe>
+  `;
+  mustElement<HTMLIFrameElement>("mesh-frame").srcdoc = meshPreviewHtml(payload);
+}
+
+function meshPreviewHtml(payload: MeshPreviewResponse): string {
+  const x = payload.vertices.map((vertex) => vertex[0]);
+  const y = payload.vertices.map((vertex) => vertex[1]);
+  const z = payload.vertices.map((vertex) => vertex[2]);
+  const i = payload.faces.map((face) => face[0]);
+  const j = payload.faces.map((face) => face[1]);
+  const k = payload.faces.map((face) => face[2]);
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    html, body, #plot { width: 100%; height: 100%; margin: 0; background: #0f172a; }
+  </style>
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+</head>
+<body>
+  <div id="plot"></div>
+  <script>
+    const trace = {
+      type: "mesh3d",
+      x: ${JSON.stringify(x)},
+      y: ${JSON.stringify(y)},
+      z: ${JSON.stringify(z)},
+      i: ${JSON.stringify(i)},
+      j: ${JSON.stringify(j)},
+      k: ${JSON.stringify(k)},
+      color: "#38bdf8",
+      opacity: 0.86,
+      flatshading: true
+    };
+    const layout = {
+      margin: { l: 0, r: 0, t: 0, b: 0 },
+      paper_bgcolor: "#0f172a",
+      scene: {
+        aspectmode: "data",
+        xaxis: { title: "X (um)", color: "#e5e7eb", gridcolor: "rgba(255,255,255,0.18)", backgroundcolor: "#111827" },
+        yaxis: { title: "Y (um)", color: "#e5e7eb", gridcolor: "rgba(255,255,255,0.18)", backgroundcolor: "#111827" },
+        zaxis: { title: "Z (um)", color: "#e5e7eb", gridcolor: "rgba(255,255,255,0.18)", backgroundcolor: "#111827" }
+      }
+    };
+    Plotly.newPlot("plot", [trace], layout, { responsive: true, displaylogo: false });
+  </script>
+</body>
+</html>`;
 }
 
 function renderAnalysis(payload: AnalyzeResponse): void {
@@ -1708,6 +1820,19 @@ function previewUploadForm(file: File): FormData {
   formData.set("threshold", String(readNumber("threshold-input")));
   formData.set("frame_index", String(readInteger("frame-input")));
   formData.set("prefer_opencv", String(!mustElement<HTMLInputElement>("fallback-input").checked));
+  appendRoiFields(formData);
+  appendZRangeFields(formData);
+  return formData;
+}
+
+function meshPreviewUploadForm(file: File): FormData {
+  const formData = new FormData();
+  appendFileAndVoxel(formData, file);
+  formData.set("threshold", String(readNumber("threshold-input")));
+  formData.set("profile", readProfile());
+  formData.set("prefer_opencv", String(!mustElement<HTMLInputElement>("fallback-input").checked));
+  formData.set("downsample", "2");
+  formData.set("max_faces", "12000");
   appendRoiFields(formData);
   appendZRangeFields(formData);
   return formData;

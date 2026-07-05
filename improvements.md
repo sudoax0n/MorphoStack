@@ -21,6 +21,7 @@ Supported workflow pieces include:
 - vesicle and RBC profile selection
 - optional 3D mesh measurements for surface area, volume, equivalent sphere
   diameter, and sphericity
+- interactive Plotly-based 3D mesh preview in the web UI
 - project settings JSON import/export
 - batch analysis
 - CSV validation against reference outputs
@@ -42,9 +43,9 @@ but still uses the same threshold-contour measurement engine as vesicles.
 - Manual ROI selection now exists in the web preview, but it is still a simple
   rectangular selector. It does not yet support ImageJ/Fiji-style polygon/freehand
   ROIs, multiple ROIs, saved ROI presets, or manual contour correction.
-- The web UI does not yet include the old standalone 3D preview HTML workflow.
-  Mesh measurements can be computed and reported, but the next UI step is an
-  interactive 3D viewer for surface inspection and presentation.
+- The web UI now includes a fast Plotly 3D mesh preview. It is still a minimal
+  visual QC viewer: export controls, camera presets, color controls, and
+  LimeSeg/Fiji bridges are future work.
 - Mesh measurements should be treated as optional and carefully documented.
   Surface area and volume depend on segmentation quality, voxel calibration, and
   stack sampling; reports should make those assumptions obvious.
@@ -175,8 +176,8 @@ High priority:
 - define RBC-specific outputs with the lab before adding too many metrics
 - collect small representative vesicle and RBC test datasets
 - create trusted reference CSV outputs for regression validation
-- add an interactive 3D preview panel for mesh/surface review, ideally reusing
-  the old proof-of-concept where it is scientifically useful
+- improve the interactive 3D preview with export controls, camera presets,
+  stronger loading states, and optional LimeSeg/Fiji export
 - add manual contour correction after the preview overlay so users can fix
   difficult RBC/vesicle segmentations before exporting final metrics
 - make voxel calibration unavoidable or visibly warned

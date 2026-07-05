@@ -49,7 +49,11 @@ If the default ports are busy:
 9. Click **Preview** and inspect the segmentation overlay.
 10. Adjust threshold, preview frame, ROI, or Z range if needed.
 11. Click **Analyze**.
-12. Download:
+12. Optional: enable **Include 3D mesh**, then click **View 3D Mesh**.
+    - The browser renders an interactive Plotly mesh.
+    - The displayed mesh is decimated for speed; use the reported metrics for
+      numbers and the viewer for visual inspection.
+13. Download:
    - **CSV** for frame metrics.
    - **Manifest** for run settings/provenance.
    - **Report** for lab notes or presentation backup.
@@ -84,6 +88,9 @@ The frame metrics CSV includes:
 - equivalent diameter
 - solidity
 - optional 3D mesh surface area and volume
+
+The 3D mesh viewer uses the same threshold, voxel calibration, ROI, Z range, and
+contour backend settings currently selected in the web UI.
 
 The manifest records:
 
@@ -149,8 +156,9 @@ Batch analysis:
   correction are not yet in MorphoStack.
 - RBC-specific biological metrics still need lab validation.
 - Mesh values depend strongly on segmentation quality and voxel calibration.
-- Mesh values are reported, but the old interactive 3D preview HTML workflow
-  has not yet been rebuilt in the new web app.
+- The 3D viewer is a fast Plotly mesh preview. For very large stacks it is
+  downsampled for browser speed, so it should be treated as visual QC rather
+  than the final numerical mesh.
 - If voxel spacing is unknown, physical units should be treated cautiously.
 
 ## Quick Troubleshooting

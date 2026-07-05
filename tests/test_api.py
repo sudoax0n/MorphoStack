@@ -150,6 +150,35 @@ def test_analyze_stack_with_mesh(client, tmp_path):
     assert payload["mesh"]["sphericity"] > 0
 
 
+def test_mesh_preview_returns_display_geometry(client, tmp_path):
+    pytest.importorskip("cv2")
+    pytest.importorskip("skimage")
+    path = tmp_path / "stack.tif"
+    write_stack(path)
+
+    response = client.post(
+        "/mesh-preview",
+        json={
+            "path": str(path),
+            "threshold": 100,
+            "voxel": {"x_um": 1.0, "y_um": 1.0, "z_um": 1.0},
+            "prefer_opencv": False,
+            "downsample": 1,
+            "max_faces": 5000,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["has_mesh"] is True
+    assert payload["vertex_count"] == len(payload["vertices"])
+    assert payload["face_count"] == len(payload["faces"])
+    assert len(payload["vertices"][0]) == 3
+    assert len(payload["faces"][0]) == 3
+    assert payload["surface_area_um2"] > 0
+    assert payload["volume_um3"] > 0
+
+
 def test_threshold_stack_returns_suggestion(client, tmp_path):
     path = tmp_path / "stack.tif"
     write_stack(path)

@@ -304,6 +304,27 @@ legend {
   line-height: 1.6;
 }
 
+.mesh-output {
+  display: grid;
+  gap: 12px;
+  min-height: 120px;
+  margin-bottom: 14px;
+  border: 1px solid #dde4f0;
+  border-radius: 8px;
+  padding: 12px;
+  background: #f8fafc;
+  line-height: 1.6;
+}
+
+.mesh-output iframe {
+  width: 100%;
+  height: min(58vh, 520px);
+  min-height: 340px;
+  border: 1px solid #d8e0ec;
+  border-radius: 6px;
+  background: #0f172a;
+}
+
 .preview-output img {
   width: 100%;
   max-height: 320px;
