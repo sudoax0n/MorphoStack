@@ -322,6 +322,145 @@ def write_analysis_manifest_json(manifest: dict[str, object], destination: str |
             handle.close()
 
 
+def analysis_report_markdown(
+    analysis: StackAnalysis,
+    *,
+    source_path: str,
+    threshold: float | list[float] | tuple[float, ...],
+    roi: dict[str, int] | None = None,
+    include_mesh: bool = False,
+    prefer_opencv: bool = True,
+    voxel_source: str = "unknown",
+    row_limit: int = 10,
+) -> str:
+    summary = analysis_summary(analysis)
+    warnings = analysis_run_warnings(analysis, voxel_source=voxel_source)
+    metrics = summary["metrics"]
+    lines = [
+        "# MorphoStack Analysis Report",
+        "",
+        "## Run Settings",
+        "",
+        f"- Source: `{source_path}`",
+        f"- MorphoStack version: `{__version__}`",
+        f"- Profile: `{analysis.profile}`",
+        f"- Threshold: `{threshold}`",
+        f"- ROI: `{roi if roi is not None else 'full stack'}`",
+        f"- Include mesh: `{include_mesh}`",
+        f"- Prefer OpenCV contours: `{prefer_opencv}`",
+        f"- Voxel source: `{voxel_source}`",
+        (
+            "- Voxel size: "
+            f"x={format_report_number(analysis.voxel_size.x_um)} um, "
+            f"y={format_report_number(analysis.voxel_size.y_um)} um, "
+            f"z={format_report_number(analysis.voxel_size.z_um)} um"
+        ),
+        "",
+        "## Frame Summary",
+        "",
+        f"- Frames: {summary['frame_count']}",
+        f"- Valid frames: {summary['valid_frame_count']}",
+        f"- Valid fraction: {format_report_number(summary['valid_fraction'])}",
+        "",
+    ]
+
+    if warnings:
+        lines.extend(["## Warnings", ""])
+        for warning in warnings:
+            lines.append(
+                f"- `{warning['code']}` ({warning['severity']}): {warning['message']}"
+            )
+        lines.append("")
+
+    if isinstance(metrics, dict) and metrics:
+        lines.extend(
+            [
+                "## Metric Summary",
+                "",
+                "| Metric | Mean | Min | Max | Std |",
+                "| --- | ---: | ---: | ---: | ---: |",
+            ]
+        )
+        for metric in SUMMARY_METRICS:
+            values = metrics.get(metric)
+            if isinstance(values, dict):
+                lines.append(
+                    "| "
+                    f"{metric} | "
+                    f"{format_report_number(values['mean'])} | "
+                    f"{format_report_number(values['min'])} | "
+                    f"{format_report_number(values['max'])} | "
+                    f"{format_report_number(values['std'])} |"
+                )
+        lines.append("")
+
+    if analysis.mesh:
+        lines.extend(
+            [
+                "## Mesh Summary",
+                "",
+                f"- Surface area: {format_report_number(analysis.mesh.surface_area_um2)} um^2",
+                f"- Volume: {format_report_number(analysis.mesh.volume_um3)} um^3",
+                f"- Equivalent sphere diameter: {format_report_number(analysis.mesh.equivalent_sphere_diameter_um)} um",
+                f"- Sphericity: {format_report_number(analysis.mesh.sphericity)}",
+                "",
+            ]
+        )
+
+    rows = analysis_rows(analysis)[: max(row_limit, 0)]
+    if rows:
+        lines.extend(
+            [
+                f"## First {len(rows)} Frame Rows",
+                "",
+                "| Frame | Contour | Area (um^2) | Perimeter (um) | Circularity | Deformation index |",
+                "| ---: | :---: | ---: | ---: | ---: | ---: |",
+            ]
+        )
+        for row in rows:
+            lines.append(
+                "| "
+                f"{row['frame_index']} | "
+                f"{'yes' if row['has_contour'] else 'no'} | "
+                f"{format_report_number(row['area_um2'])} | "
+                f"{format_report_number(row['perimeter_um'])} | "
+                f"{format_report_number(row['circularity'])} | "
+                f"{format_report_number(row['deformation_index'])} |"
+            )
+        lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def write_analysis_report_markdown(
+    analysis: StackAnalysis,
+    destination: str | Path | TextIO,
+    **kwargs,
+) -> None:
+    close_after = False
+    if hasattr(destination, "write"):
+        handle = destination
+    else:
+        path = Path(destination)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handle = path.open("w", encoding="utf-8")
+        close_after = True
+
+    try:
+        handle.write(analysis_report_markdown(analysis, **kwargs))
+    finally:
+        if close_after:
+            handle.close()
+
+
+def format_report_number(value: object) -> str:
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return f"{value:.6g}"
+    return str(value)
+
+
 def write_analysis_csv(analysis: StackAnalysis, destination: str | Path | TextIO) -> None:
     close_after = False
     if hasattr(destination, "write"):

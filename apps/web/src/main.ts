@@ -421,6 +421,7 @@ app.innerHTML = `
     <div class="results-header">
       <h2>Frame Metrics</h2>
       <div class="button-row">
+        <button id="download-report-btn" class="secondary" type="button" disabled>Download Report</button>
         <button id="download-manifest-btn" class="secondary" type="button" disabled>Download Manifest</button>
         <button id="download-csv-btn" class="secondary" type="button" disabled>Download CSV</button>
       </div>
@@ -463,6 +464,7 @@ const batchResultsBody = mustElement<HTMLTableSectionElement>("batch-results-bod
 const sweepResultsBody = mustElement<HTMLTableSectionElement>("sweep-results-body");
 const validationResultsBody = mustElement<HTMLTableSectionElement>("validation-results-body");
 const downloadCsvButton = mustElement<HTMLButtonElement>("download-csv-btn");
+const downloadReportButton = mustElement<HTMLButtonElement>("download-report-btn");
 const downloadManifestButton = mustElement<HTMLButtonElement>("download-manifest-btn");
 const downloadBatchButton = mustElement<HTMLButtonElement>("download-batch-btn");
 const downloadSweepButton = mustElement<HTMLButtonElement>("download-sweep-btn");
@@ -512,6 +514,10 @@ downloadCsvButton.addEventListener("click", () => {
 
 downloadManifestButton.addEventListener("click", () => {
   downloadLatestManifest();
+});
+
+downloadReportButton.addEventListener("click", () => {
+  downloadLatestReport();
 });
 
 downloadBatchButton.addEventListener("click", () => {
@@ -639,6 +645,7 @@ async function suggestThreshold(): Promise<void> {
 async function analyzeStack(): Promise<void> {
   latestAnalysis = null;
   downloadCsvButton.disabled = true;
+  downloadReportButton.disabled = true;
   downloadManifestButton.disabled = true;
   analysisSummary.textContent = "Analyzing...";
   resultsBody.innerHTML = `<tr><td colspan="11" class="muted">Running analysis...</td></tr>`;
@@ -770,6 +777,7 @@ function renderPreview(payload: PreviewResponse): void {
 function renderAnalysis(payload: AnalyzeResponse): void {
   latestAnalysis = payload;
   downloadCsvButton.disabled = payload.rows.length === 0;
+  downloadReportButton.disabled = false;
   downloadManifestButton.disabled = false;
   const meshText = payload.mesh
     ? `<br />3D surface: ${formatNumber(payload.mesh.surface_area_um2)} um2, volume: ${formatNumber(payload.mesh.volume_um3)} um3, sphericity: ${formatNumber(payload.mesh.sphericity)}`
@@ -928,6 +936,23 @@ function downloadLatestBatchCsv(): void {
   URL.revokeObjectURL(url);
 }
 
+function downloadLatestReport(): void {
+  if (!latestAnalysis) {
+    return;
+  }
+
+  const markdown = analysisReportMarkdown(latestAnalysis);
+  const blob = new Blob([markdown], { type: "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = reportFilename(latestAnalysis.source_path);
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
 function downloadLatestSweepCsv(): void {
   if (!latestSweep || latestSweep.rows.length === 0) {
     return;
@@ -960,6 +985,76 @@ function downloadLatestManifest(): void {
   anchor.click();
   anchor.remove();
   URL.revokeObjectURL(url);
+}
+
+function analysisReportMarkdown(payload: AnalyzeResponse): string {
+  const manifest = payload.manifest;
+  const lines = [
+    "# MorphoStack Analysis Report",
+    "",
+    "## Run Settings",
+    "",
+    `- Source: \`${payload.source_path}\``,
+    `- Profile: \`${payload.profile}\``,
+    `- Threshold: \`${String(manifest.threshold ?? "")}\``,
+    `- ROI: \`${manifest.roi === null || manifest.roi === undefined ? "full stack" : JSON.stringify(manifest.roi)}\``,
+    `- Include mesh: \`${String(manifest.include_mesh ?? false)}\``,
+    `- Prefer OpenCV contours: \`${String(manifest.prefer_opencv ?? true)}\``,
+    `- Voxel source: \`${payload.voxel_source}\``,
+    `- Voxel size: x=${formatNumber(payload.voxel_size.x_um)} um, y=${formatNumber(payload.voxel_size.y_um)} um, z=${formatNumber(payload.voxel_size.z_um)} um`,
+    "",
+    "## Frame Summary",
+    "",
+    `- Frames: ${payload.frame_count}`,
+    `- Valid frames: ${payload.valid_frame_count}`,
+    `- Valid fraction: ${formatNumber(payload.summary.valid_fraction)}`,
+    ""
+  ];
+
+  if (payload.warnings.length > 0) {
+    lines.push("## Warnings", "");
+    payload.warnings.forEach((warning) => {
+      lines.push(`- \`${warning.code}\` (${warning.severity}): ${warning.message}`);
+    });
+    lines.push("");
+  }
+
+  const metricEntries = Object.entries(payload.summary.metrics);
+  if (metricEntries.length > 0) {
+    lines.push("## Metric Summary", "");
+    lines.push("| Metric | Mean | Min | Max | Std |");
+    lines.push("| --- | ---: | ---: | ---: | ---: |");
+    metricEntries.forEach(([name, values]) => {
+      lines.push(
+        `| ${name} | ${formatNumber(values.mean)} | ${formatNumber(values.min)} | ${formatNumber(values.max)} | ${formatNumber(values.std)} |`
+      );
+    });
+    lines.push("");
+  }
+
+  if (payload.mesh) {
+    lines.push("## Mesh Summary", "");
+    lines.push(`- Surface area: ${formatNumber(payload.mesh.surface_area_um2)} um2`);
+    lines.push(`- Volume: ${formatNumber(payload.mesh.volume_um3)} um3`);
+    lines.push(`- Equivalent sphere diameter: ${formatNumber(payload.mesh.equivalent_sphere_diameter_um)} um`);
+    lines.push(`- Sphericity: ${formatNumber(payload.mesh.sphericity)}`);
+    lines.push("");
+  }
+
+  const rows = payload.rows.slice(0, 10);
+  if (rows.length > 0) {
+    lines.push(`## First ${rows.length} Frame Rows`, "");
+    lines.push("| Frame | Contour | Area (um2) | Perimeter (um) | Circularity | Deformation index |");
+    lines.push("| ---: | :---: | ---: | ---: | ---: | ---: |");
+    rows.forEach((row) => {
+      lines.push(
+        `| ${row.frame_index} | ${row.has_contour ? "yes" : "no"} | ${formatNumber(row.area_um2)} | ${formatNumber(row.perimeter_um)} | ${formatNumber(row.circularity)} | ${formatNumber(row.deformation_index)} |`
+      );
+    });
+    lines.push("");
+  }
+
+  return `${lines.join("\n").trim()}\n`;
 }
 
 function currentProjectSettings(): ProjectSettings {
@@ -1116,6 +1211,13 @@ function manifestFilename(sourcePath: string): string {
   const baseName = rawName.replace(/\.[^.]+$/, "") || "morphostack-analysis";
   const safeName = baseName.replace(/[^a-z0-9._-]+/gi, "_");
   return `${safeName}_manifest.json`;
+}
+
+function reportFilename(sourcePath: string): string {
+  const rawName = sourcePath.split(/[\\/]/).pop() || "morphostack-analysis";
+  const baseName = rawName.replace(/\.[^.]+$/, "") || "morphostack-analysis";
+  const safeName = baseName.replace(/[^a-z0-9._-]+/gi, "_");
+  return `${safeName}_report.md`;
 }
 
 function sweepFilename(sourcePath: string): string {

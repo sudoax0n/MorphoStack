@@ -37,6 +37,7 @@ from morphostack.core import (
     threshold_values,
     write_analysis_csv,
     write_analysis_manifest_json,
+    write_analysis_report_markdown,
     write_batch_summary_csv,
     write_project_settings,
     write_threshold_sweep_csv,
@@ -201,6 +202,12 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.add_argument("--roi", nargs=4, type=int, metavar=("XMIN", "XMAX", "YMIN", "YMAX"))
     analyze.add_argument("--manifest", help="Manifest JSON output path. Default: <csv>.manifest.json.")
     analyze.add_argument("--no-manifest", action="store_true", help="Do not write a manifest JSON sidecar.")
+    analyze.add_argument(
+        "--report",
+        nargs="?",
+        const="",
+        help="Write a Markdown analysis report. Default path: <csv>.report.md.",
+    )
     analyze.add_argument("--project", help="Project settings JSON path.")
     analyze.add_argument(
         "--mesh",
@@ -351,6 +358,7 @@ def main(argv: list[str] | None = None) -> int:
             voxel_z=args.voxel_z,
             roi=args.roi,
             manifest=args.manifest,
+            report=args.report,
             write_manifest=not args.no_manifest,
             prefer_opencv=prefer_opencv_from_flag(args.fallback_contours),
             include_mesh=args.include_mesh,
@@ -556,6 +564,7 @@ def run_analyze(
     voxel_z: float | None = None,
     roi: list[int] | None = None,
     manifest: str | None = None,
+    report: str | None = None,
     write_manifest: bool = True,
     prefer_opencv: bool | None = None,
     include_mesh: bool | None = None,
@@ -611,6 +620,19 @@ def run_analyze(
                 ),
                 manifest_path,
             )
+        report_path = None
+        if report is not None:
+            report_path = Path(report) if report else output_path.with_suffix(f"{output_path.suffix}.report.md")
+            write_analysis_report_markdown(
+                analysis,
+                report_path,
+                source_path=str(stack.source_path),
+                threshold=resolved_threshold,
+                roi=roi_to_payload(rect_roi),
+                include_mesh=resolved_mesh,
+                prefer_opencv=resolved_prefer_opencv,
+                voxel_source=stack.voxel_source,
+            )
     except Exception as exc:
         print(f"Failed to analyze image stack: {exc}")
         return 1
@@ -640,6 +662,8 @@ def run_analyze(
     print(f"CSV: {output_path}")
     if manifest_path:
         print(f"Manifest: {manifest_path}")
+    if report_path:
+        print(f"Report: {report_path}")
     return 0
 
 

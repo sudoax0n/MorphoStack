@@ -305,6 +305,44 @@ def test_analyze_writes_csv_from_synthetic_tiff(tmp_path, capsys):
     assert "0,100.0,vesicle,fallback,True" in csv_text
 
 
+def test_analyze_can_write_markdown_report_from_synthetic_tiff(tmp_path, capsys):
+    tifffile = pytest.importorskip("tifffile")
+    stack = np.zeros((2, 8, 8), dtype=np.uint8)
+    stack[:, 2:5, 1:4] = 200
+    input_path = tmp_path / "stack.tif"
+    output_path = tmp_path / "metrics.csv"
+    report_path = tmp_path / "report.md"
+    tifffile.imwrite(input_path, stack, photometric="minisblack")
+
+    result = main(
+        [
+            "analyze",
+            str(input_path),
+            "--threshold",
+            "100",
+            "--out",
+            str(output_path),
+            "--report",
+            str(report_path),
+            "--voxel-x",
+            "1.0",
+            "--voxel-y",
+            "1.0",
+            "--voxel-z",
+            "1.0",
+            "--fallback-contours",
+        ]
+    )
+
+    assert result == 0
+    out = capsys.readouterr().out
+    assert f"Report: {report_path}" in out
+    report = report_path.read_text(encoding="utf-8")
+    assert report.startswith("# MorphoStack Analysis Report")
+    assert "- Valid frames: 2" in report
+    assert "| area_um2 | 9 | 9 | 9 | 0 |" in report
+
+
 def test_analyze_uses_project_defaults_from_synthetic_tiff(tmp_path, capsys):
     tifffile = pytest.importorskip("tifffile")
     stack = np.zeros((2, 8, 8), dtype=np.uint8)

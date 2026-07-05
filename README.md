@@ -14,6 +14,7 @@ morphostack inspect path\to\stack.tif
 morphostack threshold path\to\stack.tif
 morphostack sweep path\to\stack.tif --start 50 --stop 200 --step 10 --out sweep.csv
 morphostack analyze path\to\stack.tif --threshold 100 --out metrics.csv
+morphostack analyze path\to\stack.tif --threshold 100 --out metrics.csv --report
 morphostack analyze path\to\stack.tif --threshold 100 --profile rbc --out metrics.csv
 morphostack batch path\to\stacks --threshold 100 --out batch_summary.csv
 morphostack validate reference_metrics.csv new_metrics.csv
@@ -93,6 +94,9 @@ with source path, version, profile, voxel size, ROI, threshold, mesh settings,
 voxel source, run-level summary statistics, quality warnings, and CSV columns.
 Use `--no-manifest` to skip it or
 `--manifest path\to\run.json` to choose the JSON path.
+Add `--report` to also write a Markdown report at
+`<metrics.csv>.report.md`, or pass `--report path\to\report.md` to choose the
+path.
 
 To analyze a folder of stacks and produce one summary table:
 
@@ -156,6 +160,7 @@ The browser UI can preview threshold segmentation, analyze a selected TIFF/CZI
 file through upload endpoints, or use a local stack path when the backend can
 already access the file. After analysis, the frame metrics table can be
 downloaded as a CSV file, and the run manifest can be downloaded as JSON.
+The browser can also download a Markdown report from the latest analysis run.
 The web app can also run a threshold sweep and download the sweep summary as
 CSV.
 Project settings JSON can be loaded into the browser controls or downloaded

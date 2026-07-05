@@ -8,12 +8,14 @@ import numpy as np
 from morphostack.core import VoxelSize, analyze_stack
 from morphostack.core.export import (
     analysis_manifest,
+    analysis_report_markdown,
     analysis_rows,
     analysis_run_warnings,
     analysis_summary,
     analysis_warnings,
     write_analysis_csv,
     write_analysis_manifest_json,
+    write_analysis_report_markdown,
 )
 
 
@@ -192,3 +194,53 @@ def test_write_analysis_manifest_json_writes_pretty_json():
 
     payload = json.loads(buffer.getvalue())
     assert payload == manifest
+
+
+def test_analysis_report_markdown_summarizes_run():
+    stack = np.zeros((2, 8, 8), dtype=np.uint8)
+    stack[1, 2:5, 1:4] = 200
+    analysis = analyze_stack(
+        stack,
+        thresholds=100,
+        voxel_size=VoxelSize(1.0, 1.0, 1.0),
+        profile="rbc",
+        prefer_opencv=False,
+    )
+
+    report = analysis_report_markdown(
+        analysis,
+        source_path="stack.tif",
+        threshold=100,
+        include_mesh=False,
+        prefer_opencv=False,
+        voxel_source="override",
+    )
+
+    assert report.startswith("# MorphoStack Analysis Report")
+    assert "- Source: `stack.tif`" in report
+    assert "- Profile: `rbc`" in report
+    assert "- Valid frames: 1" in report
+    assert "`partial_contours`" in report
+    assert "| area_um2 | 9 | 9 | 9 | 0 |" in report
+    assert "| 1 | yes | 9 | 12 |" in report
+
+
+def test_write_analysis_report_markdown_writes_text():
+    stack = np.zeros((1, 8, 8), dtype=np.uint8)
+    stack[0, 2:5, 1:4] = 200
+    analysis = analyze_stack(
+        stack,
+        thresholds=100,
+        voxel_size=VoxelSize(1.0, 1.0, 1.0),
+        prefer_opencv=False,
+    )
+    buffer = StringIO()
+
+    write_analysis_report_markdown(
+        analysis,
+        buffer,
+        source_path="stack.tif",
+        threshold=100,
+    )
+
+    assert "## Metric Summary" in buffer.getvalue()

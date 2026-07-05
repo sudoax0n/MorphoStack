@@ -12,6 +12,7 @@ from morphostack.core.contours import (
 from morphostack.core.export import (
     CSV_COLUMNS,
     BATCH_SUMMARY_COLUMNS,
+    analysis_report_markdown,
     analysis_manifest,
     analysis_rows,
     analysis_run_warnings,
@@ -22,6 +23,7 @@ from morphostack.core.export import (
     write_batch_summary_csv,
     write_analysis_csv,
     write_analysis_manifest_json,
+    write_analysis_report_markdown,
 )
 from morphostack.core.images import as_color_stack, as_grayscale_stack, stretch_to_uint8
 from morphostack.core.io import load_image_stack
@@ -88,6 +90,7 @@ __all__ = [
     "analyze_frame",
     "analyze_stack",
     "analysis_manifest",
+    "analysis_report_markdown",
     "analysis_rows",
     "analysis_run_warnings",
     "analysis_summary",
@@ -120,6 +123,7 @@ __all__ = [
     "write_batch_summary_csv",
     "write_analysis_csv",
     "write_analysis_manifest_json",
+    "write_analysis_report_markdown",
     "write_project_settings",
     "write_threshold_sweep_csv",
 ]
