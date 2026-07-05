@@ -21,6 +21,7 @@ morphostack analyze path\to\stack.tif --threshold 100 --profile rbc --out metric
 morphostack batch path\to\stacks --threshold 100 --out batch_summary.csv
 morphostack batch path\to\stacks --threshold 100 --out batch_summary.csv --bundle-dir runs
 morphostack validate reference_metrics.csv new_metrics.csv
+morphostack validate reference_batch.csv new_batch.csv --key-column source_path --all-columns
 morphostack serve
 morphostack dev
 mst doctor
@@ -132,6 +133,8 @@ To compare a new CSV export against a reference export:
 Use `--columns area_um2 circularity deformation_index` to restrict validation
 to selected metrics. This is intended for regression checks against trusted
 legacy outputs or curated lab reference datasets.
+Use `--all-columns` when comparing batch summary CSVs and provenance columns
+such as `source_sha256` should be checked exactly.
 
 To start the local backend for the future web UI:
 

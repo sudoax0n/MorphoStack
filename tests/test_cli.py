@@ -723,3 +723,17 @@ def test_validate_fails_different_metric_csvs(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "Result: FAIL" in out
     assert "area_um2" in out
+
+
+def test_validate_all_columns_reports_text_differences(tmp_path, capsys):
+    expected = tmp_path / "expected.csv"
+    actual = tmp_path / "actual.csv"
+    expected.write_text("frame_index,area_um2,source_sha256\n0,9.0,abc\n", encoding="utf-8")
+    actual.write_text("frame_index,area_um2,source_sha256\n0,9.0,def\n", encoding="utf-8")
+
+    result = main(["validate", str(expected), str(actual), "--all-columns"])
+
+    assert result == 1
+    out = capsys.readouterr().out
+    assert "source_sha256" in out
+    assert "expected=abc, actual=def" in out

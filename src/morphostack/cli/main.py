@@ -293,6 +293,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional metric columns to compare. Default: all shared numeric columns.",
     )
     validate.add_argument(
+        "--all-columns",
+        action="store_true",
+        help="Compare all shared columns except the key column, including text/provenance columns.",
+    )
+    validate.add_argument(
         "--key-column",
         default="frame_index",
         help="Column used to match rows. Default: frame_index.",
@@ -421,6 +426,7 @@ def main(argv: list[str] | None = None) -> int:
             actual=args.actual,
             tolerance=args.tolerance,
             columns=args.columns,
+            all_columns=args.all_columns,
             key_column=args.key_column,
         )
 
@@ -976,6 +982,7 @@ def run_validate(
     actual: str,
     tolerance: float = 1e-6,
     columns: list[str] | None = None,
+    all_columns: bool = False,
     key_column: str = "frame_index",
 ) -> int:
     try:
@@ -984,6 +991,7 @@ def run_validate(
             actual,
             tolerance=tolerance,
             columns=columns,
+            all_columns=all_columns,
             key_column=key_column,
         )
     except Exception as exc:

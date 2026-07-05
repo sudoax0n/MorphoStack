@@ -331,6 +331,24 @@ def test_upload_validate_csv_reports_differences(client):
     assert payload["differences"][0]["delta"] == 1.0
 
 
+def test_upload_validate_csv_can_compare_all_columns(client):
+    response = client.post(
+        "/upload/validate",
+        files={
+            "expected_file": ("expected.csv", b"frame_index,area_um2,source_sha256\n0,9.0,abc\n", "text/csv"),
+            "actual_file": ("actual.csv", b"frame_index,area_um2,source_sha256\n0,9.0,def\n", "text/csv"),
+        },
+        data={"all_columns": "true"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["passed"] is False
+    assert payload["differences"][0]["column"] == "source_sha256"
+    assert payload["differences"][0]["expected"] == "abc"
+    assert payload["differences"][0]["actual"] == "def"
+
+
 def test_upload_analyze_partial_roi_returns_400(client):
     response = client.post(
         "/upload/analyze",

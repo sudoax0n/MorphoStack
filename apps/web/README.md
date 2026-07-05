@@ -37,3 +37,5 @@ and solidity. The profile selector currently supports vesicle and RBC analysis
 modes. The `Suggest` threshold control uses Otsu thresholding when available and
 falls back to a percentile suggestion.
 Threshold sweeps can be downloaded as CSV or as a Markdown report for lab notes.
+CSV validation can compare inferred numeric metrics or all shared columns,
+including text provenance such as source SHA-256.

@@ -418,6 +418,7 @@ def create_app() -> FastAPI:
         actual_file: Annotated[UploadFile, File()],
         tolerance: Annotated[float, Form()] = 1e-6,
         columns: Annotated[str | None, Form()] = None,
+        all_columns: Annotated[bool, Form()] = False,
         key_column: Annotated[str, Form()] = "frame_index",
     ) -> dict[str, object]:
         expected_path = save_upload_to_temp(expected_file)
@@ -428,6 +429,7 @@ def create_app() -> FastAPI:
                 actual_path,
                 tolerance=tolerance,
                 columns=parse_columns(columns),
+                all_columns=all_columns,
                 key_column=key_column,
             )
         except Exception as exc:

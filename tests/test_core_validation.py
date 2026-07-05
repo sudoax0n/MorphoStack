@@ -37,3 +37,16 @@ def test_compare_metric_csv_reports_missing_rows_by_key():
     assert report.passed is False
     assert report.differences[0].column == "__row__"
     assert report.differences[0].row_id == "1"
+
+
+def test_compare_metric_csv_can_compare_all_shared_columns():
+    expected = StringIO("frame_index,area_um2,source_sha256\n0,9.0,abc\n")
+    actual = StringIO("frame_index,area_um2,source_sha256\n0,9.0,def\n")
+
+    report = compare_metric_csv(expected, actual, all_columns=True)
+
+    assert report.passed is False
+    assert report.compared_cells == 2
+    assert report.differences[0].column == "source_sha256"
+    assert report.differences[0].expected == "abc"
+    assert report.differences[0].actual == "def"

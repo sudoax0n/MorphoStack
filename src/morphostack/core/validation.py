@@ -37,6 +37,7 @@ def compare_metric_csv(
     *,
     tolerance: float = 1e-6,
     columns: list[str] | tuple[str, ...] | None = None,
+    all_columns: bool = False,
     key_column: str = "frame_index",
 ) -> ValidationReport:
     expected_rows, expected_path = read_csv_rows(expected)
@@ -44,7 +45,12 @@ def compare_metric_csv(
     differences: list[ValidationDifference] = []
 
     pairs = pair_rows(expected_rows, actual_rows, key_column=key_column, differences=differences)
-    compare_columns = list(columns) if columns else infer_numeric_columns(pairs, key_column=key_column)
+    if columns:
+        compare_columns = list(columns)
+    elif all_columns:
+        compare_columns = infer_common_columns(pairs, key_column=key_column)
+    else:
+        compare_columns = infer_numeric_columns(pairs, key_column=key_column)
     compared_cells = 0
 
     for row_id, expected_row, actual_row in pairs:
@@ -171,6 +177,18 @@ def infer_numeric_columns(
         if values and all(parse_float(value) is not None for value in values):
             numeric_columns.append(column)
     return numeric_columns
+
+
+def infer_common_columns(
+    pairs: list[tuple[str, dict[str, str], dict[str, str]]],
+    *,
+    key_column: str,
+) -> list[str]:
+    if not pairs:
+        return []
+    common = set(pairs[0][1]) & set(pairs[0][2])
+    common.discard(key_column)
+    return sorted(common)
 
 
 def parse_float(value: str) -> float | None:

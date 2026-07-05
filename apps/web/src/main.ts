@@ -399,6 +399,10 @@ app.innerHTML = `
         Columns
         <input id="validation-columns" type="text" placeholder="area_um2 circularity deformation_index" />
       </label>
+      <label class="checkbox-row">
+        <input id="validation-all-columns" type="checkbox" />
+        Compare all columns
+      </label>
     </div>
     <div id="validation-summary" class="output muted">No validation run yet.</div>
     <div class="table-wrap">
@@ -1514,6 +1518,7 @@ function validationUploadForm(): FormData {
   formData.set("actual_file", selectedRequiredFile("actual-csv-input", "New CSV"));
   formData.set("tolerance", String(readNumber("validation-tolerance")));
   formData.set("key_column", mustElement<HTMLInputElement>("validation-key-column").value.trim() || "frame_index");
+  formData.set("all_columns", String(mustElement<HTMLInputElement>("validation-all-columns").checked));
   const columns = mustElement<HTMLInputElement>("validation-columns").value.trim();
   if (columns) {
     formData.set("columns", columns);
