@@ -37,6 +37,10 @@ python -m venv .venv
 .\.venv\Scripts\morphostack doctor
 ```
 
+`doctor` reports OS/Python hardware details, command paths and versions for
+Git/Node/npm, Python dependency availability, and whether the web app's
+`node_modules` directory is installed.
+
 To inspect the machine and optionally install the heavier analysis/API
 dependencies into the active environment:
 

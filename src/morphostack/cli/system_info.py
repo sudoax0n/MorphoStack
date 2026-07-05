@@ -67,8 +67,14 @@ def format_diagnostics(diagnostics: dict[str, Any], as_json: bool = False) -> st
         "Commands:",
     ]
 
-    for name, available in diagnostics.get("commands", {}).items():
-        lines.append(f"  {status_icon(available)} {name}")
+    for name, command in diagnostics.get("commands", {}).items():
+        if isinstance(command, dict):
+            available = bool(command.get("available"))
+            version = str(command.get("version") or "version unknown")
+            path = str(command.get("path") or "not found")
+            lines.append(f"  {status_icon(available)} {name}: {version} ({path})")
+        else:
+            lines.append(f"  {status_icon(command)} {name}")
 
     lines.append("")
     lines.append("Dependencies:")
@@ -76,6 +82,14 @@ def format_diagnostics(diagnostics: dict[str, Any], as_json: bool = False) -> st
         lines.append(f"  {group}:")
         for name, available in deps.items():
             lines.append(f"    {status_icon(available)} {name}")
+
+    web = diagnostics.get("web")
+    if isinstance(web, dict):
+        lines.append("")
+        lines.append("Web app:")
+        lines.append(f"  Path: {web.get('path')}")
+        lines.append(f"  {status_icon(bool(web.get('package_json')))} package.json")
+        lines.append(f"  {status_icon(bool(web.get('node_modules')))} node_modules")
 
     return "\n".join(lines)
 
@@ -94,4 +108,3 @@ def format_bytes(value: int | None) -> str:
             return f"{amount:.1f} {unit}"
         amount /= 1024
     return f"{amount:.1f} TB"
-

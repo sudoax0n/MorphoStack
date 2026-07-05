@@ -437,15 +437,16 @@ def main(argv: list[str] | None = None) -> int:
 def run_doctor(as_json: bool = False) -> int:
     diagnostics = collect_diagnostics()
     diagnostics["commands"] = {
-        "git": shutil.which("git") is not None,
-        "node": shutil.which("node") is not None,
-        "npm": shutil.which("npm") is not None,
+        "git": command_diagnostics("git", "--version"),
+        "node": command_diagnostics("node", "--version"),
+        "npm": command_diagnostics("npm", "--version"),
     }
     diagnostics["dependencies"] = {
         "core": dependency_status(CORE_DEPENDENCIES),
         "analysis": dependency_status(ANALYSIS_DEPENDENCIES),
         "api": dependency_status(API_DEPENDENCIES),
     }
+    diagnostics["web"] = web_diagnostics(WEB_APP_DIR)
 
     print(format_diagnostics(diagnostics, as_json=as_json))
     return 0
@@ -1220,6 +1221,40 @@ def build_voxel_override(
 
 def dependency_status(names: tuple[str, ...]) -> dict[str, bool]:
     return {name: import_available(name) for name in names}
+
+
+def command_diagnostics(command: str, *version_args: str) -> dict[str, object]:
+    path = shutil.which(command)
+    result: dict[str, object] = {
+        "available": path is not None,
+        "path": path,
+        "version": None,
+    }
+    if path is None:
+        return result
+    try:
+        completed = subprocess.run(
+            [path, *version_args],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except Exception:
+        return result
+    output_text = str(getattr(completed, "stdout", "") or getattr(completed, "stderr", ""))
+    output = output_text.strip().splitlines()
+    if output:
+        result["version"] = output[0].strip()
+    return result
+
+
+def web_diagnostics(web_app_dir: Path) -> dict[str, object]:
+    return {
+        "path": str(web_app_dir),
+        "package_json": (web_app_dir / "package.json").exists(),
+        "node_modules": (web_app_dir / "node_modules").exists(),
+    }
 
 
 def import_available(name: str) -> bool:

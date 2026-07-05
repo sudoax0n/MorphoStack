@@ -26,6 +26,7 @@ def test_doctor_prints_report(capsys):
     out = capsys.readouterr().out
     assert "MorphoStack Doctor" in out
     assert "Dependencies:" in out
+    assert "Web app:" in out
 
 
 def test_doctor_json_is_valid(capsys):
@@ -34,6 +35,27 @@ def test_doctor_json_is_valid(capsys):
     payload = json.loads(out)
     assert "platform" in payload
     assert "dependencies" in payload
+    assert payload["commands"]["git"]["available"] in {True, False}
+    assert "web" in payload
+    assert "node_modules" in payload["web"]
+
+
+def test_doctor_command_diagnostics_handles_missing_command(monkeypatch):
+    monkeypatch.setattr(cli_main_module.shutil, "which", lambda _: None)
+
+    payload = cli_main_module.command_diagnostics("missing-tool", "--version")
+
+    assert payload == {"available": False, "path": None, "version": None}
+
+
+def test_doctor_web_diagnostics_reports_web_files(tmp_path):
+    (tmp_path / "package.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "node_modules").mkdir()
+
+    payload = cli_main_module.web_diagnostics(tmp_path)
+
+    assert payload["package_json"] is True
+    assert payload["node_modules"] is True
 
 
 def test_init_can_skip_dependency_install(monkeypatch, capsys):
@@ -58,7 +80,7 @@ def test_init_can_install_web_dependencies(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "No optional Python dependency groups selected." in out
     assert "Installing browser UI dependencies" in out
-    assert calls == [(["npm.cmd", "install"], {"cwd": cli_main_module.WEB_APP_DIR, "check": False})]
+    assert (["npm.cmd", "install"], {"cwd": cli_main_module.WEB_APP_DIR, "check": False}) in calls
 
 
 def test_init_web_reports_missing_npm(monkeypatch, capsys):
