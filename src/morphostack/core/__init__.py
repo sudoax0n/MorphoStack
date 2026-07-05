@@ -26,7 +26,7 @@ from morphostack.core.export import (
     write_analysis_report_markdown,
 )
 from morphostack.core.images import as_color_stack, as_grayscale_stack, stretch_to_uint8
-from morphostack.core.io import load_image_stack
+from morphostack.core.io import file_sha256, load_image_stack
 from morphostack.core.mesh import MeshMeasurement, surface_area_volume
 from morphostack.core.mesh import contour_to_mask, contours_to_mask_stack, measure_contour_stack
 from morphostack.core.metrics import ContourMetrics, contour_metrics
@@ -103,6 +103,7 @@ __all__ = [
     "contours_to_mask_stack",
     "compare_metric_csv",
     "failed_analysis_summary_row",
+    "file_sha256",
     "format_validation_report",
     "largest_component_boundary",
     "largest_connected_component",

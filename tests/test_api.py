@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from base64 import b64decode
 from io import BytesIO
 
@@ -85,6 +86,7 @@ def test_analyze_stack_without_mesh(client, tmp_path):
     assert payload["valid_frame_count"] == 3
     assert payload["manifest"]["profile"] == "rbc"
     assert payload["manifest"]["source_path"] == str(path)
+    assert payload["manifest"]["source_sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
     assert payload["manifest"]["threshold"] == 100
     assert payload["voxel_source"] == "override"
     assert payload["manifest"]["voxel_source"] == "override"
@@ -226,10 +228,11 @@ def test_upload_inspect_stack(client):
 def test_upload_analyze_stack_with_mesh(client):
     pytest.importorskip("cv2")
     pytest.importorskip("skimage")
+    upload_bytes = stack_upload_bytes()
 
     response = client.post(
         "/upload/analyze",
-        files={"file": ("stack.tif", stack_upload_bytes(), "image/tiff")},
+        files={"file": ("stack.tif", upload_bytes, "image/tiff")},
         data={
             "threshold": "100",
             "profile": "rbc",
@@ -246,6 +249,7 @@ def test_upload_analyze_stack_with_mesh(client):
     assert payload["source_path"] == "stack.tif"
     assert payload["profile"] == "rbc"
     assert payload["manifest"]["source_path"] == "stack.tif"
+    assert payload["manifest"]["source_sha256"] == hashlib.sha256(upload_bytes).hexdigest()
     assert payload["manifest"]["include_mesh"] is True
     assert payload["manifest"]["voxel_source"] == "override"
     assert payload["warnings"] == []

@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from morphostack.core import ImageStack, VoxelSize, load_image_stack
+from morphostack.core import ImageStack, VoxelSize, file_sha256, load_image_stack
 from morphostack.core import io
 
 
@@ -64,6 +64,13 @@ def test_load_image_stack_records_metadata_voxel_source(monkeypatch):
 
     assert loaded.voxel_size == detected
     assert loaded.voxel_source == "metadata"
+
+
+def test_file_sha256_hashes_file_bytes(tmp_path):
+    path = tmp_path / "source.bin"
+    path.write_bytes(b"morphostack")
+
+    assert file_sha256(path) == "25217bc4395b2cfca282576d6dbcbac64e6b5f08c32a25c67b6e34868d3aa8d4"
 
 
 def test_tiff_metadata_parses_resolution_and_spacing():

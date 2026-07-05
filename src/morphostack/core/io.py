@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import Path
 from typing import Any
@@ -49,6 +50,16 @@ def load_image_stack(
         voxel_size=voxel,
         voxel_source=voxel_source,
     )
+
+
+def file_sha256(path: str | Path, *, chunk_size: int = 1024 * 1024) -> str:
+    """Return the SHA-256 digest for a source file."""
+
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(chunk_size), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def read_tiff(path: Path) -> tuple[np.ndarray, VoxelSize | None]:

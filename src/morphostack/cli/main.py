@@ -28,6 +28,7 @@ from morphostack.core import (
     apply_rect_roi,
     best_sweep_result,
     failed_analysis_summary_row,
+    file_sha256,
     compare_metric_csv,
     format_validation_report,
     load_image_stack,
@@ -636,6 +637,7 @@ def run_analyze(
 
     try:
         stack = load_image_stack(path, voxel_override=voxel_override)
+        source_sha256 = file_sha256(stack.source_path)
         analysis = analyze_stack(
             stack.grayscale,
             thresholds=resolved_threshold,
@@ -664,6 +666,7 @@ def run_analyze(
                 analysis_manifest(
                     analysis,
                     source_path=str(stack.source_path),
+                    source_sha256=source_sha256,
                     threshold=resolved_threshold,
                     roi=roi_to_payload(rect_roi),
                     include_mesh=resolved_mesh,
@@ -684,6 +687,7 @@ def run_analyze(
                 analysis,
                 report_path,
                 source_path=str(stack.source_path),
+                source_sha256=source_sha256,
                 threshold=resolved_threshold,
                 roi=roi_to_payload(rect_roi),
                 include_mesh=resolved_mesh,
@@ -897,6 +901,7 @@ def run_batch(
     for stack_path in stack_paths:
         try:
             stack = load_image_stack(stack_path, voxel_override=voxel_override)
+            source_sha256 = file_sha256(stack.source_path)
             analysis = analyze_stack(
                 stack.grayscale,
                 thresholds=resolved_threshold,
@@ -924,6 +929,7 @@ def run_batch(
                     analysis_manifest(
                         analysis,
                         source_path=str(stack.source_path),
+                        source_sha256=source_sha256,
                         threshold=resolved_threshold,
                         roi=roi_to_payload(rect_roi),
                         include_mesh=resolved_mesh,
@@ -936,6 +942,7 @@ def run_batch(
                     analysis,
                     run_dir / "report.md",
                     source_path=str(stack.source_path),
+                    source_sha256=source_sha256,
                     threshold=resolved_threshold,
                     roi=roi_to_payload(rect_roi),
                     include_mesh=resolved_mesh,

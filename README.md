@@ -100,7 +100,8 @@ providing a clean branch point for RBC-specific metrics.
 Add `--mesh` to assemble contour masks and include marching-cubes 3D surface area, volume, equivalent sphere diameter, and sphericity in the CSV.
 By default, `morphostack analyze` also writes `<metrics.csv>.manifest.json`
 with source path, version, profile, voxel size, ROI, threshold, mesh settings,
-voxel source, run-level summary statistics, quality warnings, and CSV columns.
+source SHA-256, voxel source, run-level summary statistics, quality warnings,
+and CSV columns.
 Use `--no-manifest` to skip it or
 `--manifest path\to\run.json` to choose the JSON path.
 Add `--report` to also write a Markdown report at

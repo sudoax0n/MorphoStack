@@ -1045,6 +1045,7 @@ function analysisReportMarkdown(payload: AnalyzeResponse): string {
     "## Run Settings",
     "",
     `- Source: \`${payload.source_path}\``,
+    `- Source SHA-256: \`${String(manifest.source_sha256 ?? "not recorded")}\``,
     `- Profile: \`${payload.profile}\``,
     `- Threshold: \`${String(manifest.threshold ?? "")}\``,
     `- ROI: \`${manifest.roi === null || manifest.roi === undefined ? "full stack" : JSON.stringify(manifest.roi)}\``,

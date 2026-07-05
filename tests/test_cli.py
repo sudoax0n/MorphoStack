@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from importlib import import_module
 from types import SimpleNamespace
@@ -330,6 +331,7 @@ def test_analyze_writes_csv_from_synthetic_tiff(tmp_path, capsys):
     assert manifest_path.exists()
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["source_path"] == str(input_path)
+    assert manifest["source_sha256"] == hashlib.sha256(input_path.read_bytes()).hexdigest()
     assert manifest["profile"] == "vesicle"
     assert manifest["voxel_source"] == "override"
     assert manifest["summary"]["metrics"]["area_um2"]["mean"] == 9.0
@@ -411,7 +413,9 @@ def test_analyze_bundle_writes_run_artifacts_from_synthetic_tiff(tmp_path, capsy
     assert (run_dir / "report.md").exists()
     manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["source_path"] == str(input_path)
+    assert manifest["source_sha256"] == hashlib.sha256(input_path.read_bytes()).hexdigest()
     report = (run_dir / "report.md").read_text(encoding="utf-8")
+    assert "Source SHA-256" in report
     assert "# MorphoStack Analysis Report" in report
 
 

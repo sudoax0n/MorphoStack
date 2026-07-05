@@ -79,6 +79,7 @@ def test_analysis_manifest_records_run_settings():
         analysis,
         source_path="stack.tif",
         threshold=100,
+        source_sha256="abc123",
         roi={"xmin": 1, "xmax": 4, "ymin": 2, "ymax": 6},
         include_mesh=False,
         prefer_opencv=False,
@@ -86,6 +87,7 @@ def test_analysis_manifest_records_run_settings():
     )
 
     assert manifest["source_path"] == "stack.tif"
+    assert manifest["source_sha256"] == "abc123"
     assert manifest["profile"] == "rbc"
     assert manifest["threshold"] == 100
     assert manifest["roi"] == {"xmin": 1, "xmax": 4, "ymin": 2, "ymax": 6}
@@ -211,6 +213,7 @@ def test_analysis_report_markdown_summarizes_run():
         analysis,
         source_path="stack.tif",
         threshold=100,
+        source_sha256="abc123",
         include_mesh=False,
         prefer_opencv=False,
         voxel_source="override",
@@ -218,6 +221,7 @@ def test_analysis_report_markdown_summarizes_run():
 
     assert report.startswith("# MorphoStack Analysis Report")
     assert "- Source: `stack.tif`" in report
+    assert "- Source SHA-256: `abc123`" in report
     assert "- Profile: `rbc`" in report
     assert "- Valid frames: 1" in report
     assert "`partial_contours`" in report

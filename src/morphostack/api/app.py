@@ -26,6 +26,7 @@ from morphostack.core import (
     best_sweep_result,
     compare_metric_csv,
     failed_analysis_summary_row,
+    file_sha256,
     load_image_stack,
     suggest_threshold,
     threshold_sweep,
@@ -119,6 +120,7 @@ def create_app() -> FastAPI:
     def analyze(request: AnalyzeRequest) -> dict[str, object]:
         try:
             stack = load_image_stack(request.path, voxel_override=to_voxel_size(request.voxel))
+            source_sha256 = file_sha256(stack.source_path)
             analysis = analyze_stack(
                 stack.grayscale,
                 thresholds=request.threshold,
@@ -152,6 +154,7 @@ def create_app() -> FastAPI:
             "manifest": analysis_manifest(
                 analysis,
                 source_path=str(stack.source_path),
+                source_sha256=source_sha256,
                 threshold=request.threshold,
                 roi=roi_payload(to_rect_roi(request.roi)),
                 include_mesh=request.include_mesh,
@@ -256,6 +259,7 @@ def create_app() -> FastAPI:
     ) -> dict[str, object]:
         temp_path = save_upload_to_temp(file)
         try:
+            source_sha256 = file_sha256(temp_path)
             stack = load_image_stack(
                 temp_path,
                 voxel_override=VoxelSize(voxel_x_um, voxel_y_um, voxel_z_um),
@@ -295,6 +299,7 @@ def create_app() -> FastAPI:
             "manifest": analysis_manifest(
                 analysis,
                 source_path=file.filename or str(temp_path.name),
+                source_sha256=source_sha256,
                 threshold=threshold,
                 roi=roi_payload(roi_from_optional_bounds(roi_xmin, roi_xmax, roi_ymin, roi_ymax)),
                 include_mesh=include_mesh,
