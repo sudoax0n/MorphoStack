@@ -29,6 +29,11 @@ def suggest_threshold(stack: np.ndarray, *, method: str = "auto") -> tuple[float
     if float(np.min(values)) == float(np.max(values)):
         return float(values[0]), "constant"
 
+    if normalized_method == "auto":
+        robust = robust_otsu_threshold(values)
+        if robust is not None:
+            return robust, "robust_otsu"
+
     if normalized_method in {"auto", "otsu"}:
         threshold = otsu_threshold(values)
         if threshold is not None:
@@ -45,6 +50,26 @@ def otsu_threshold(values: np.ndarray) -> float | None:
     except Exception:
         return None
     return float(threshold_otsu(values))
+
+
+def robust_otsu_threshold(values: np.ndarray) -> float | None:
+    """Otsu threshold after removing zeros and saturated annotation-like pixels."""
+
+    try:
+        from skimage.filters import threshold_otsu
+    except Exception:
+        return None
+
+    arr = np.asarray(values, dtype=np.float64)
+    finite = arr[np.isfinite(arr)]
+    robust = finite[(finite > 0) & (finite < 250)]
+    if robust.size < 16 or float(np.min(robust)) == float(np.max(robust)):
+        return None
+    threshold = float(threshold_otsu(robust))
+    full = otsu_threshold(finite)
+    if full is not None and full > threshold * 2.0 and threshold > 0:
+        return threshold
+    return full if full is not None else threshold
 
 
 def apply_rect_roi(

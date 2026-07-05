@@ -66,10 +66,36 @@ def largest_opencv_contour(mask: np.ndarray) -> np.ndarray | None:
     contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
         return None
-    largest = max(contours, key=lambda contour: float(cv2.contourArea(contour)))
+    valid = [contour for contour in contours if is_candidate_object_contour(contour, arr.shape)]
+    candidates = valid if valid else contours
+    largest = max(candidates, key=lambda contour: float(cv2.contourArea(contour)))
     if largest is None or len(largest) < 3:
         return None
     return normalize_points(largest)
+
+
+def is_candidate_object_contour(contour, shape: tuple[int, int]) -> bool:
+    try:
+        import cv2
+    except Exception:
+        return True
+
+    height, width = shape
+    x, y, w, h = cv2.boundingRect(contour)
+    if w < 8 or h < 8:
+        return False
+    aspect = max(w / h, h / w)
+    if aspect > 8:
+        return False
+    touches_border = x <= 1 or y <= 1 or x + w >= width - 1 or y + h >= height - 1
+    if touches_border:
+        return False
+    area = float(cv2.contourArea(contour))
+    perimeter = float(cv2.arcLength(contour, closed=True))
+    if perimeter <= 0:
+        return False
+    circularity = float((4.0 * np.pi * area) / (perimeter**2))
+    return circularity >= 0.05
 
 
 def largest_component_boundary(mask: np.ndarray) -> np.ndarray | None:
