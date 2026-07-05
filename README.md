@@ -175,7 +175,7 @@ already access the file. After analysis, the frame metrics table can be
 downloaded as a CSV file, and the run manifest can be downloaded as JSON.
 The browser can also download a Markdown report from the latest analysis run.
 The web app can also run a threshold sweep and download the sweep summary as
-CSV.
+CSV or a Markdown threshold sweep report.
 Project settings JSON can be loaded into the browser controls or downloaded
 from the current controls for reuse in the CLI.
 Multiple uploaded stacks can be batch analyzed into one spreadsheet-friendly

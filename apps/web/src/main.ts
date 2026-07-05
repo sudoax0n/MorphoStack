@@ -334,6 +334,7 @@ app.innerHTML = `
       <h2>Threshold Sweep</h2>
       <div class="button-row">
         <button id="sweep-btn" type="button">Run Sweep</button>
+        <button id="download-sweep-report-btn" class="secondary" type="button" disabled>Download Sweep Report</button>
         <button id="download-sweep-btn" class="secondary" type="button" disabled>Download Sweep CSV</button>
       </div>
     </div>
@@ -470,6 +471,7 @@ const downloadManifestButton = mustElement<HTMLButtonElement>("download-manifest
 const downloadBatchButton = mustElement<HTMLButtonElement>("download-batch-btn");
 const downloadBatchReportButton = mustElement<HTMLButtonElement>("download-batch-report-btn");
 const downloadSweepButton = mustElement<HTMLButtonElement>("download-sweep-btn");
+const downloadSweepReportButton = mustElement<HTMLButtonElement>("download-sweep-report-btn");
 let latestAnalysis: AnalyzeResponse | null = null;
 let latestBatch: BatchAnalyzeResponse | null = null;
 let latestSweep: SweepResponse | null = null;
@@ -532,6 +534,10 @@ downloadBatchReportButton.addEventListener("click", () => {
 
 downloadSweepButton.addEventListener("click", () => {
   downloadLatestSweepCsv();
+});
+
+downloadSweepReportButton.addEventListener("click", () => {
+  downloadLatestSweepReport();
 });
 
 void refreshHealth();
@@ -694,6 +700,7 @@ async function analyzeBatch(): Promise<void> {
 async function runSweep(): Promise<void> {
   latestSweep = null;
   downloadSweepButton.disabled = true;
+  downloadSweepReportButton.disabled = true;
   sweepSummary.textContent = "Running threshold sweep...";
   sweepResultsBody.innerHTML = `<tr><td colspan="7" class="muted">Running sweep...</td></tr>`;
   try {
@@ -733,6 +740,7 @@ async function validateCsv(): Promise<void> {
 function renderSweep(payload: SweepResponse): void {
   latestSweep = payload;
   downloadSweepButton.disabled = payload.rows.length === 0;
+  downloadSweepReportButton.disabled = payload.rows.length === 0;
   sweepSummary.innerHTML = `
     <strong>${escapeHtml(payload.source_path)}</strong><br />
     Profile: ${escapeHtml(payload.profile)}<br />
@@ -995,6 +1003,23 @@ function downloadLatestSweepCsv(): void {
   URL.revokeObjectURL(url);
 }
 
+function downloadLatestSweepReport(): void {
+  if (!latestSweep || latestSweep.rows.length === 0) {
+    return;
+  }
+
+  const markdown = sweepReportMarkdown(latestSweep);
+  const blob = new Blob([markdown], { type: "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = sweepReportFilename(latestSweep.source_path);
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
 function downloadLatestManifest(): void {
   if (!latestAnalysis) {
     return;
@@ -1126,6 +1151,64 @@ function batchReportMarkdown(payload: BatchAnalyzeResponse): string {
     });
     lines.push("");
   }
+
+  return `${lines.join("\n").trim()}\n`;
+}
+
+function sweepReportMarkdown(payload: SweepResponse): string {
+  const bestRow =
+    payload.best_threshold === null
+      ? undefined
+      : payload.rows.find((row) => Number(row.threshold) === payload.best_threshold);
+  const lines = [
+    "# MorphoStack Threshold Sweep Report",
+    "",
+    "## Sweep Summary",
+    "",
+    `- Source: \`${payload.source_path}\``,
+    `- Profile: \`${payload.profile}\``,
+    `- Thresholds tested: ${payload.threshold_count}`,
+    `- Best threshold: ${payload.best_threshold === null ? "none" : formatNumber(payload.best_threshold)}`,
+    `- Voxel source: \`${payload.voxel_source}\``,
+    ""
+  ];
+
+  if (bestRow) {
+    lines.push(
+      "## Best Threshold Metrics",
+      "",
+      `- Valid frames: ${formatUnknownNumber(bestRow.valid_frame_count)}`,
+      `- Valid fraction: ${formatUnknownNumber(bestRow.valid_fraction)}`,
+      `- Mean area: ${formatUnknownNumber(bestRow.area_um2_mean)} um2`,
+      `- Mean circularity: ${formatUnknownNumber(bestRow.circularity_mean)}`,
+      `- Mean deformation index: ${formatUnknownNumber(bestRow.deformation_index_mean)}`,
+      `- Warnings: ${String(bestRow.warning_codes ?? "") || "none"}`,
+      ""
+    );
+  }
+
+  lines.push(
+    "## Threshold Rows",
+    "",
+    "| Threshold | Valid fraction | Valid frames | Mean area (um2) | Mean circularity | Mean deformation index | Warnings |",
+    "| ---: | ---: | ---: | ---: | ---: | ---: | --- |"
+  );
+  payload.rows.forEach((row) => {
+    lines.push(
+      [
+        "|",
+        formatUnknownNumber(row.threshold),
+        formatUnknownNumber(row.valid_fraction),
+        formatUnknownNumber(row.valid_frame_count),
+        formatUnknownNumber(row.area_um2_mean),
+        formatUnknownNumber(row.circularity_mean),
+        formatUnknownNumber(row.deformation_index_mean),
+        markdownCell(String(row.warning_codes ?? "")),
+        "|"
+      ].join(" ")
+    );
+  });
+  lines.push("");
 
   return `${lines.join("\n").trim()}\n`;
 }
@@ -1302,6 +1385,13 @@ function sweepFilename(sourcePath: string): string {
   const baseName = rawName.replace(/\.[^.]+$/, "") || "morphostack-sweep";
   const safeName = baseName.replace(/[^a-z0-9._-]+/gi, "_");
   return `${safeName}_threshold_sweep.csv`;
+}
+
+function sweepReportFilename(sourcePath: string): string {
+  const rawName = sourcePath.split(/[\\/]/).pop() || "morphostack-sweep";
+  const baseName = rawName.replace(/\.[^.]+$/, "") || "morphostack-sweep";
+  const safeName = baseName.replace(/[^a-z0-9._-]+/gi, "_");
+  return `${safeName}_threshold_sweep_report.md`;
 }
 
 async function apiGet<T>(url: string): Promise<T> {

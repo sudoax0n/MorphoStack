@@ -36,3 +36,4 @@ perimeter, circularity, aspect ratio, equivalent diameter, elongation, extent,
 and solidity. The profile selector currently supports vesicle and RBC analysis
 modes. The `Suggest` threshold control uses Otsu thresholding when available and
 falls back to a percentile suggestion.
+Threshold sweeps can be downloaded as CSV or as a Markdown report for lab notes.
