@@ -3,6 +3,8 @@
 MorphoStack is a planned local morphometry toolkit for microscopy Z-stacks, starting with vesicle analysis and expanding to red blood cell analysis.
 
 The first milestone is intentionally small: prove the project structure, command ownership, and diagnostics before migrating scientific code from the older Shape-Analysis prototype.
+See [improvements.md](improvements.md) for the current technical roadmap, known
+gaps, and distribution plan.
 
 ## Current Commands
 
