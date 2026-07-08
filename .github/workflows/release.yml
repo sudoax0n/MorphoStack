@@ -22,14 +22,23 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Install Python dependencies
-        run: |
-          python -m pip install --upgrade pip build hatchling
-          python -m pip install -e ".[all]"
+      # Build tools only first. Do NOT pip install the package yet:
+      # pyproject force-includes apps/web/dist into the wheel, so dist must exist
+      # before hatch metadata / wheel build runs.
+      - name: Install Python build tools
+        run: python -m pip install --upgrade pip build hatchling
 
       - name: Build browser UI
         working-directory: apps/web
         run: npm ci && npm run build
+
+      - name: Verify web dist for wheel packaging
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "apps/web/dist/index.html")) {
+            throw "apps/web/dist missing after npm build; cannot package morphostack/_web_static"
+          }
+          Get-ChildItem apps/web/dist -Recurse | Select-Object -First 20 FullName
 
       - name: Build wheel
         run: python -m build --wheel
@@ -43,5 +52,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          name: MorphoStack ${{ github.ref_name }} — Local morphometry for microscopy Z-stacks
           files: dist/*.whl
           generate_release_notes: true
+          fail_on_unmatched_files: true
