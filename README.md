@@ -1,8 +1,13 @@
-# MorphoStack
-
-<p align="center">
-  <img src="docs/public/logo-mark.jpg" alt="MorphoStack logo — stacked slices forming a measured vesicle" width="220" />
-</p>
+<table>
+  <tr>
+    <td width="72" valign="middle">
+      <img src="docs/public/logo.png" alt="MorphoStack logo" width="64" height="64" />
+    </td>
+    <td valign="middle">
+      <h1>MorphoStack</h1>
+    </td>
+  </tr>
+</table>
 
 <p align="center">
   <strong>Local morphometry for microscopy Z-stacks</strong><br/>
@@ -55,14 +60,6 @@
     </td>
   </tr>
 </table>
-
-### Real validation previews (from the pipeline)
-
-| DOPC vesicle (seeded) | Crowded CZI field | RBC field |
-| :---: | :---: | :---: |
-| <img src="docs/public/preview-dopc-seed.png" width="260" alt="DOPC seed-frame preview" /> | <img src="docs/public/preview-crowded-czi.png" width="260" alt="Crowded CZI seed preview" /> | <img src="docs/public/preview-rbc-seed.png" width="260" alt="RBC seed preview" /> |
-
-These PNGs are **actual MorphoStack outputs** stored under `validation/runs/` — not mockups.
 
 <p align="center">
   <img src="docs/public/brand-board.jpg" alt="MorphoStack brand board" width="90%" />

@@ -2,14 +2,6 @@
 
 Regression and lab-check artifacts live under `validation/`. Each intentional run should include `manifest.json`, metrics CSV, and usually `report.md` (plus optional mesh/preview).
 
-<p align="center">
-  <img src="public/preview-dopc-seed.png" alt="DOPC validation preview" width="220" />
-  <img src="public/preview-crowded-czi.png" alt="Crowded CZI preview" width="220" />
-  <img src="public/preview-rbc-seed.png" alt="RBC preview" width="220" />
-</p>
-
-<p align="center"><sub>Example seed-frame previews from tracked validation runs</sub></p>
-
 ## Quick health checks
 
 ```bash

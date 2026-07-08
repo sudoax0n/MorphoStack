@@ -286,9 +286,12 @@ if (!app) {
 
 app.innerHTML = `
   <header class="topbar">
-    <div>
-      <h1>MorphoStack</h1>
-      <p>Local morphometry for microscopy Z-stacks</p>
+    <div class="brand">
+      <img class="brand-logo" src="/logo.png" width="40" height="40" alt="MorphoStack" />
+      <div>
+        <h1>MorphoStack</h1>
+        <p>Local morphometry for microscopy Z-stacks</p>
+      </div>
     </div>
     <div class="status" id="api-status">Checking API...</div>
   </header>

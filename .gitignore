@@ -102,3 +102,7 @@ temp_uploads/
 # validation/runs/**/*.glb
 # validation/runs/**/*.stl
 # validation/runs/**/*.ply
+
+# Confidential real-data previews (never ship in docs assets)
+docs/public/preview-*.png
+

@@ -33,6 +33,23 @@ select {
   color: #f8fafc;
 }
 
+.topbar .brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.topbar .brand-logo {
+  width: 40px;
+  height: 40px;
+  flex: 0 0 auto;
+  border-radius: 8px;
+  object-fit: contain;
+  background: #0b1220;
+  box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.25);
+}
+
 .topbar h1 {
   margin: 0;
   font-size: 24px;
