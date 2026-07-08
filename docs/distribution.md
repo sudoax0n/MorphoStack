@@ -62,17 +62,20 @@ git push origin v0.1.0
 `.github/workflows/release.yml` builds the web UI, packages the wheel, and uploads `dist/*.whl` to the release.
 
 ```bash
-pipx install https://github.com/<org>/MorphoStack/releases/download/v0.1.0/morphostack-0.1.0-py3-none-any.whl
+pipx install https://github.com/sudoax0n/MorphoStack/releases/download/v0.1.0/morphostack-0.1.0-py3-none-any.whl
 morphostack app
 ```
 
+Respect the dual license ([LICENSE](../LICENSE)): AGPL-3.0-only **or** PolyForm Noncommercial 1.0.0. Commercial closed-source use needs a separate agreement with the author.
+
 ## What not to ship in the git tree
 
-See root `.gitignore` and [REFERENCE_FOLDERS.md](../REFERENCE_FOLDERS.md):
+See root `.gitignore`:
 
 - `.venv/`, `node_modules/`, `apps/web/dist/`
 - raw stacks (`*.tif`, `*.czi`, `*.lsm`, …)
 - local tooling: `mcps/`, `scratch/`, `terminals/`, `.clones/`
+- personal notes (`AGENTS.md`, `improvements.md`, …)
 
 Keep intentional `validation/runs/` metrics and reports; avoid committing private raw data.
 

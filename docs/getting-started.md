@@ -15,10 +15,12 @@ MorphoStack runs **locally**. The canonical command is `morphostack`; the short 
 ## Install from source
 
 ```bash
-git clone https://github.com/<your-org>/MorphoStack.git
+git clone https://github.com/sudoax0n/MorphoStack.git
 cd MorphoStack
 python -m venv .venv
 ```
+
+License: dual **AGPL-3.0-only** or **PolyForm Noncommercial 1.0.0** — see [LICENSE](../LICENSE). Cite MorphoStack if you use it ([CITATION.cff](../CITATION.cff)).
 
 **Windows (PowerShell):**
 

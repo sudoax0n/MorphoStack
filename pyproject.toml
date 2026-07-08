@@ -8,7 +8,14 @@ version = "0.1.0"
 description = "Local morphometry toolkit for microscopy Z-stacks."
 readme = "README.md"
 requires-python = ">=3.11"
-license = "MIT"
+# Dual public license: choose AGPL-3.0-only OR PolyForm Noncommercial 1.0.0.
+# Commercial closed-source use requires a separate license from the author.
+license = "AGPL-3.0-only OR PolyForm-Noncommercial-1.0.0"
+license-files = [
+  "LICENSE",
+  "LICENSE-AGPL-3.0.txt",
+  "LICENSE-POLYFORM-NONCOMMERCIAL-1.0.0.txt",
+]
 authors = [
   { name = "Abhinav", email = "ms24115@iisermohali.ac.in" }
 ]

@@ -1,0 +1,34 @@
+cff-version: 1.2.0
+message: "If you use MorphoStack, please cite it as below."
+type: software
+title: "MorphoStack"
+version: "0.1.0"
+date-released: "2026-07-09"
+abstract: >-
+  Local morphometry toolkit for microscopy Z-stacks (vesicle/GUV analysis,
+  RBC shape analysis, and experimental active-surfaces). Provides CLI,
+  FastAPI backend, browser UI, calibrated metrics, mesh export, and
+  reproducible run manifests.
+authors:
+  - family-names: Abhinav
+    email: ms24115@iisermohali.ac.in
+repository-code: "https://github.com/sudoax0n/MorphoStack"
+license:
+  - AGPL-3.0-only
+  - PolyForm-Noncommercial-1.0.0
+keywords:
+  - morphometry
+  - microscopy
+  - vesicle
+  - GUV
+  - RBC
+  - Z-stack
+  - biophysics
+preferred-citation:
+  type: software
+  title: "MorphoStack: local morphometry toolkit for microscopy Z-stacks"
+  authors:
+    - family-names: Abhinav
+  year: 2026
+  version: "0.1.0"
+  url: "https://github.com/sudoax0n/MorphoStack"

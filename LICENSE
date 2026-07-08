@@ -1,22 +1,60 @@
-MIT License
+# MorphoStack Dual License
 
 Copyright (c) 2026 Abhinav
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+MorphoStack is offered under a **dual license**. You may use, modify, and
+distribute this software under **either** of the following licenses, at your
+option (not both mixed in a way that weakens either set of terms):
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+1. **GNU Affero General Public License v3.0 only**  
+   Full text: [LICENSE-AGPL-3.0.txt](LICENSE-AGPL-3.0.txt)  
+   SPDX: `AGPL-3.0-only`  
+   Summary: free use including commercial distribution **if** you comply with
+   AGPL (source disclosure for distributed and network-deployed modified
+   versions, copyleft).
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+2. **PolyForm Noncommercial License 1.0.0**  
+   Full text: [LICENSE-POLYFORM-NONCOMMERCIAL-1.0.0.txt](LICENSE-POLYFORM-NONCOMMERCIAL-1.0.0.txt)  
+   SPDX: `PolyForm-Noncommercial-1.0.0`  
+   Summary: free use for **noncommercial** purposes (including personal study,
+   research, education, and many public-interest organizations as defined in
+   that license). **Commercial use is not permitted** under this option.
 
+## Required notice
+
+When you redistribute MorphoStack or substantial portions of it, keep this
+notice and the applicable full license text (or a durable URL to it):
+
+> Required Notice: Copyright (c) 2026 Abhinav — MorphoStack  
+> https://github.com/sudoax0n/MorphoStack
+
+## Attribution and citation (shoutout)
+
+In addition to license notices, if you use MorphoStack in research, teaching,
+benchmarks, products, or derivative tools, please:
+
+1. Cite the software as described in [`CITATION.cff`](CITATION.cff).
+2. Mention MorphoStack by name in publications, documentation, or README files
+   of derivative works where practical.
+3. Follow library and dataset citations in [`docs/citations.md`](docs/citations.md).
+
+## Commercial closed-source use
+
+If you need to use MorphoStack in a **commercial** product **without** AGPL
+obligations (for example closed-source distribution or a proprietary SaaS that
+does not provide corresponding source), that is **not** covered by the public
+dual license. Contact the copyright holder for a separate commercial license:
+
+- Abhinav — ms24115@iisermohali.ac.in  
+- Repository: https://github.com/sudoax0n/MorphoStack
+
+## SPDX expression (packaging)
+
+```text
+AGPL-3.0-only OR PolyForm-Noncommercial-1.0.0
+```
+
+## No warranty
+
+As far as the law allows, MorphoStack is provided as-is, without warranty of
+any kind. See the chosen full license for complete terms.

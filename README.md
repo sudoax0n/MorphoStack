@@ -15,7 +15,8 @@
 </p>
 
 <p align="center">
-  <code>morphostack</code> &nbsp;·&nbsp; short alias <code>mst</code> &nbsp;·&nbsp; v0.1.0 &nbsp;·&nbsp; MIT
+  <code>morphostack</code> &nbsp;·&nbsp; short alias <code>mst</code> &nbsp;·&nbsp; v0.1.0<br/>
+  <strong>Dual license:</strong> AGPL-3.0-only <em>or</em> PolyForm Noncommercial 1.0.0
 </p>
 
 ---
@@ -92,7 +93,7 @@ MorphoStack turns confocal (and related) **Z-stacks** into **2D shape metrics** 
 ### Install (development)
 
 ```bash
-git clone https://github.com/<your-org>/MorphoStack.git
+git clone https://github.com/sudoax0n/MorphoStack.git
 cd MorphoStack
 python -m venv .venv
 
@@ -201,15 +202,32 @@ MorphoStack is a **ground-up redesign** of earlier Shape-Analysis tooling used i
 
 When reporting analyses that use public DOPC supplementary stacks, cite the original experimental papers (see [docs/citations.md](docs/citations.md)).
 
-Suggested software mention:
+### Cite MorphoStack
 
-> MorphoStack v0.1.0 — local morphometry toolkit for microscopy Z-stacks.
+If you use this software, please cite it (GitHub: “Cite this repository” / [`CITATION.cff`](CITATION.cff)):
+
+> Abhinav. *MorphoStack: local morphometry toolkit for microscopy Z-stacks* (v0.1.0). 2026. https://github.com/sudoax0n/MorphoStack
+
+Also credit MorphoStack by name in papers, theses, and derivative tools when practical. Library and dataset citations: [docs/citations.md](docs/citations.md).
 
 ---
 
 ## License
 
-[MIT](LICENSE) © 2026 Abhinav
+Copyright © 2026 Abhinav.
+
+MorphoStack is **dual-licensed**. You may choose **one**:
+
+| Option | Full text | In short |
+| --- | --- | --- |
+| **AGPL-3.0-only** | [LICENSE-AGPL-3.0.txt](LICENSE-AGPL-3.0.txt) | Free use, including commercial, **if** you open-source distributions and network-deployed modifications under AGPL |
+| **PolyForm Noncommercial 1.0.0** | [LICENSE-POLYFORM-NONCOMMERCIAL-1.0.0.txt](LICENSE-POLYFORM-NONCOMMERCIAL-1.0.0.txt) | Free for **noncommercial** research, education, and personal use — **not** for commercial products |
+
+Summary for humans: [LICENSE](LICENSE).
+
+**Commercial closed-source** (no AGPL source disclosure): contact **ms24115@iisermohali.ac.in** for a separate license.
+
+SPDX: `AGPL-3.0-only OR PolyForm-Noncommercial-1.0.0`
 
 ---
 
