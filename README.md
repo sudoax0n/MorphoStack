@@ -62,8 +62,15 @@
 </table>
 
 <p align="center">
+  <img src="docs/public/ui-app.jpg" alt="MorphoStack local browser UI" width="100%" /><br/>
+  <sub><b>Local browser UI</b> — inspect, calibrate, preview, analyze (lab paths redacted)</sub>
+</p>
+
+<p align="center">
   <img src="docs/public/brand-board.jpg" alt="MorphoStack brand board" width="90%" />
 </p>
+
+<!-- Social / link-unfurl card also lives at docs/public/og-card.jpg (1200×630) -->
 
 ---
 
