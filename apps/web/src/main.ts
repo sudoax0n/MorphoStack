@@ -6,7 +6,7 @@ type VoxelOverride = {
   z_um: number;
 };
 
-type AnalysisProfile = "vesicle" | "rbc";
+type AnalysisProfile = "vesicle" | "rbc" | "limeseg";
 
 type RectRoi = {
   xmin: number;
@@ -19,6 +19,10 @@ type ObjectSeed = {
   x: number;
   y: number;
   frame_index: number;
+  radius: number;
+  max_tracking_dist_um?: number;
+  type?: string;
+  points?: { x: number; y: number }[];
 };
 
 type InspectResponse = {
@@ -210,6 +214,55 @@ const CSV_COLUMNS = [
   "mesh_sphericity"
 ] as const;
 
+type LogEntry = {
+  timestamp: string;
+  action: string;
+  details?: string;
+};
+
+const frontendLogs: LogEntry[] = [];
+
+function logAction(action: string, details?: string): void {
+  const timestamp = new Date().toLocaleTimeString();
+  frontendLogs.push({ timestamp, action, details });
+  console.log(`[Frontend Log] ${timestamp} - ${action}`, details ?? "");
+  updateLogBookUI();
+}
+
+function updateLogBookUI(): void {
+  const body = document.getElementById("log-results-body");
+  if (!body) return;
+  if (frontendLogs.length === 0) {
+    body.innerHTML = `<tr><td colspan="3" class="muted">No actions recorded yet.</td></tr>`;
+    return;
+  }
+  body.innerHTML = frontendLogs
+    .map(
+      (log) => `
+        <tr>
+          <td>${escapeHtml(log.timestamp)}</td>
+          <td><strong>${escapeHtml(log.action)}</strong></td>
+          <td class="muted">${escapeHtml(log.details ?? "")}</td>
+        </tr>
+      `
+    )
+    .reverse()
+    .join("");
+}
+
+function downloadLogs(): void {
+  if (frontendLogs.length === 0) return;
+  const json = JSON.stringify(frontendLogs, null, 2);
+  const blob = new Blob([json], { type: "application/json;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = "morphostack_ui_logs.json";
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
 
 const app = document.querySelector<HTMLDivElement>("#app");
 
@@ -244,10 +297,11 @@ app.innerHTML = `
     <span><strong>3</strong> Preview threshold</span>
     <span><strong>4</strong> Analyze</span>
     <span><strong>5</strong> Download outputs</span>
+    <span><strong>6</strong> Log book</span>
   </nav>
 
   <main class="layout">
-    <section class="panel">
+    <section class="panel" id="step-1-panel">
       <div class="panel-title">
         <h2><span class="step-badge">1</span> Stack</h2>
         <button id="inspect-btn" type="button">Inspect</button>
@@ -261,24 +315,31 @@ app.innerHTML = `
         <input id="path-input" type="text" placeholder="D:\\\\lab-data\\\\sample.tif" />
       </label>
       <h3>Calibration</h3>
+      <label style="margin-bottom: 0.5rem; display: block;">
+        Calibration Mode
+        <select id="calibration-mode" style="width: 100%; padding: 0.4rem; border-radius: 4px; border: 1px solid var(--border); background: var(--bg-input); color: var(--text);">
+          <option value="auto" selected>Auto (from metadata)</option>
+          <option value="manual">Manual override</option>
+        </select>
+      </label>
       <div class="grid">
         <label>
           Voxel X (um)
-          <input id="voxel-x" type="number" min="0" step="0.0001" value="1" />
+          <input id="voxel-x" type="number" min="0" step="0.0001" value="1" disabled />
         </label>
         <label>
           Voxel Y (um)
-          <input id="voxel-y" type="number" min="0" step="0.0001" value="1" />
+          <input id="voxel-y" type="number" min="0" step="0.0001" value="1" disabled />
         </label>
         <label>
           Voxel Z (um)
-          <input id="voxel-z" type="number" min="0" step="0.0001" value="1" />
+          <input id="voxel-z" type="number" min="0" step="0.0001" value="1" disabled />
         </label>
       </div>
       <div id="inspect-output" class="output muted">No stack inspected yet.</div>
     </section>
 
-    <section class="panel">
+    <section class="panel" id="step-2-panel">
       <div class="panel-title">
         <h2><span class="step-badge">2</span> Preview & Analyze</h2>
         <div class="button-row">
@@ -293,6 +354,7 @@ app.innerHTML = `
           <select id="profile-input">
             <option value="vesicle" selected>Vesicle</option>
             <option value="rbc">RBC</option>
+            <option value="limeseg">LimeSeg Active Surfaces</option>
           </select>
         </label>
         <label class="wide frame-control">
@@ -325,6 +387,23 @@ app.innerHTML = `
           <button id="select-object-btn" class="secondary" type="button">Select Object</button>
           <button id="clear-object-btn" class="secondary" type="button">Clear Object</button>
           <span id="object-seed-status" class="inline-status">No object selected</span>
+        </div>
+        <div class="grid three" style="margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px;">
+          <label>
+            Seed Tool
+            <select id="object-seed-tool">
+              <option value="circle">Circle / Drag-radius</option>
+              <option value="polygon">Freehand / Polygon</option>
+            </select>
+          </label>
+          <label id="seed-radius-container">
+            Seed Radius (px)
+            <input id="object-seed-radius" type="number" min="1" placeholder="Radius (px)" value="10" />
+          </label>
+          <label>
+            Max Track Dist (um)
+            <input id="object-seed-max-dist" type="number" min="0.1" step="0.1" placeholder="Auto" />
+          </label>
         </div>
       </fieldset>
       <fieldset>
@@ -367,7 +446,7 @@ app.innerHTML = `
     </section>
   </main>
 
-  <section class="results">
+  <section class="results" id="step-3-panel">
     <div class="results-header">
       <h2><span class="step-badge">3</span> Batch</h2>
       <div class="button-row">
@@ -446,7 +525,7 @@ app.innerHTML = `
     </div>
   </section>
 
-  <section class="results">
+  <section class="results" id="step-4-panel">
     <div class="results-header">
       <h2><span class="step-badge">4</span> CSV Validation</h2>
       <button id="validate-csv-btn" type="button">Validate</button>
@@ -496,7 +575,7 @@ app.innerHTML = `
     </div>
   </section>
 
-  <section class="results">
+  <section class="results" id="step-5-panel">
     <div class="results-header">
       <h2><span class="step-badge">5</span> Frame Metrics</h2>
       <div class="button-row">
@@ -524,6 +603,30 @@ app.innerHTML = `
         </thead>
         <tbody id="results-body">
           <tr><td colspan="11" class="muted">Run an analysis to populate metrics.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="results" id="step-6-panel">
+    <div class="results-header">
+      <h2><span class="step-badge">6</span> Log Book</h2>
+      <div class="button-row">
+        <button id="clear-logs-btn" class="secondary" type="button">Clear Logs</button>
+        <button id="download-logs-btn" class="secondary" type="button">Export Logs (JSON)</button>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th style="width: 120px;">Time</th>
+            <th style="width: 250px;">Action</th>
+            <th>Details</th>
+          </tr>
+        </thead>
+        <tbody id="log-results-body">
+          <tr><td colspan="3" class="muted">No actions recorded yet.</td></tr>
         </tbody>
       </table>
     </div>
@@ -565,9 +668,19 @@ let inspectedFrameCount: number | null = null;
 let previewDebounce: number | null = null;
 let selectedObjectSeed: ObjectSeed | null = null;
 let selectObjectMode = false;
+let polygonPoints: { imgX: number; imgY: number }[] = [];
+let polygonClosed = false;
 
 mustElement<HTMLButtonElement>("inspect-btn").addEventListener("click", () => {
   void inspectStack();
+});
+
+mustElement<HTMLSelectElement>("calibration-mode").addEventListener("change", (e) => {
+  const select = e.target as HTMLSelectElement;
+  const isAuto = select.value === "auto";
+  mustElement<HTMLInputElement>("voxel-x").disabled = isAuto;
+  mustElement<HTMLInputElement>("voxel-y").disabled = isAuto;
+  mustElement<HTMLInputElement>("voxel-z").disabled = isAuto;
 });
 
 mustElement<HTMLButtonElement>("analyze-btn").addEventListener("click", () => {
@@ -595,6 +708,29 @@ mustElement<HTMLButtonElement>("select-object-btn").addEventListener("click", ()
   const btn = mustElement<HTMLButtonElement>("select-object-btn");
   btn.textContent = selectObjectMode ? "Cancel Selection" : "Select Object";
   btn.classList.toggle("active", selectObjectMode);
+  if (!selectObjectMode) {
+    polygonPoints = [];
+    polygonClosed = false;
+    const overlay = document.getElementById("polygon-overlay");
+    if (overlay) {
+      overlay.innerHTML = "";
+      overlay.setAttribute("hidden", "true");
+    }
+  }
+  updateObjectSeedStatus();
+});
+
+mustElement<HTMLSelectElement>("object-seed-tool").addEventListener("change", () => {
+  const toolSelect = mustElement<HTMLSelectElement>("object-seed-tool");
+  const isPoly = toolSelect.value === "polygon";
+  mustElement<HTMLElement>("seed-radius-container").style.display = isPoly ? "none" : "block";
+  polygonPoints = [];
+  polygonClosed = false;
+  const overlay = document.getElementById("polygon-overlay");
+  if (overlay) {
+    overlay.innerHTML = "";
+    overlay.setAttribute("hidden", "true");
+  }
   updateObjectSeedStatus();
 });
 
@@ -688,6 +824,28 @@ downloadSweepReportButton.addEventListener("click", () => {
   downloadLatestSweepReport();
 });
 
+// Scroll-into-view workflow strip navigation
+const workflowSpans = document.querySelectorAll(".workflow-strip span");
+workflowSpans.forEach((span, index) => {
+  span.addEventListener("click", () => {
+    const stepId = `step-${index + 1}-panel`;
+    const element = document.getElementById(stepId);
+    if (element) {
+      element.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  });
+});
+
+// Log Book controls
+mustElement<HTMLButtonElement>("clear-logs-btn").addEventListener("click", () => {
+  frontendLogs.length = 0;
+  logAction("Clear Logs", "User cleared the log book.");
+});
+
+mustElement<HTMLButtonElement>("download-logs-btn").addEventListener("click", () => {
+  downloadLogs();
+});
+
 void refreshHealth();
 
 async function refreshHealth(): Promise<void> {
@@ -709,9 +867,11 @@ async function loadProjectFromFile(): Promise<void> {
     applyProjectSettings(settings);
     projectStatus.textContent = file.name;
     projectStatus.className = "status ok";
+    logAction("Load Project Settings", `Successfully loaded settings from "${file.name}".`);
   } catch (error) {
     projectStatus.textContent = errorMessage(error);
     projectStatus.className = "status warn";
+    logAction("Load Project Settings Failed", `Error: ${errorMessage(error)}`);
   }
 }
 
@@ -730,16 +890,19 @@ function downloadCurrentProject(): void {
     URL.revokeObjectURL(url);
     projectStatus.textContent = "Project downloaded";
     projectStatus.className = "status ok";
+    logAction("Download Project Settings", `Saved settings config as "morphostack.project.json".`);
   } catch (error) {
     projectStatus.textContent = errorMessage(error);
     projectStatus.className = "status warn";
+    logAction("Download Project Settings Failed", `Error: ${errorMessage(error)}`);
   }
 }
 
 async function inspectStack(): Promise<void> {
   inspectOutput.textContent = "Inspecting...";
+  const file = selectedFile();
+  logAction("Inspect Stack Started", file ? `Uploading "${file.name}"` : `Local path "${readPath()}"`);
   try {
-    const file = selectedFile();
     const payload = file
       ? await apiUploadPost<InspectResponse>("/api/upload/inspect", inspectUploadForm(file))
       : await apiPost<InspectResponse>("/api/inspect", {
@@ -755,10 +918,21 @@ async function inspectStack(): Promise<void> {
       z=${formatNumber(payload.voxel_size.z_um)} um<br />
       Voxel source: ${escapeHtml(payload.voxel_source)}
     `;
+    
+    // Auto-populate the visible voxel input fields if in Auto calibration mode
+    const mode = mustElement<HTMLSelectElement>("calibration-mode").value;
+    if (mode === "auto") {
+      mustElement<HTMLInputElement>("voxel-x").value = formatInputNumber(payload.voxel_size.x_um);
+      mustElement<HTMLInputElement>("voxel-y").value = formatInputNumber(payload.voxel_size.y_um);
+      mustElement<HTMLInputElement>("voxel-z").value = formatInputNumber(payload.voxel_size.z_um);
+    }
+    
     inspectedFrameCount = payload.grayscale_shape[0] ?? null;
     syncZRangeControls({ initializeFullRange: true });
+    logAction("Inspect Stack Succeeded", `Source: "${payload.source_path}", Shape: [${payload.grayscale_shape.join(", ")}], Voxel source: ${payload.voxel_source}`);
   } catch (error) {
     inspectOutput.textContent = errorMessage(error);
+    logAction("Inspect Stack Failed", `Error: ${errorMessage(error)}`);
   }
 }
 
@@ -781,8 +955,10 @@ async function previewStack(): Promise<void> {
           object_seed: selectedObjectSeed
         });
     renderPreview(payload, roi);
+    logAction("Preview Stack Frame Succeeded", `Frame: ${payload.frame_index}, Threshold: ${payload.threshold}, Method: ${payload.method}`);
   } catch (error) {
     previewOutput.textContent = errorMessage(error);
+    logAction("Preview Stack Frame Failed", `Error: ${errorMessage(error)}`);
   }
 }
 
@@ -805,6 +981,7 @@ function hasStackInput(): boolean {
 
 async function previewMesh(): Promise<void> {
   meshOutput.textContent = "Rendering 3D mesh...";
+  logAction("Render 3D Mesh Started");
   try {
     const file = selectedFile();
     const payload = file
@@ -822,13 +999,16 @@ async function previewMesh(): Promise<void> {
           object_seed: selectedObjectSeed
         });
     renderMeshPreview(payload);
+    logAction("Render 3D Mesh Succeeded", `Vertices: ${payload.vertex_count}, Faces: ${payload.face_count}`);
   } catch (error) {
     meshOutput.textContent = errorMessage(error);
+    logAction("Render 3D Mesh Failed", `Error: ${errorMessage(error)}`);
   }
 }
 
 async function suggestThreshold(): Promise<void> {
   previewOutput.textContent = "Suggesting threshold...";
+  logAction("Suggest Threshold Started");
   try {
     const file = selectedFile();
     const payload = file
@@ -845,8 +1025,10 @@ async function suggestThreshold(): Promise<void> {
       <strong>${escapeHtml(payload.source_path)}</strong><br />
       Suggested threshold: ${formatNumber(payload.threshold)} (${escapeHtml(payload.method)})
     `;
+    logAction("Suggest Threshold Succeeded", `Suggested: ${payload.threshold} (${payload.method})`);
   } catch (error) {
     previewOutput.textContent = errorMessage(error);
+    logAction("Suggest Threshold Failed", `Error: ${errorMessage(error)}`);
   }
 }
 
@@ -857,8 +1039,9 @@ async function analyzeStack(): Promise<void> {
   downloadManifestButton.disabled = true;
   analysisSummary.textContent = "Analyzing...";
   resultsBody.innerHTML = `<tr><td colspan="11" class="muted">Running analysis...</td></tr>`;
+  const file = selectedFile();
+  logAction("Analyze Stack Started", file ? `Uploading "${file.name}"` : `Local path "${readPath()}"`);
   try {
-    const file = selectedFile();
     const payload = file
       ? await apiUploadPost<AnalyzeResponse>("/api/upload/analyze", analyzeUploadForm(file))
       : await apiPost<AnalyzeResponse>("/api/analyze", {
@@ -873,9 +1056,11 @@ async function analyzeStack(): Promise<void> {
           object_seed: selectedObjectSeed
         });
     renderAnalysis(payload);
+    logAction("Analyze Stack Succeeded", `Source: "${payload.source_path}", Valid frames: ${payload.valid_frame_count}/${payload.frame_count}`);
   } catch (error) {
     analysisSummary.textContent = errorMessage(error);
     resultsBody.innerHTML = `<tr><td colspan="11" class="muted">Analysis failed.</td></tr>`;
+    logAction("Analyze Stack Failed", `Error: ${errorMessage(error)}`);
   }
 }
 
@@ -887,11 +1072,14 @@ async function analyzeBatch(): Promise<void> {
   batchResultsBody.innerHTML = `<tr><td colspan="8" class="muted">Running batch analysis...</td></tr>`;
   try {
     const files = selectedBatchFiles();
+    logAction("Batch Analyze Started", `Files selected: ${files.length}`);
     const payload = await apiUploadPost<BatchAnalyzeResponse>("/api/upload/batch", batchUploadForm(files));
     renderBatch(payload);
+    logAction("Batch Analyze Succeeded", `Files: ${payload.file_count}, Succeeded: ${payload.succeeded_count}, Failed: ${payload.failed_count}`);
   } catch (error) {
     batchSummary.textContent = errorMessage(error);
     batchResultsBody.innerHTML = `<tr><td colspan="8" class="muted">Batch analysis failed.</td></tr>`;
+    logAction("Batch Analyze Failed", `Error: ${errorMessage(error)}`);
   }
 }
 
@@ -901,8 +1089,9 @@ async function runSweep(): Promise<void> {
   downloadSweepReportButton.disabled = true;
   sweepSummary.textContent = "Running threshold sweep...";
   sweepResultsBody.innerHTML = `<tr><td colspan="7" class="muted">Running sweep...</td></tr>`;
+  const file = selectedFile();
+  logAction("Threshold Sweep Started", file ? `Uploading "${file.name}"` : `Local path "${readPath()}"`);
   try {
-    const file = selectedFile();
     const payload = file
       ? await apiUploadPost<SweepResponse>("/api/upload/sweep", sweepUploadForm(file))
       : await apiPost<SweepResponse>("/api/sweep", {
@@ -918,9 +1107,11 @@ async function runSweep(): Promise<void> {
           prefer_opencv: !mustElement<HTMLInputElement>("fallback-input").checked
         });
     renderSweep(payload);
+    logAction("Threshold Sweep Succeeded", `Source: "${payload.source_path}", Thresholds tested: ${payload.threshold_count}`);
   } catch (error) {
     sweepSummary.textContent = errorMessage(error);
     sweepResultsBody.innerHTML = `<tr><td colspan="7" class="muted">Sweep failed.</td></tr>`;
+    logAction("Threshold Sweep Failed", `Error: ${errorMessage(error)}`);
   }
 }
 
@@ -928,11 +1119,16 @@ async function validateCsv(): Promise<void> {
   validationSummary.textContent = "Validating...";
   validationResultsBody.innerHTML = `<tr><td colspan="5" class="muted">Running validation...</td></tr>`;
   try {
+    const expectedFile = selectedRequiredFile("expected-csv-input", "Reference CSV");
+    const actualFile = selectedRequiredFile("actual-csv-input", "New CSV");
+    logAction("CSV Validation Started", `Expected: "${expectedFile.name}", Actual: "${actualFile.name}"`);
     const payload = await apiUploadPost<ValidationResponse>("/api/upload/validate", validationUploadForm());
     renderValidation(payload);
+    logAction("CSV Validation Succeeded", `Passed: ${payload.passed}, Rows compared: ${payload.compared_rows}, Differences: ${payload.differences.length}`);
   } catch (error) {
     validationSummary.textContent = errorMessage(error);
     validationResultsBody.innerHTML = `<tr><td colspan="5" class="muted">Validation failed.</td></tr>`;
+    logAction("CSV Validation Failed", `Error: ${errorMessage(error)}`);
   }
 }
 
@@ -981,6 +1177,8 @@ function renderPreview(payload: PreviewResponse, renderedRoi: RectRoi | null): v
         alt="Segmentation preview for frame ${payload.frame_index}"
       />
       <div id="roi-selection" class="roi-selection" hidden></div>
+      <div id="seed-selection" class="seed-selection" hidden></div>
+      <svg id="polygon-overlay" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none;" hidden></svg>
     </div>
     <div>
       <strong>${escapeHtml(payload.source_path)}</strong><br />
@@ -988,7 +1186,7 @@ function renderPreview(payload: PreviewResponse, renderedRoi: RectRoi | null): v
       Area ${formatNumber(payload.area_px2)} px2,
       perimeter ${formatNumber(payload.perimeter_px)} px,
       circularity ${formatNumber(payload.circularity)}
-      ${selectedObjectSeed ? `<br /><span style="color:#fde047">Object seed: (${selectedObjectSeed.x}, ${selectedObjectSeed.y}) frame ${selectedObjectSeed.frame_index}</span>` : ""}
+      ${selectedObjectSeed ? `<br /><span style="color:#fde047">Object seed: (${selectedObjectSeed.x}, ${selectedObjectSeed.y}) r=${Math.round(selectedObjectSeed.radius)} frame ${selectedObjectSeed.frame_index}</span>` : ""}
     </div>
   `;
   attachPreviewRoiSelector(payload, renderedRoi);
@@ -997,55 +1195,286 @@ function renderPreview(payload: PreviewResponse, renderedRoi: RectRoi | null): v
 function attachPreviewRoiSelector(payload: PreviewResponse, renderedRoi: RectRoi | null): void {
   const image = mustElement<HTMLImageElement>("preview-image");
   const selection = mustElement<HTMLDivElement>("roi-selection");
-  let start: { x: number; y: number } | null = null;
+  const seedSelection = mustElement<HTMLDivElement>("seed-selection");
+  let start: { x: number; y: number; clientX: number; clientY: number } | null = null;
 
   image.addEventListener("pointerdown", (event) => {
     event.preventDefault();
-    start = pointerToImagePoint(event, image);
+    
+    const rect = image.getBoundingClientRect();
+    const tool = mustElement<HTMLSelectElement>("object-seed-tool").value;
+
+    if (selectObjectMode && tool === "polygon") {
+      // Polygon drawing mode click
+      const clickX = event.clientX - rect.left;
+      const clickY = event.clientY - rect.top;
+      
+      const imgPt = clientToImagePoint(event.clientX, event.clientY, image);
+
+      if (polygonClosed) {
+        polygonPoints = [];
+        polygonClosed = false;
+      }
+
+      // Check if clicking near the first point to close it (if >= 3 points exist)
+      if (polygonPoints.length >= 3) {
+        const firstClientPt = imageToClientPoint(polygonPoints[0].imgX, polygonPoints[0].imgY, image);
+        const dist = Math.sqrt((clickX - firstClientPt.x) ** 2 + (clickY - firstClientPt.y) ** 2);
+        if (dist < 10) {
+          closeAndApplyPolygon(image, payload, renderedRoi);
+          return;
+        }
+      }
+
+      polygonPoints.push({ imgX: imgPt.x, imgY: imgPt.y });
+      updatePolygonOverlay(image);
+      return;
+    }
+
+    // Normal circle seed or ROI crop drag selection
+    start = pointerToClientPoint(event, image);
     image.setPointerCapture(event.pointerId);
     if (!selectObjectMode) {
       drawSelection(selection, start.x, start.y, start.x, start.y);
+    } else {
+      drawSeedSelection(seedSelection, start.x, start.y, 0);
     }
   });
 
   image.addEventListener("pointermove", (event) => {
-    if (!start || selectObjectMode) {
+    const tool = mustElement<HTMLSelectElement>("object-seed-tool").value;
+    if (selectObjectMode && tool === "polygon") {
+      if (polygonPoints.length > 0 && !polygonClosed) {
+        updatePolygonOverlay(image, { x: event.clientX, y: event.clientY });
+      }
       return;
     }
-    const current = pointerToImagePoint(event, image);
-    drawSelection(selection, start.x, start.y, current.x, current.y);
-  });
 
-  image.addEventListener("pointerup", (event) => {
     if (!start) {
       return;
     }
-    const end = pointerToImagePoint(event, image);
-    image.releasePointerCapture(event.pointerId);
+    const current = pointerToClientPoint(event, image);
+    if (!selectObjectMode) {
+      drawSelection(selection, start.x, start.y, current.x, current.y);
+    } else {
+      const radius = Math.sqrt((current.x - start.x) ** 2 + (current.y - start.y) ** 2);
+      drawSeedSelection(seedSelection, start.x, start.y, radius);
+    }
+  });
 
-    if (selectObjectMode) {
-      // Single-click sets the object seed.
-      applyObjectSeedClick(end, image, payload, renderedRoi);
-      start = null;
+  image.addEventListener("pointerup", (event) => {
+    const tool = mustElement<HTMLSelectElement>("object-seed-tool").value;
+    if (selectObjectMode && tool === "polygon") {
       return;
     }
 
-    applyDraggedRoi(start, end, image, payload, renderedRoi);
+    if (!start) {
+      return;
+    }
+    const end = pointerToClientPoint(event, image);
+    image.releasePointerCapture(event.pointerId);
+
+    if (selectObjectMode) {
+      const radiusClient = Math.sqrt((end.x - start.x) ** 2 + (end.y - start.y) ** 2);
+      let radiusImg = 10.0;
+      if (radiusClient >= 3) {
+        radiusImg = clientRadiusToImageRadius(radiusClient, image);
+        mustElement<HTMLInputElement>("object-seed-radius").value = String(Math.round(radiusImg));
+      } else {
+        radiusImg = Number(mustElement<HTMLInputElement>("object-seed-radius").value) || 10.0;
+      }
+      applyObjectSeedClick(start, image, payload, renderedRoi, radiusImg);
+      start = null;
+      seedSelection.hidden = true;
+      return;
+    }
+
+    applyDraggedRoi(start, end, image, renderedRoi);
     start = null;
   });
 
   image.addEventListener("pointercancel", () => {
     start = null;
     selection.hidden = true;
+    seedSelection.hidden = true;
+  });
+
+  image.addEventListener("dblclick", (event) => {
+    const tool = mustElement<HTMLSelectElement>("object-seed-tool").value;
+    if (selectObjectMode && tool === "polygon") {
+      event.preventDefault();
+      if (polygonPoints.length >= 3) {
+        closeAndApplyPolygon(image, payload, renderedRoi);
+      }
+    }
   });
 }
 
-function pointerToImagePoint(event: PointerEvent, image: HTMLImageElement): { x: number; y: number } {
+function pointerToClientPoint(event: PointerEvent, image: HTMLImageElement): { x: number; y: number; clientX: number; clientY: number } {
   const rect = image.getBoundingClientRect();
   return {
     x: clamp(event.clientX - rect.left, 0, rect.width),
-    y: clamp(event.clientY - rect.top, 0, rect.height)
+    y: clamp(event.clientY - rect.top, 0, rect.height),
+    clientX: event.clientX,
+    clientY: event.clientY
   };
+}
+
+function clientToImagePoint(
+  clientX: number,
+  clientY: number,
+  image: HTMLImageElement
+): { x: number; y: number } {
+  const rect = image.getBoundingClientRect();
+  const style = window.getComputedStyle(image);
+
+  const borderLeft = parseFloat(style.borderLeftWidth) || 0;
+  const borderTop = parseFloat(style.borderTopWidth) || 0;
+  const paddingLeft = parseFloat(style.paddingLeft) || 0;
+  const paddingTop = parseFloat(style.paddingTop) || 0;
+  const paddingRight = parseFloat(style.paddingRight) || 0;
+  const paddingBottom = parseFloat(style.paddingBottom) || 0;
+
+  // content-box dimensions
+  const wBox = image.clientWidth - paddingLeft - paddingRight;
+  const hBox = image.clientHeight - paddingTop - paddingBottom;
+
+  const wSrc = image.naturalWidth || image.width;
+  const hSrc = image.naturalHeight || image.height;
+
+  if (wBox <= 0 || hBox <= 0 || wSrc <= 0 || hSrc <= 0) {
+    return { x: 0, y: 0 };
+  }
+
+  // contain logic
+  const scale = Math.min(wBox / wSrc, hBox / hSrc);
+  const wRendered = wSrc * scale;
+  const hRendered = hSrc * scale;
+
+  const xOffset = (wBox - wRendered) / 2;
+  const yOffset = (hBox - hRendered) / 2;
+
+  // Viewport client coord to content-box relative
+  const xContent = clientX - rect.left - borderLeft - paddingLeft;
+  const yContent = clientY - rect.top - borderTop - paddingTop;
+
+  const xImg = Math.round((xContent - xOffset) / scale);
+  const yImg = Math.round((yContent - yOffset) / scale);
+
+  return {
+    x: clamp(xImg, 0, wSrc - 1),
+    y: clamp(yImg, 0, hSrc - 1)
+  };
+}
+
+function imageToClientPoint(
+  imgX: number,
+  imgY: number,
+  image: HTMLImageElement
+): { x: number; y: number } {
+  const style = window.getComputedStyle(image);
+
+  const borderLeft = parseFloat(style.borderLeftWidth) || 0;
+  const borderTop = parseFloat(style.borderTopWidth) || 0;
+  const paddingLeft = parseFloat(style.paddingLeft) || 0;
+  const paddingTop = parseFloat(style.paddingTop) || 0;
+  const paddingRight = parseFloat(style.paddingRight) || 0;
+  const paddingBottom = parseFloat(style.paddingBottom) || 0;
+
+  const wBox = image.clientWidth - paddingLeft - paddingRight;
+  const hBox = image.clientHeight - paddingTop - paddingBottom;
+
+  const wSrc = image.naturalWidth || image.width;
+  const hSrc = image.naturalHeight || image.height;
+
+  if (wBox <= 0 || hBox <= 0 || wSrc <= 0 || hSrc <= 0) {
+    return { x: 0, y: 0 };
+  }
+
+  const scale = Math.min(wBox / wSrc, hBox / hSrc);
+  const wRendered = wSrc * scale;
+  const hRendered = hSrc * scale;
+
+  const xOffset = (wBox - wRendered) / 2;
+  const yOffset = (hBox - hRendered) / 2;
+
+  const xContent = imgX * scale + xOffset;
+  const yContent = imgY * scale + yOffset;
+
+  return {
+    x: xContent + borderLeft + paddingLeft,
+    y: yContent + borderTop + paddingTop
+  };
+}
+
+function updatePolygonOverlay(image: HTMLImageElement, currentPointerClient?: { x: number; y: number }): void {
+  const svg = document.getElementById("polygon-overlay") as unknown as SVGElement | null;
+  if (!svg) return;
+
+  svg.innerHTML = "";
+  if (polygonPoints.length === 0) {
+    svg.setAttribute("hidden", "true");
+    return;
+  }
+  svg.removeAttribute("hidden");
+
+  // Draw lines
+  let pathD = "";
+  polygonPoints.forEach((pt, idx) => {
+    const clientPt = imageToClientPoint(pt.imgX, pt.imgY, image);
+    if (idx === 0) {
+      pathD += `M ${clientPt.x} ${clientPt.y}`;
+    } else {
+      pathD += ` L ${clientPt.x} ${clientPt.y}`;
+    }
+  });
+
+  if (currentPointerClient && !polygonClosed) {
+    // draw line to current cursor
+    const rect = image.getBoundingClientRect();
+    const relativeX = currentPointerClient.x - rect.left;
+    const relativeY = currentPointerClient.y - rect.top;
+    pathD += ` L ${relativeX} ${relativeY}`;
+  }
+
+  if (polygonClosed && polygonPoints.length >= 3) {
+    pathD += " Z";
+  }
+
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", pathD);
+  path.setAttribute("fill", polygonClosed ? "rgba(255, 220, 0, 0.2)" : "none");
+  path.setAttribute("stroke", "#ffd700");
+  path.setAttribute("stroke-width", "2");
+  svg.appendChild(path);
+
+  // Draw circles for points
+  polygonPoints.forEach((pt) => {
+    const clientPt = imageToClientPoint(pt.imgX, pt.imgY, image);
+    const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    circle.setAttribute("cx", String(clientPt.x));
+    circle.setAttribute("cy", String(clientPt.y));
+    circle.setAttribute("r", "4");
+    circle.setAttribute("fill", "#ffd700");
+    circle.setAttribute("stroke", "#000");
+    circle.setAttribute("stroke-width", "1");
+    svg.appendChild(circle);
+  });
+}
+
+function clientRadiusToImageRadius(radiusClient: number, image: HTMLImageElement): number {
+  const rect = image.getBoundingClientRect();
+  const wBox = rect.width;
+  const hBox = rect.height;
+  const wSrc = image.naturalWidth || image.width;
+  const hSrc = image.naturalHeight || image.height;
+
+  if (wBox <= 0 || hBox <= 0 || wSrc <= 0 || hSrc <= 0) {
+    return radiusClient;
+  }
+
+  const scale = Math.min(wBox / wSrc, hBox / hSrc);
+  return radiusClient / scale;
 }
 
 function drawSelection(selection: HTMLDivElement, startX: number, startY: number, endX: number, endY: number): void {
@@ -1060,11 +1489,18 @@ function drawSelection(selection: HTMLDivElement, startX: number, startY: number
   selection.style.height = `${height}px`;
 }
 
+function drawSeedSelection(selection: HTMLDivElement, centerX: number, centerY: number, radius: number): void {
+  selection.hidden = false;
+  selection.style.left = `${centerX - radius}px`;
+  selection.style.top = `${centerY - radius}px`;
+  selection.style.width = `${2 * radius}px`;
+  selection.style.height = `${2 * radius}px`;
+}
+
 function applyDraggedRoi(
-  start: { x: number; y: number },
-  end: { x: number; y: number },
+  start: { x: number; y: number; clientX: number; clientY: number },
+  end: { x: number; y: number; clientX: number; clientY: number },
   image: HTMLImageElement,
-  payload: PreviewResponse,
   renderedRoi: RectRoi | null
 ): void {
   const rect = image.getBoundingClientRect();
@@ -1075,14 +1511,16 @@ function applyDraggedRoi(
     return;
   }
 
+  const startImg = clientToImagePoint(start.clientX, start.clientY, image);
+  const endImg = clientToImagePoint(end.clientX, end.clientY, image);
+
   const baseX = renderedRoi?.xmin ?? 0;
   const baseY = renderedRoi?.ymin ?? 0;
-  const scaleX = payload.width / rect.width;
-  const scaleY = payload.height / rect.height;
-  const xmin = baseX + Math.floor(Math.min(start.x, end.x) * scaleX);
-  const xmax = baseX + Math.ceil(Math.max(start.x, end.x) * scaleX);
-  const ymin = baseY + Math.floor(Math.min(start.y, end.y) * scaleY);
-  const ymax = baseY + Math.ceil(Math.max(start.y, end.y) * scaleY);
+  
+  const xmin = baseX + Math.min(startImg.x, endImg.x);
+  const xmax = baseX + Math.max(startImg.x, endImg.x);
+  const ymin = baseY + Math.min(startImg.y, endImg.y);
+  const ymax = baseY + Math.max(startImg.y, endImg.y);
 
   setRoiFields({
     xmin,
@@ -1093,46 +1531,108 @@ function applyDraggedRoi(
 }
 
 function applyObjectSeedClick(
-  point: { x: number; y: number },
+  point: { clientX: number; clientY: number },
   image: HTMLImageElement,
   payload: PreviewResponse,
-  renderedRoi: RectRoi | null
+  renderedRoi: RectRoi | null,
+  radiusImg: number
 ): void {
   const rect = image.getBoundingClientRect();
   if (rect.width <= 0 || rect.height <= 0) return;
 
+  const pointImg = clientToImagePoint(point.clientX, point.clientY, image);
+
   const baseX = renderedRoi?.xmin ?? 0;
   const baseY = renderedRoi?.ymin ?? 0;
-  const scaleX = payload.width / rect.width;
-  const scaleY = payload.height / rect.height;
-  const imgX = baseX + Math.round(point.x * scaleX);
-  const imgY = baseY + Math.round(point.y * scaleY);
+  const imgX = baseX + pointImg.x;
+  const imgY = baseY + pointImg.y;
 
-  selectedObjectSeed = { x: imgX, y: imgY, frame_index: payload.frame_index };
+  const maxDistVal = parseFloat(mustElement<HTMLInputElement>("object-seed-max-dist").value);
+  const max_tracking_dist_um = isNaN(maxDistVal) ? undefined : maxDistVal;
+
+  selectedObjectSeed = {
+    x: imgX,
+    y: imgY,
+    frame_index: payload.frame_index,
+    radius: radiusImg,
+    max_tracking_dist_um,
+    type: "circle"
+  };
   selectObjectMode = false;
   const btn = mustElement<HTMLButtonElement>("select-object-btn");
   btn.textContent = "Select Object";
   btn.classList.remove("active");
   updateObjectSeedStatus();
+  logAction("Set Object Seed", `Coordinate (${imgX}, ${imgY}) r=${Math.round(radiusImg)} on frame ${payload.frame_index}`);
+  void previewStack();
+}
+
+function closeAndApplyPolygon(image: HTMLImageElement, payload: PreviewResponse, renderedRoi: RectRoi | null): void {
+  polygonClosed = true;
+  updatePolygonOverlay(image);
+
+  const xs = polygonPoints.map(p => p.imgX);
+  const ys = polygonPoints.map(p => p.imgY);
+  const centroidX = xs.reduce((a, b) => a + b, 0) / xs.length;
+  const centroidY = ys.reduce((a, b) => a + b, 0) / ys.length;
+  const maxDist = Math.max(...polygonPoints.map(p => Math.sqrt((p.imgX - centroidX)**2 + (p.imgY - centroidY)**2)));
+
+  const maxDistVal = parseFloat(mustElement<HTMLInputElement>("object-seed-max-dist").value);
+  const max_tracking_dist_um = isNaN(maxDistVal) ? undefined : maxDistVal;
+
+  const baseX = renderedRoi?.xmin ?? 0;
+  const baseY = renderedRoi?.ymin ?? 0;
+
+  selectedObjectSeed = {
+    x: baseX + centroidX,
+    y: baseY + centroidY,
+    frame_index: payload.frame_index,
+    radius: maxDist,
+    max_tracking_dist_um,
+    type: "polygon",
+    points: polygonPoints.map(p => ({ x: baseX + p.imgX, y: baseY + p.imgY }))
+  };
+
+  selectObjectMode = false;
+  const btn = mustElement<HTMLButtonElement>("select-object-btn");
+  btn.textContent = "Select Object";
+  btn.classList.remove("active");
+  updateObjectSeedStatus();
+  logAction("Set Object Seed (Polygon)", `Polygon with ${polygonPoints.length} vertices, centroid (${Math.round(centroidX)}, ${Math.round(centroidY)}) on frame ${payload.frame_index}`);
   void previewStack();
 }
 
 function clearObjectSeed(): void {
   selectedObjectSeed = null;
+  polygonPoints = [];
+  polygonClosed = false;
+  const overlay = document.getElementById("polygon-overlay");
+  if (overlay) {
+    overlay.innerHTML = "";
+    overlay.setAttribute("hidden", "true");
+  }
   selectObjectMode = false;
   const btn = mustElement<HTMLButtonElement>("select-object-btn");
   btn.textContent = "Select Object";
   btn.classList.remove("active");
   updateObjectSeedStatus();
+  logAction("Clear Object Seed", "User cleared the selected object seed.");
+  void previewStack();
 }
 
 function updateObjectSeedStatus(): void {
   const status = mustElement<HTMLSpanElement>("object-seed-status");
   if (selectObjectMode) {
-    status.textContent = "Click on the target object in the preview";
+    const tool = mustElement<HTMLSelectElement>("object-seed-tool").value;
+    if (tool === "polygon") {
+      status.textContent = "Click points on preview to draw polygon. Double-click to finish.";
+    } else {
+      status.textContent = "Click & drag on the target object to set seed and radius";
+    }
     status.className = "inline-status warn";
   } else if (selectedObjectSeed) {
-    status.textContent = `Seed: (${selectedObjectSeed.x}, ${selectedObjectSeed.y}) frame ${selectedObjectSeed.frame_index}`;
+    const desc = selectedObjectSeed.type === "polygon" ? "Polygon" : "Circle";
+    status.textContent = `${desc} Seed: (${selectedObjectSeed.x}, ${selectedObjectSeed.y}) r=${Math.round(selectedObjectSeed.radius)} frame ${selectedObjectSeed.frame_index}`;
     status.className = "inline-status ok";
   } else {
     status.textContent = "No object selected";
@@ -1170,6 +1670,7 @@ function syncZRangeControls(options: { initializeFullRange?: boolean } = {}): vo
       zStopSlider.value = String(stop);
       zRangeStatus.textContent = `Using frames ${start} to ${stop - 1} (${stop - start} frames)`;
       zRangeStatus.className = "inline-status";
+      logAction("Set Z Range", `Using frames ${start} to ${stop - 1} (${stop - start} frames)`);
     }
   } catch (error) {
     zRangeStatus.textContent = errorMessage(error);
@@ -1210,6 +1711,7 @@ function setRoiFields(roi: RectRoi): void {
   mustElement<HTMLInputElement>("roi-ymin").value = String(roi.ymin);
   mustElement<HTMLInputElement>("roi-ymax").value = String(roi.ymax);
   updateRoiStatus();
+  logAction("Set ROI", `${roi.xmin}:${roi.xmax}, ${roi.ymin}:${roi.ymax}`);
 }
 
 function clearRoiFields(): void {
@@ -1221,6 +1723,7 @@ function clearRoiFields(): void {
     selection.hidden = true;
   }
   updateRoiStatus();
+  logAction("Clear ROI", "Reset ROI bounds to full XY frame.");
 }
 
 function updateRoiStatus(): void {
@@ -1460,11 +1963,13 @@ function downloadLatestCsv(): void {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
-  anchor.download = csvFilename(latestAnalysis.source_path);
+  const filename = csvFilename(latestAnalysis.source_path);
+  anchor.download = filename;
   document.body.append(anchor);
   anchor.click();
   anchor.remove();
   URL.revokeObjectURL(url);
+  logAction("Export File", `Downloaded analysis CSV: "${filename}"`);
 }
 
 function downloadLatestBatchCsv(): void {
@@ -1482,6 +1987,7 @@ function downloadLatestBatchCsv(): void {
   anchor.click();
   anchor.remove();
   URL.revokeObjectURL(url);
+  logAction("Export File", 'Downloaded batch summary CSV: "morphostack_batch_summary.csv"');
 }
 
 function downloadLatestBatchReport(): void {
@@ -1499,6 +2005,7 @@ function downloadLatestBatchReport(): void {
   anchor.click();
   anchor.remove();
   URL.revokeObjectURL(url);
+  logAction("Export File", 'Downloaded batch Markdown report: "morphostack_batch_report.md"');
 }
 
 function downloadLatestReport(): void {
@@ -1511,11 +2018,13 @@ function downloadLatestReport(): void {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
-  anchor.download = reportFilename(latestAnalysis.source_path);
+  const filename = reportFilename(latestAnalysis.source_path);
+  anchor.download = filename;
   document.body.append(anchor);
   anchor.click();
   anchor.remove();
   URL.revokeObjectURL(url);
+  logAction("Export File", `Downloaded analysis Markdown report: "${filename}"`);
 }
 
 function downloadLatestSweepCsv(): void {
@@ -1528,11 +2037,13 @@ function downloadLatestSweepCsv(): void {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
-  anchor.download = sweepFilename(latestSweep.source_path);
+  const filename = sweepFilename(latestSweep.source_path);
+  anchor.download = filename;
   document.body.append(anchor);
   anchor.click();
   anchor.remove();
   URL.revokeObjectURL(url);
+  logAction("Export File", `Downloaded sweep CSV: "${filename}"`);
 }
 
 function downloadLatestSweepReport(): void {
@@ -1545,11 +2056,13 @@ function downloadLatestSweepReport(): void {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
-  anchor.download = sweepReportFilename(latestSweep.source_path);
+  const filename = sweepReportFilename(latestSweep.source_path);
+  anchor.download = filename;
   document.body.append(anchor);
   anchor.click();
   anchor.remove();
   URL.revokeObjectURL(url);
+  logAction("Export File", `Downloaded sweep Markdown report: "${filename}"`);
 }
 
 function downloadLatestManifest(): void {
@@ -1562,11 +2075,13 @@ function downloadLatestManifest(): void {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
-  anchor.download = manifestFilename(latestAnalysis.source_path);
+  const filename = manifestFilename(latestAnalysis.source_path);
+  anchor.download = filename;
   document.body.append(anchor);
   anchor.click();
   anchor.remove();
   URL.revokeObjectURL(url);
+  logAction("Export File", `Downloaded analysis JSON manifest: "${filename}"`);
 }
 
 function analysisReportMarkdown(payload: AnalyzeResponse): string {
@@ -1755,7 +2270,7 @@ function currentProjectSettings(): ProjectSettings {
     version: 1,
     profile: readProfile(),
     threshold: readNumber("threshold-input"),
-    voxel_size: readVoxel(),
+    voxel_size: readVoxel() ?? undefined,
     roi: roi ?? undefined,
     z_range: zRange ?? undefined,
     include_mesh: mustElement<HTMLInputElement>("mesh-input").checked,
@@ -1848,9 +2363,16 @@ function applyProjectSettings(settings: ProjectSettings): void {
     mustElement<HTMLInputElement>("threshold-input").value = formatInputNumber(settings.threshold);
   }
   if (settings.voxel_size !== undefined) {
-    mustElement<HTMLInputElement>("voxel-x").value = formatInputNumber(settings.voxel_size.x_um);
-    mustElement<HTMLInputElement>("voxel-y").value = formatInputNumber(settings.voxel_size.y_um);
-    mustElement<HTMLInputElement>("voxel-z").value = formatInputNumber(settings.voxel_size.z_um);
+    mustElement<HTMLSelectElement>("calibration-mode").value = "manual";
+    const vx = mustElement<HTMLInputElement>("voxel-x");
+    const vy = mustElement<HTMLInputElement>("voxel-y");
+    const vz = mustElement<HTMLInputElement>("voxel-z");
+    vx.value = formatInputNumber(settings.voxel_size.x_um);
+    vy.value = formatInputNumber(settings.voxel_size.y_um);
+    vz.value = formatInputNumber(settings.voxel_size.z_um);
+    vx.disabled = false;
+    vy.disabled = false;
+    vz.disabled = false;
   }
   if (settings.roi !== undefined) {
     mustElement<HTMLInputElement>("roi-xmin").value = formatInputNumber(settings.roi.xmin);
@@ -1971,7 +2493,25 @@ async function apiUploadPost<T>(url: string, formData: FormData): Promise<T> {
 async function parseResponse<T>(response: Response): Promise<T> {
   const payload = await response.json();
   if (!response.ok) {
-    throw new Error(payload.detail ?? response.statusText);
+    let msg = response.statusText;
+    if (payload && payload.detail) {
+      if (Array.isArray(payload.detail)) {
+        msg = payload.detail
+          .map((d: any) => {
+            if (d && typeof d === "object" && "msg" in d) {
+              const locStr = d.loc ? d.loc.join(".") : "";
+              return locStr ? `${locStr}: ${d.msg}` : d.msg;
+            }
+            return String(d);
+          })
+          .join(", ");
+      } else if (typeof payload.detail === "object") {
+        msg = JSON.stringify(payload.detail);
+      } else {
+        msg = String(payload.detail);
+      }
+    }
+    throw new Error(msg);
   }
   return payload as T;
 }
@@ -2007,6 +2547,14 @@ function appendObjectSeedFields(formData: FormData): void {
     formData.set("object_seed_x", String(selectedObjectSeed.x));
     formData.set("object_seed_y", String(selectedObjectSeed.y));
     formData.set("object_seed_frame", String(selectedObjectSeed.frame_index));
+    formData.set("object_seed_radius", String(selectedObjectSeed.radius));
+    if (selectedObjectSeed.max_tracking_dist_um !== undefined) {
+      formData.set("object_seed_max_dist_um", String(selectedObjectSeed.max_tracking_dist_um));
+    }
+    formData.set("object_seed_type", selectedObjectSeed.type || "circle");
+    if (selectedObjectSeed.points) {
+      formData.set("object_seed_points", JSON.stringify(selectedObjectSeed.points));
+    }
   }
 }
 
@@ -2108,6 +2656,9 @@ function appendFileAndVoxel(formData: FormData, file: File): void {
 
 function appendVoxelFields(formData: FormData): void {
   const voxel = readVoxel();
+  if (voxel === null) {
+    return;
+  }
   formData.set("voxel_x_um", String(voxel.x_um));
   formData.set("voxel_y_um", String(voxel.y_um));
   formData.set("voxel_z_um", String(voxel.z_um));
@@ -2145,7 +2696,11 @@ function readPath(): string {
   return value;
 }
 
-function readVoxel(): VoxelOverride {
+function readVoxel(): VoxelOverride | null {
+  const mode = mustElement<HTMLSelectElement>("calibration-mode").value;
+  if (mode === "auto") {
+    return null;
+  }
   return {
     x_um: readNumber("voxel-x"),
     y_um: readNumber("voxel-y"),
@@ -2155,10 +2710,10 @@ function readVoxel(): VoxelOverride {
 
 function readProfile(): AnalysisProfile {
   const value = mustElement<HTMLSelectElement>("profile-input").value;
-  if (value !== "vesicle" && value !== "rbc") {
-    throw new Error("Analysis profile must be vesicle or rbc.");
+  if (value !== "vesicle" && value !== "rbc" && value !== "limeseg") {
+    throw new Error("Analysis profile must be vesicle, rbc, or limeseg.");
   }
-  return value;
+  return value as AnalysisProfile;
 }
 
 function readRoi(): RectRoi | null {

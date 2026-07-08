@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import Literal
 
-AnalysisProfile = Literal["vesicle", "rbc"]
+AnalysisProfile = Literal["vesicle", "rbc", "limeseg"]
 
 DEFAULT_PROFILE: AnalysisProfile = "vesicle"
-PROFILE_CHOICES: tuple[AnalysisProfile, ...] = ("vesicle", "rbc")
+PROFILE_CHOICES: tuple[AnalysisProfile, ...] = ("vesicle", "rbc", "limeseg")
 
 
 def normalize_profile(profile: str | None) -> AnalysisProfile:

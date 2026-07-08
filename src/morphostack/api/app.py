@@ -15,10 +15,13 @@ from morphostack import __version__
 from morphostack.core import (
     DEFAULT_PROFILE,
     ObjectSeed,
+    SeedPoint,
     PROFILE_CHOICES,
     RectROI,
     SWEEP_COLUMNS,
     VoxelSize,
+    StackAnalysis,
+    StackViewTransform,
     ZRange,
     analyze_stack,
     analysis_manifest,
@@ -29,6 +32,7 @@ from morphostack.core import (
     compare_metric_csv,
     failed_analysis_summary_row,
     file_sha256,
+    inspect_image_stack,
     load_image_stack,
     suggest_threshold,
     threshold_sweep,
@@ -59,10 +63,19 @@ class ZRangeRequest(BaseModel):
     zmax: int
 
 
+class SeedPointRequest(BaseModel):
+    x: float
+    y: float
+
+
 class ObjectSeedRequest(BaseModel):
-    x: int
-    y: int
+    x: float = 0.0
+    y: float = 0.0
     frame_index: int
+    radius: float = 10.0
+    max_tracking_dist_um: float | None = None
+    type: str = "circle"
+    points: list[SeedPointRequest] | None = None
 
 
 class InspectRequest(BaseModel):
@@ -137,16 +150,16 @@ def create_app() -> FastAPI:
     @app.post("/inspect")
     def inspect_stack(request: InspectRequest) -> dict[str, object]:
         try:
-            stack = load_image_stack(request.path, voxel_override=to_voxel_size(request.voxel))
+            info = inspect_image_stack(request.path, voxel_override=to_voxel_size(request.voxel))
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         return {
-            "source_path": str(stack.source_path),
-            "grayscale_shape": list(stack.grayscale.shape),
-            "color_shape": list(stack.color.shape),
-            "voxel_size": voxel_payload(stack.voxel_size),
-            "voxel_source": stack.voxel_source,
+            "source_path": str(info["source_path"]),
+            "grayscale_shape": list(info["grayscale_shape"]),
+            "color_shape": list(info["color_shape"]),
+            "voxel_size": voxel_payload(info["voxel_size"]),
+            "voxel_source": info["voxel_source"],
         }
 
     @app.post("/analyze")
@@ -215,15 +228,38 @@ def create_app() -> FastAPI:
     def preview(request: PreviewRequest) -> dict[str, object]:
         try:
             stack = load_image_stack(request.path, voxel_override=to_voxel_size(request.voxel))
-            grayscale = apply_preview_filters(stack.grayscale, to_rect_roi(request.roi), to_z_range(request.z_range))
+            roi = to_rect_roi(request.roi)
+            z_range = to_z_range(request.z_range)
+            
+            transform = StackViewTransform.create(roi=roi, z_range=z_range, raw_shape=stack.grayscale.shape)
+            grayscale = apply_preview_filters(stack.grayscale, roi, z_range)
+            
+            local_frame = request.frame_index - transform.z_offset
+            if z_range is not None:
+                if request.frame_index < z_range.zmin or request.frame_index >= z_range.zmax:
+                    raise ValueError(f"Requested frame_index {request.frame_index} is outside selected Z-range [{z_range.zmin}, {z_range.zmax})")
+            if local_frame < 0 or local_frame >= grayscale.shape[0]:
+                raise ValueError(f"Local frame_index {local_frame} is outside bounds (0-{grayscale.shape[0] - 1})")
+
             seed = to_object_seed(request.object_seed)
-            object_seed_xy = (seed.x, seed.y) if seed is not None else None
+            if seed is not None:
+                local_seed = transform.to_local_seed_object(seed)
+            else:
+                local_seed = None
+
             preview_image = render_segmentation_preview_png(
                 grayscale,
-                frame_index=request.frame_index,
+                frame_index=local_frame,
                 threshold=request.threshold,
                 prefer_opencv=request.prefer_opencv,
-                object_seed=object_seed_xy,
+                object_seed=local_seed,
+            )
+            preview_image = PreviewImage(
+                frame_index=request.frame_index,
+                width=preview_image.width,
+                height=preview_image.height,
+                preview=preview_image.preview,
+                png_bytes=preview_image.png_bytes,
             )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -289,15 +325,16 @@ def create_app() -> FastAPI:
     @app.post("/upload/inspect")
     def upload_inspect_stack(
         file: Annotated[UploadFile, File()],
-        voxel_x_um: Annotated[float, Form(gt=0)] = 1.0,
-        voxel_y_um: Annotated[float, Form(gt=0)] = 1.0,
-        voxel_z_um: Annotated[float, Form(gt=0)] = 1.0,
+        voxel_x_um: Annotated[float | None, Form(gt=0)] = None,
+        voxel_y_um: Annotated[float | None, Form(gt=0)] = None,
+        voxel_z_um: Annotated[float | None, Form(gt=0)] = None,
     ) -> dict[str, object]:
         temp_path = save_upload_to_temp(file)
         try:
-            stack = load_image_stack(
+            voxel_override = get_voxel_override(voxel_x_um, voxel_y_um, voxel_z_um)
+            info = inspect_image_stack(
                 temp_path,
-                voxel_override=VoxelSize(voxel_x_um, voxel_y_um, voxel_z_um),
+                voxel_override=voxel_override,
             )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -306,10 +343,10 @@ def create_app() -> FastAPI:
 
         return {
             "source_path": file.filename or str(temp_path.name),
-            "grayscale_shape": list(stack.grayscale.shape),
-            "color_shape": list(stack.color.shape),
-            "voxel_size": voxel_payload(stack.voxel_size),
-            "voxel_source": stack.voxel_source,
+            "grayscale_shape": list(info["grayscale_shape"]),
+            "color_shape": list(info["color_shape"]),
+            "voxel_size": voxel_payload(info["voxel_size"]),
+            "voxel_source": info["voxel_source"],
         }
 
     @app.post("/upload/analyze")
@@ -317,9 +354,9 @@ def create_app() -> FastAPI:
         file: Annotated[UploadFile, File()],
         threshold: Annotated[float, Form()],
         profile: Annotated[str, Form()] = DEFAULT_PROFILE,
-        voxel_x_um: Annotated[float, Form(gt=0)] = 1.0,
-        voxel_y_um: Annotated[float, Form(gt=0)] = 1.0,
-        voxel_z_um: Annotated[float, Form(gt=0)] = 1.0,
+        voxel_x_um: Annotated[float | None, Form(gt=0)] = None,
+        voxel_y_um: Annotated[float | None, Form(gt=0)] = None,
+        voxel_z_um: Annotated[float | None, Form(gt=0)] = None,
         include_mesh: Annotated[bool, Form()] = False,
         prefer_opencv: Annotated[bool, Form()] = True,
         roi_xmin: Annotated[int | None, Form()] = None,
@@ -328,18 +365,31 @@ def create_app() -> FastAPI:
         roi_ymax: Annotated[int | None, Form()] = None,
         z_min: Annotated[int | None, Form()] = None,
         z_max: Annotated[int | None, Form()] = None,
-        object_seed_x: Annotated[int | None, Form()] = None,
-        object_seed_y: Annotated[int | None, Form()] = None,
+        object_seed_x: Annotated[float | None, Form()] = None,
+        object_seed_y: Annotated[float | None, Form()] = None,
         object_seed_frame: Annotated[int | None, Form()] = None,
+        object_seed_radius: Annotated[float, Form()] = 10.0,
+        object_seed_max_dist_um: Annotated[float | None, Form()] = None,
+        object_seed_type: Annotated[str, Form()] = "circle",
+        object_seed_points: Annotated[str | None, Form()] = None,
     ) -> dict[str, object]:
         temp_path = save_upload_to_temp(file)
         try:
             source_sha256 = file_sha256(temp_path)
+            voxel_override = get_voxel_override(voxel_x_um, voxel_y_um, voxel_z_um)
             stack = load_image_stack(
                 temp_path,
-                voxel_override=VoxelSize(voxel_x_um, voxel_y_um, voxel_z_um),
+                voxel_override=voxel_override,
             )
-            seed = object_seed_from_optional_fields(object_seed_x, object_seed_y, object_seed_frame)
+            seed = object_seed_from_optional_fields(
+                object_seed_x,
+                object_seed_y,
+                object_seed_frame,
+                radius=object_seed_radius,
+                max_tracking_dist_um=object_seed_max_dist_um,
+                type=object_seed_type,
+                points_json=object_seed_points,
+            )
             analysis = analyze_stack(
                 stack.grayscale,
                 thresholds=threshold,
@@ -393,9 +443,9 @@ def create_app() -> FastAPI:
         file: Annotated[UploadFile, File()],
         threshold: Annotated[float, Form()],
         frame_index: Annotated[int, Form(ge=0)] = 0,
-        voxel_x_um: Annotated[float, Form(gt=0)] = 1.0,
-        voxel_y_um: Annotated[float, Form(gt=0)] = 1.0,
-        voxel_z_um: Annotated[float, Form(gt=0)] = 1.0,
+        voxel_x_um: Annotated[float | None, Form(gt=0)] = None,
+        voxel_y_um: Annotated[float | None, Form(gt=0)] = None,
+        voxel_z_um: Annotated[float | None, Form(gt=0)] = None,
         prefer_opencv: Annotated[bool, Form()] = True,
         roi_xmin: Annotated[int | None, Form()] = None,
         roi_xmax: Annotated[int | None, Form()] = None,
@@ -403,29 +453,61 @@ def create_app() -> FastAPI:
         roi_ymax: Annotated[int | None, Form()] = None,
         z_min: Annotated[int | None, Form()] = None,
         z_max: Annotated[int | None, Form()] = None,
-        object_seed_x: Annotated[int | None, Form()] = None,
-        object_seed_y: Annotated[int | None, Form()] = None,
+        object_seed_x: Annotated[float | None, Form()] = None,
+        object_seed_y: Annotated[float | None, Form()] = None,
         object_seed_frame: Annotated[int | None, Form()] = None,
+        object_seed_radius: Annotated[float, Form()] = 10.0,
+        object_seed_max_dist_um: Annotated[float | None, Form()] = None,
+        object_seed_type: Annotated[str, Form()] = "circle",
+        object_seed_points: Annotated[str | None, Form()] = None,
     ) -> dict[str, object]:
         temp_path = save_upload_to_temp(file)
         try:
+            voxel_override = get_voxel_override(voxel_x_um, voxel_y_um, voxel_z_um)
             stack = load_image_stack(
                 temp_path,
-                voxel_override=VoxelSize(voxel_x_um, voxel_y_um, voxel_z_um),
+                voxel_override=voxel_override,
             )
-            grayscale = apply_preview_filters(
-                stack.grayscale,
-                roi_from_optional_bounds(roi_xmin, roi_xmax, roi_ymin, roi_ymax),
-                z_range_from_optional_bounds(z_min, z_max),
+            roi = roi_from_optional_bounds(roi_xmin, roi_xmax, roi_ymin, roi_ymax)
+            z_range = z_range_from_optional_bounds(z_min, z_max)
+            
+            transform = StackViewTransform.create(roi=roi, z_range=z_range, raw_shape=stack.grayscale.shape)
+            grayscale = apply_preview_filters(stack.grayscale, roi, z_range)
+            
+            local_frame = frame_index - transform.z_offset
+            if z_range is not None:
+                if frame_index < z_range.zmin or frame_index >= z_range.zmax:
+                    raise ValueError(f"Requested frame_index {frame_index} is outside selected Z-range [{z_range.zmin}, {z_range.zmax})")
+            if local_frame < 0 or local_frame >= grayscale.shape[0]:
+                raise ValueError(f"Local frame_index {local_frame} is outside bounds (0-{grayscale.shape[0] - 1})")
+
+            seed = object_seed_from_optional_fields(
+                object_seed_x,
+                object_seed_y,
+                object_seed_frame,
+                radius=object_seed_radius,
+                max_tracking_dist_um=object_seed_max_dist_um,
+                type=object_seed_type,
+                points_json=object_seed_points,
             )
-            seed = object_seed_from_optional_fields(object_seed_x, object_seed_y, object_seed_frame)
-            object_seed_xy = (seed.x, seed.y) if seed is not None else None
+            if seed is not None:
+                local_seed = transform.to_local_seed_object(seed)
+            else:
+                local_seed = None
+
             preview_image = render_segmentation_preview_png(
                 grayscale,
-                frame_index=frame_index,
+                frame_index=local_frame,
                 threshold=threshold,
                 prefer_opencv=prefer_opencv,
-                object_seed=object_seed_xy,
+                object_seed=local_seed,
+            )
+            preview_image = PreviewImage(
+                frame_index=frame_index,
+                width=preview_image.width,
+                height=preview_image.height,
+                preview=preview_image.preview,
+                png_bytes=preview_image.png_bytes,
             )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -439,9 +521,9 @@ def create_app() -> FastAPI:
         file: Annotated[UploadFile, File()],
         threshold: Annotated[float, Form()],
         profile: Annotated[str, Form()] = DEFAULT_PROFILE,
-        voxel_x_um: Annotated[float, Form(gt=0)] = 1.0,
-        voxel_y_um: Annotated[float, Form(gt=0)] = 1.0,
-        voxel_z_um: Annotated[float, Form(gt=0)] = 1.0,
+        voxel_x_um: Annotated[float | None, Form(gt=0)] = None,
+        voxel_y_um: Annotated[float | None, Form(gt=0)] = None,
+        voxel_z_um: Annotated[float | None, Form(gt=0)] = None,
         prefer_opencv: Annotated[bool, Form()] = True,
         roi_xmin: Annotated[int | None, Form()] = None,
         roi_xmax: Annotated[int | None, Form()] = None,
@@ -451,19 +533,32 @@ def create_app() -> FastAPI:
         z_max: Annotated[int | None, Form()] = None,
         downsample: Annotated[int, Form(ge=1, le=8)] = 2,
         max_faces: Annotated[int, Form(ge=1000, le=50000)] = 12000,
-        object_seed_x: Annotated[int | None, Form()] = None,
-        object_seed_y: Annotated[int | None, Form()] = None,
+        object_seed_x: Annotated[float | None, Form()] = None,
+        object_seed_y: Annotated[float | None, Form()] = None,
         object_seed_frame: Annotated[int | None, Form()] = None,
+        object_seed_radius: Annotated[float, Form()] = 10.0,
+        object_seed_max_dist_um: Annotated[float | None, Form()] = None,
+        object_seed_type: Annotated[str, Form()] = "circle",
+        object_seed_points: Annotated[str | None, Form()] = None,
     ) -> dict[str, object]:
         temp_path = save_upload_to_temp(file)
         try:
+            voxel_override = get_voxel_override(voxel_x_um, voxel_y_um, voxel_z_um)
             stack = load_image_stack(
                 temp_path,
-                voxel_override=VoxelSize(voxel_x_um, voxel_y_um, voxel_z_um),
+                voxel_override=voxel_override,
             )
             roi = roi_from_optional_bounds(roi_xmin, roi_xmax, roi_ymin, roi_ymax)
             z_range = z_range_from_optional_bounds(z_min, z_max)
-            seed = object_seed_from_optional_fields(object_seed_x, object_seed_y, object_seed_frame)
+            seed = object_seed_from_optional_fields(
+                object_seed_x,
+                object_seed_y,
+                object_seed_frame,
+                radius=object_seed_radius,
+                max_tracking_dist_um=object_seed_max_dist_um,
+                type=object_seed_type,
+                points_json=object_seed_points,
+            )
             analysis = analyze_stack(
                 stack.grayscale,
                 thresholds=threshold,
@@ -495,9 +590,9 @@ def create_app() -> FastAPI:
         files: Annotated[list[UploadFile], File()],
         threshold: Annotated[float, Form()],
         profile: Annotated[str, Form()] = DEFAULT_PROFILE,
-        voxel_x_um: Annotated[float, Form(gt=0)] = 1.0,
-        voxel_y_um: Annotated[float, Form(gt=0)] = 1.0,
-        voxel_z_um: Annotated[float, Form(gt=0)] = 1.0,
+        voxel_x_um: Annotated[float | None, Form(gt=0)] = None,
+        voxel_y_um: Annotated[float | None, Form(gt=0)] = None,
+        voxel_z_um: Annotated[float | None, Form(gt=0)] = None,
         include_mesh: Annotated[bool, Form()] = False,
         prefer_opencv: Annotated[bool, Form()] = True,
         roi_xmin: Annotated[int | None, Form()] = None,
@@ -511,6 +606,7 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail="At least one stack file is required.")
 
         try:
+            voxel_override = get_voxel_override(voxel_x_um, voxel_y_um, voxel_z_um)
             roi = roi_from_optional_bounds(roi_xmin, roi_xmax, roi_ymin, roi_ymax)
             z_range = z_range_from_optional_bounds(z_min, z_max)
         except ValueError as exc:
@@ -525,7 +621,7 @@ def create_app() -> FastAPI:
                 source_sha256 = file_sha256(temp_path)
                 stack = load_image_stack(
                     temp_path,
-                    voxel_override=VoxelSize(voxel_x_um, voxel_y_um, voxel_z_um),
+                    voxel_override=voxel_override,
                 )
                 analysis = analyze_stack(
                     stack.grayscale,
@@ -596,9 +692,9 @@ def create_app() -> FastAPI:
     def upload_threshold(
         file: Annotated[UploadFile, File()],
         method: Annotated[str, Form()] = "auto",
-        voxel_x_um: Annotated[float, Form(gt=0)] = 1.0,
-        voxel_y_um: Annotated[float, Form(gt=0)] = 1.0,
-        voxel_z_um: Annotated[float, Form(gt=0)] = 1.0,
+        voxel_x_um: Annotated[float | None, Form(gt=0)] = None,
+        voxel_y_um: Annotated[float | None, Form(gt=0)] = None,
+        voxel_z_um: Annotated[float | None, Form(gt=0)] = None,
         roi_xmin: Annotated[int | None, Form()] = None,
         roi_xmax: Annotated[int | None, Form()] = None,
         roi_ymin: Annotated[int | None, Form()] = None,
@@ -608,9 +704,10 @@ def create_app() -> FastAPI:
     ) -> dict[str, object]:
         temp_path = save_upload_to_temp(file)
         try:
+            voxel_override = get_voxel_override(voxel_x_um, voxel_y_um, voxel_z_um)
             stack = load_image_stack(
                 temp_path,
-                voxel_override=VoxelSize(voxel_x_um, voxel_y_um, voxel_z_um),
+                voxel_override=voxel_override,
             )
             grayscale = apply_preview_filters(
                 stack.grayscale,
@@ -632,9 +729,9 @@ def create_app() -> FastAPI:
         stop: Annotated[float, Form()],
         step: Annotated[float, Form(gt=0)],
         profile: Annotated[str, Form()] = DEFAULT_PROFILE,
-        voxel_x_um: Annotated[float, Form(gt=0)] = 1.0,
-        voxel_y_um: Annotated[float, Form(gt=0)] = 1.0,
-        voxel_z_um: Annotated[float, Form(gt=0)] = 1.0,
+        voxel_x_um: Annotated[float | None, Form(gt=0)] = None,
+        voxel_y_um: Annotated[float | None, Form(gt=0)] = None,
+        voxel_z_um: Annotated[float | None, Form(gt=0)] = None,
         include_mesh: Annotated[bool, Form()] = False,
         prefer_opencv: Annotated[bool, Form()] = True,
         roi_xmin: Annotated[int | None, Form()] = None,
@@ -647,9 +744,10 @@ def create_app() -> FastAPI:
         temp_path = save_upload_to_temp(file)
         try:
             thresholds = threshold_values(start, stop, step)
+            voxel_override = get_voxel_override(voxel_x_um, voxel_y_um, voxel_z_um)
             stack = load_image_stack(
                 temp_path,
-                voxel_override=VoxelSize(voxel_x_um, voxel_y_um, voxel_z_um),
+                voxel_override=voxel_override,
             )
             results = threshold_sweep(
                 stack.grayscale,
@@ -683,6 +781,20 @@ def to_voxel_size(voxel: VoxelOverride | None) -> VoxelSize | None:
     return VoxelSize(voxel.x_um, voxel.y_um, voxel.z_um)
 
 
+def get_voxel_override(x: float | None, y: float | None, z: float | None) -> VoxelSize | None:
+    vals = [x, y, z]
+    num_none = sum(1 for v in vals if v is None)
+    if num_none == 3:
+        return None
+    if num_none == 0:
+        # We know x, y, and z are not None here
+        return VoxelSize(x_um=x, y_um=y, z_um=z)  # type: ignore[arg-type]
+    raise ValueError(
+        "Partial voxel override is not allowed; specify all of voxel_x_um, voxel_y_um, and voxel_z_um or none."
+    )
+
+
+
 def to_rect_roi(roi: ROIRequest | None) -> RectROI | None:
     if roi is None:
         return None
@@ -698,20 +810,69 @@ def to_z_range(z_range: ZRangeRequest | None) -> ZRange | None:
 def to_object_seed(seed: ObjectSeedRequest | None) -> ObjectSeed | None:
     if seed is None:
         return None
-    return ObjectSeed(x=seed.x, y=seed.y, frame_index=seed.frame_index)
+    pts = [SeedPoint(x=p.x, y=p.y) for p in seed.points] if seed.points is not None else None
+    return ObjectSeed(
+        x=seed.x,
+        y=seed.y,
+        frame_index=seed.frame_index,
+        radius=seed.radius,
+        max_tracking_dist_um=seed.max_tracking_dist_um,
+        type=seed.type,
+        points=pts,
+    )
 
 
 def object_seed_from_optional_fields(
-    x: int | None,
-    y: int | None,
+    x: float | None,
+    y: float | None,
     frame_index: int | None,
+    radius: float = 10.0,
+    max_tracking_dist_um: float | None = None,
+    type: str = "circle",
+    points_json: str | None = None,
 ) -> ObjectSeed | None:
+    if type == "polygon":
+        if frame_index is None:
+            return None
+        if not points_json:
+            raise ValueError("Polygon seed requires points")
+        import json
+        try:
+            pts_list = json.loads(points_json)
+            pts = [SeedPoint(x=float(p["x"]), y=float(p["y"])) for p in pts_list]
+        except Exception as exc:
+            raise ValueError(f"Failed to parse points JSON: {exc}")
+
+        xs = [pt.x for pt in pts]
+        ys = [pt.y for pt in pts]
+        centroid_x = sum(xs) / len(xs) if xs else 0.0
+        centroid_y = sum(ys) / len(ys) if ys else 0.0
+        bounding_radius = max(((pt.x - centroid_x)**2 + (pt.y - centroid_y)**2)**0.5 for pt in pts) if pts else radius
+
+        return ObjectSeed(
+            x=centroid_x,
+            y=centroid_y,
+            frame_index=frame_index,
+            radius=bounding_radius,
+            max_tracking_dist_um=max_tracking_dist_um,
+            type="polygon",
+            points=pts
+        )
+
     values = (x, y, frame_index)
     if all(value is None for value in values):
         return None
     if any(value is None for value in values):
         raise ValueError("Object seed requires object_seed_x, object_seed_y, and object_seed_frame")
-    return ObjectSeed(x=x, y=y, frame_index=frame_index)
+    return ObjectSeed(
+        x=x,
+        y=y,
+        frame_index=frame_index,
+        radius=radius,
+        max_tracking_dist_um=max_tracking_dist_um,
+        type="circle",
+        points=None
+    )
 
 
 def roi_from_optional_bounds(

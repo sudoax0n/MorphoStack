@@ -118,3 +118,190 @@ def test_image_stack_rejects_mismatched_shapes():
             color=np.zeros((1, 5, 4, 3)),
             voxel_size=VoxelSize(1.0, 1.0, 1.0),
         )
+
+
+def test_czi_metadata_parses_standard_distance_format():
+    metadata = """
+    <Scaling>
+      <Items>
+        <Distance Id="X">
+          <Value>2.1921761326058251E-07</Value>
+          <DefaultUnitFormat>µm</DefaultUnitFormat>
+        </Distance>
+        <Distance Id="Y">
+          <Value>2.1921761326058251E-07</Value>
+          <DefaultUnitFormat>µm</DefaultUnitFormat>
+        </Distance>
+        <Distance Id="Z">
+          <Value>5E-07</Value>
+          <DefaultUnitFormat>µm</DefaultUnitFormat>
+        </Distance>
+      </Items>
+    </Scaling>
+    """
+    voxel = io.voxel_from_czi_metadata(metadata)
+    assert voxel is not None
+    assert pytest.approx(voxel.x_um) == 0.2192176
+    assert pytest.approx(voxel.y_um) == 0.2192176
+    assert pytest.approx(voxel.z_um) == 0.5
+
+
+def test_czi_metadata_lateral_mirror_fallback():
+    # Only X is present -> Y mirrors X
+    metadata_x = """
+    <Scaling>
+      <Items>
+        <Distance Id="X">
+          <Value>2.5E-07</Value>
+        </Distance>
+      </Items>
+    </Scaling>
+    """
+    voxel = io.voxel_from_czi_metadata(metadata_x)
+    assert voxel is not None
+    assert pytest.approx(voxel.x_um) == 0.25
+    assert pytest.approx(voxel.y_um) == 0.25
+    assert voxel.z_um == io.DEFAULT_VOXEL_SIZE.z_um
+
+    # Only Y is present -> X mirrors Y
+    metadata_y = """
+    <Scaling>
+      <Items>
+        <Distance Id="Y">
+          <Value>3.0E-07</Value>
+        </Distance>
+      </Items>
+    </Scaling>
+    """
+    voxel2 = io.voxel_from_czi_metadata(metadata_y)
+    assert voxel2 is not None
+    assert pytest.approx(voxel2.x_um) == 0.3
+    assert pytest.approx(voxel2.y_um) == 0.3
+    assert voxel2.z_um == io.DEFAULT_VOXEL_SIZE.z_um
+
+
+def test_inspect_image_stack_czi(tmp_path, monkeypatch):
+    czi_file = tmp_path / "test.czi"
+    czi_file.touch()
+
+    # Mock czifile.CziFile
+    class MockCziFile:
+        def __init__(self, path):
+            self.shape = (1, 1, 10, 50, 50, 1)
+            self.axes = "TCZYX0"
+        def __enter__(self):
+            return self
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            pass
+        def metadata(self):
+            return """
+            <Scaling><Items>
+              <Distance Id="X"><Value>1e-7</Value></Distance>
+              <Distance Id="Y"><Value>1e-7</Value></Distance>
+              <Distance Id="Z"><Value>1e-6</Value></Distance>
+            </Items></Scaling>
+            """
+
+    import sys
+    from types import ModuleType
+    mock_czi = ModuleType("czifile")
+    mock_czi.CziFile = MockCziFile
+    monkeypatch.setitem(sys.modules, "czifile", mock_czi)
+
+    info = io.inspect_image_stack(czi_file)
+    assert info["source_path"] == czi_file
+    assert info["grayscale_shape"] == (10, 50, 50)
+    assert info["color_shape"] == (10, 50, 50, 3)
+    assert pytest.approx(info["voxel_size"].x_um) == 0.1
+    assert pytest.approx(info["voxel_size"].y_um) == 0.1
+    assert pytest.approx(info["voxel_size"].z_um) == 1.0
+    assert info["voxel_source"] == "metadata"
+
+
+def test_inspect_image_stack_tiff(tmp_path, monkeypatch):
+    tiff_file = tmp_path / "test.tif"
+    tiff_file.touch()
+
+    class MockTiffSeries:
+        def __init__(self):
+            self.shape = (5, 60, 60)
+
+    class MockTiffFile:
+        def __init__(self, path):
+            self.series = [MockTiffSeries()]
+            self.pages = []
+        def __enter__(self):
+            return self
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    import sys
+    from types import ModuleType
+    mock_tiff = ModuleType("tifffile")
+    mock_tiff.TiffFile = MockTiffFile
+    monkeypatch.setitem(sys.modules, "tifffile", mock_tiff)
+    monkeypatch.setattr(io, "voxel_from_tiff", lambda _: VoxelSize(x_um=0.5, y_um=0.5, z_um=2.0))
+
+    info = io.inspect_image_stack(tiff_file)
+    assert info["source_path"] == tiff_file
+    assert info["grayscale_shape"] == (5, 60, 60)
+    assert info["color_shape"] == (5, 60, 60, 3)
+    assert info["voxel_size"] == VoxelSize(0.5, 0.5, 2.0)
+    assert info["voxel_source"] == "metadata"
+
+
+def test_parse_czi_xml_metadata():
+    # Namespaced CZI metadata XML
+    xml_content = """<?xml version="1.0" encoding="utf-8"?>
+    <ImageDocument xmlns="http://www.zeiss.com/METADATA">
+      <Metadata>
+        <Scaling>
+          <Items>
+            <Distance Id="X">
+              <Value>2.5e-7</Value>
+            </Distance>
+            <Distance Id="Y">
+              <Value>2.5e-7</Value>
+            </Distance>
+            <Distance Id="Z">
+              <Value>1.2e-6</Value>
+            </Distance>
+          </Items>
+        </Scaling>
+      </Metadata>
+    </ImageDocument>
+    """
+    voxels = io.parse_czi_xml_metadata(xml_content)
+    assert pytest.approx(voxels["X"]) == 2.5e-7
+    assert pytest.approx(voxels["Y"]) == 2.5e-7
+    assert pytest.approx(voxels["Z"]) == 1.2e-6
+
+    # Test old ScalingX format parsing via XML
+    old_xml = """
+    <root>
+      <ScalingX>1.5e-7</ScalingX>
+      <ScalingY>1.5e-7</ScalingY>
+      <ScalingZ>8.0e-7</ScalingZ>
+    </root>
+    """
+    voxels_old = io.parse_czi_xml_metadata(old_xml)
+    assert pytest.approx(voxels_old["X"]) == 1.5e-7
+    assert pytest.approx(voxels_old["Y"]) == 1.5e-7
+    assert pytest.approx(voxels_old["Z"]) == 8.0e-7
+
+    # Malformed XML handles gracefully
+    bad_xml = "<invalid><Distance Id='X'><Value>1.23</Value>"
+    assert io.parse_czi_xml_metadata(bad_xml) == {}
+
+
+def test_standardize_shapes_unsupported():
+    # Unsupported 4D shapes
+    with pytest.raises(ValueError, match="Unsupported image stack shape"):
+        io.standardize_shapes((10, 5, 256, 256)) # 5 channels (not 3 or 4)
+
+    # 5D shape
+    with pytest.raises(ValueError, match="Unsupported image stack shape"):
+        io.standardize_shapes((2, 2, 2, 2, 2))
+
+
+

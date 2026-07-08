@@ -26,7 +26,7 @@ from morphostack.core.export import (
     write_analysis_report_markdown,
 )
 from morphostack.core.images import as_color_stack, as_grayscale_stack, stretch_to_uint8
-from morphostack.core.io import file_sha256, load_image_stack
+from morphostack.core.io import file_sha256, load_image_stack, inspect_image_stack
 from morphostack.core.mesh import MeshMeasurement, surface_area_volume
 from morphostack.core.mesh import contour_to_mask, contours_to_mask_stack, measure_contour_stack
 from morphostack.core.metrics import ContourMetrics, contour_metrics
@@ -34,8 +34,10 @@ from morphostack.core.models import ImageStack, VoxelSize
 from morphostack.core.pipeline import (
     FrameAnalysis,
     ObjectSeed,
+    SeedPoint,
     RectROI,
     StackAnalysis,
+    StackViewTransform,
     ZRange,
     analyze_frame,
     analyze_stack,
@@ -75,12 +77,14 @@ __all__ = [
     "ImageStack",
     "MeshMeasurement",
     "ObjectSeed",
+    "SeedPoint",
     "PROFILE_CHOICES",
     "PROJECT_SETTINGS_VERSION",
     "ProjectSettings",
     "RectROI",
     "SegmentationPreview",
     "StackAnalysis",
+    "StackViewTransform",
     "SWEEP_COLUMNS",
     "SweepSettings",
     "ThresholdSweepResult",
@@ -114,6 +118,7 @@ __all__ = [
     "largest_connected_component",
     "largest_opencv_contour",
     "load_project_settings",
+    "inspect_image_stack",
     "load_image_stack",
     "measure_contour_stack",
     "normalize_profile",

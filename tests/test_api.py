@@ -42,7 +42,7 @@ def test_health(client):
     assert response.status_code == 200
     payload = response.json()
     assert payload["ok"] is True
-    assert payload["profiles"] == ["vesicle", "rbc"]
+    assert payload["profiles"] == ["vesicle", "rbc", "limeseg"]
 
 
 def test_inspect_stack(client, tmp_path):
@@ -492,3 +492,28 @@ def test_analyze_returns_warnings_for_no_contours(client, tmp_path):
     assert payload["warnings"][0]["code"] == "no_valid_contours"
     assert payload["manifest"]["warnings"][0]["code"] == "no_valid_contours"
     assert payload["summary"]["metrics"] == {}
+
+
+def test_upload_inspect_no_voxel_defaults_to_metadata(client):
+    response = client.post(
+        "/upload/inspect",
+        files={"file": ("stack.tif", stack_upload_bytes(), "image/tiff")},
+        data={},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["voxel_source"] == "metadata"
+    assert payload["voxel_size"] == {"x_um": 1.0, "y_um": 1.0, "z_um": 1.0}
+
+
+def test_upload_inspect_partial_voxel_returns_400(client):
+    response = client.post(
+        "/upload/inspect",
+        files={"file": ("stack.tif", stack_upload_bytes(), "image/tiff")},
+        data={"voxel_x_um": "0.1", "voxel_y_um": "0.2"},
+    )
+
+    assert response.status_code == 400
+    assert "Partial voxel override" in response.json()["detail"]
+
