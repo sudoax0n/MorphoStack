@@ -1,0 +1,140 @@
+{
+  "columns": [
+    "frame_index",
+    "threshold",
+    "profile",
+    "method",
+    "has_contour",
+    "area_px2",
+    "perimeter_px",
+    "area_um2",
+    "perimeter_um",
+    "circularity",
+    "bbox_width_um",
+    "bbox_height_um",
+    "aspect_ratio",
+    "elongation",
+    "deformation_index",
+    "extent",
+    "equivalent_diameter_um",
+    "solidity",
+    "mesh_surface_area_um2",
+    "mesh_volume_um3",
+    "mesh_equivalent_sphere_diameter_um",
+    "mesh_sphericity"
+  ],
+  "created_at_utc": "2026-07-05T18:59:16.768649+00:00",
+  "frame_count": 28,
+  "include_mesh": true,
+  "mesh": {
+    "equivalent_sphere_diameter_um": 46.71974140127539,
+    "sphericity": 0.27328634942825314,
+    "surface_area_um2": 25091.85642383567,
+    "volume_um3": 53394.916666666664
+  },
+  "morphostack_version": "0.1.0",
+  "prefer_opencv": true,
+  "profile": "rbc",
+  "roi": null,
+  "source_path": "D:\\rbc data pranay\\Image 46.lsm",
+  "source_sha256": "097dcaa956d0aebece8c594307ed5fb7c53a1573d7cbca5416f5519835e77523",
+  "summary": {
+    "frame_count": 28,
+    "metrics": {
+      "area_um2": {
+        "max": 5237.0,
+        "mean": 2061.4,
+        "min": 1.0,
+        "std": 1919.967161177503
+      },
+      "aspect_ratio": {
+        "max": 1.875,
+        "mean": 1.305372892514912,
+        "min": 1.0,
+        "std": 0.23711011094233883
+      },
+      "bbox_height_um": {
+        "max": 93.0,
+        "mean": 51.32,
+        "min": 1.0,
+        "std": 32.47610814121668
+      },
+      "bbox_width_um": {
+        "max": 105.0,
+        "mean": 51.4,
+        "min": 1.0,
+        "std": 35.832945734337834
+      },
+      "circularity": {
+        "max": 0.7853981633974483,
+        "mean": 0.4437860186823769,
+        "min": 0.11582748739919871,
+        "std": 0.15058153130671428
+      },
+      "deformation_index": {
+        "max": 0.30434782608695654,
+        "mean": 0.12377257923607043,
+        "min": 0.0,
+        "std": 0.08491026852432408
+      },
+      "elongation": {
+        "max": 0.4666666666666667,
+        "mean": 0.21034437031425704,
+        "min": 0.0,
+        "std": 0.1318584986336878
+      },
+      "equivalent_diameter_um": {
+        "max": 81.65755014558083,
+        "mean": 43.19260491038193,
+        "min": 1.1283791670955126,
+        "std": 27.55095059290544
+      },
+      "extent": {
+        "max": 1.0,
+        "mean": 0.5947164655242841,
+        "min": 0.28823529411764703,
+        "std": 0.12867555314328336
+      },
+      "perimeter_um": {
+        "max": 440.0142853498729,
+        "mean": 209.27393923934002,
+        "min": 4.0,
+        "std": 133.58536408111488
+      },
+      "solidity": {
+        "max": 1.0,
+        "mean": 0.832026300160343,
+        "min": 0.4279475982532751,
+        "std": 0.11994941706268542
+      }
+    },
+    "valid_fraction": 0.8928571428571429,
+    "valid_frame_count": 25
+  },
+  "threshold": 37.0,
+  "valid_frame_count": 25,
+  "voxel_size": {
+    "x_um": 1.0,
+    "y_um": 1.0,
+    "z_um": 1.0
+  },
+  "voxel_source": "default",
+  "warnings": [
+    {
+      "code": "partial_contours",
+      "frame_count": 28,
+      "invalid_frame_count": 3,
+      "message": "3 of 28 frames did not produce a valid contour.",
+      "severity": "warning"
+    },
+    {
+      "code": "default_voxel_size",
+      "message": "Voxel spacing came from MorphoStack defaults. Physical units should be treated as uncalibrated.",
+      "severity": "warning"
+    }
+  ],
+  "z_range": {
+    "zmax": 28,
+    "zmin": 0
+  }
+}

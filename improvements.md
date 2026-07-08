@@ -18,7 +18,7 @@ Supported workflow pieces include:
 - frame preview scrubbing in the web UI
 - global XY ROI controls, including drag-to-select ROI from the preview image
 - per-frame shape analysis
-- vesicle and RBC profile selection
+- vesicle, RBC, and LimeSeg-lite active-surfaces profile selection
 - optional 3D mesh measurements for surface area, volume, equivalent sphere
   diameter, and sphericity
 - interactive Plotly-based 3D mesh preview in the web UI

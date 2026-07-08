@@ -214,7 +214,9 @@ spreadsheet-friendly summary rows for threshold sensitivity checks.
 Analysis warnings are shown in the UI and included in the run manifest.
 If voxel spacing falls back to MorphoStack defaults, analysis outputs include a
 `default_voxel_size` warning because physical units are uncalibrated.
-The analysis profile selector currently supports `vesicle` and `rbc`.
+The analysis profile selector supports `vesicle`, `rbc`, and `limeseg` (active
+surfaces, experimental). See [REFERENCE_FOLDERS.md](REFERENCE_FOLDERS.md) for
+local-only reference folders that are not product source.
 
 ## Architecture Direction
 
