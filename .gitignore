@@ -15,4 +15,7 @@ apps/web/dist/
 .env.*
 !.env.example
 .clones/
+mcps/
+scratch/
+terminals/
 
