@@ -741,7 +741,7 @@ mustElement<HTMLButtonElement>("select-object-btn").addEventListener("click", ()
 });
 
 mustElement<HTMLInputElement>("show-tracking-debug").addEventListener("change", () => {
-  updateTrackingDebugOverlay(readInteger("frame-input"), readRoi());
+  updateTrackingDebugOverlay(globalPreviewFrameIndex(readLocalPreviewFrameIndex()), readRoi());
 });
 
 mustElement<HTMLSelectElement>("object-seed-tool").addEventListener("change", () => {
@@ -972,7 +972,7 @@ async function previewStack(): Promise<void> {
       : await apiPost<PreviewResponse>("/api/preview", {
           path: readPath(),
           threshold: readNumber("threshold-input"),
-          frame_index: readInteger("frame-input"),
+          frame_index: globalPreviewFrameIndex(readLocalPreviewFrameIndex()),
           voxel: readVoxel(),
           roi,
           z_range: zRange,
@@ -1256,16 +1256,15 @@ function updateTrackingDebugOverlay(frameIndex: number, renderedRoi: RectRoi | n
   }
   const roiOffsetX = renderedRoi ? renderedRoi.xmin : 0;
   const roiOffsetY = renderedRoi ? renderedRoi.ymin : 0;
-  const client = imageToClientPoint(record.centroid_x - roiOffsetX, record.centroid_y - roiOffsetY, image);
-  const rect = image.getBoundingClientRect();
-  const canvas = image.parentElement?.getBoundingClientRect();
-  const offsetX = canvas ? rect.left - canvas.left : 0;
-  const offsetY = canvas ? rect.top - canvas.top : 0;
+  const clientPt = imageToClientPoint(
+    record.centroid_x - roiOffsetX,
+    record.centroid_y - roiOffsetY,
+    image
+  );
   overlay.removeAttribute("hidden");
-  overlay.setAttribute("viewBox", `0 0 ${rect.width} ${rect.height}`);
   overlay.innerHTML = `
-    <circle cx="${client.x - offsetX}" cy="${client.y - offsetY}" r="5" class="tracking-centroid" />
-    <text x="${client.x - offsetX + 8}" y="${client.y - offsetY - 8}" class="tracking-centroid-label">tracked</text>
+    <circle cx="${clientPt.x}" cy="${clientPt.y}" r="5" class="tracking-centroid" />
+    <text x="${clientPt.x + 8}" y="${clientPt.y - 8}" class="tracking-centroid-label">tracked</text>
   `;
 }
 
@@ -1923,8 +1922,7 @@ function renderAnalysis(payload: AnalyzeResponse): void {
     ${warningText}
   `;
   applyVoxelDefaultStyling(payload.voxel_source);
-  const currentFrame = readInteger("frame-input");
-  updateTrackingDebugOverlay(currentFrame, readRoi());
+  updateTrackingDebugOverlay(globalPreviewFrameIndex(readLocalPreviewFrameIndex()), readRoi());
 
   if (payload.rows.length === 0) {
     resultsBody.innerHTML = `<tr><td colspan="11" class="muted">No rows returned.</td></tr>`;
@@ -2656,7 +2654,7 @@ function previewUploadForm(file: File): FormData {
   const formData = new FormData();
   appendFileAndVoxel(formData, file);
   formData.set("threshold", String(readNumber("threshold-input")));
-  formData.set("frame_index", String(readInteger("frame-input")));
+  formData.set("frame_index", String(globalPreviewFrameIndex(readLocalPreviewFrameIndex())));
   formData.set("prefer_opencv", String(!mustElement<HTMLInputElement>("fallback-input").checked));
   appendRoiFields(formData);
   appendZRangeFields(formData);
@@ -2812,6 +2810,22 @@ function readRoi(): RectRoi | null {
     ymin: Number(values[2]),
     ymax: Number(values[3])
   };
+}
+
+function readLocalPreviewFrameIndex(): number {
+  return readInteger("frame-input");
+}
+
+function globalPreviewFrameIndex(localFrame: number): number {
+  try {
+    const zRange = readZRange();
+    if (zRange) {
+      return zRange.zmin + localFrame;
+    }
+  } catch {
+    return localFrame;
+  }
+  return localFrame;
 }
 
 function readZRange(): null | { zmin: number; zmax: number } {

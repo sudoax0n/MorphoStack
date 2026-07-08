@@ -503,6 +503,51 @@ def test_analyze_uses_project_defaults_from_synthetic_tiff(tmp_path, capsys):
     assert "0,100.0,rbc,fallback,True" in csv_text
 
 
+def test_analyze_writes_mesh_export_with_z_range_and_seed(tmp_path, capsys):
+    pytest.importorskip("cv2")
+    pytest.importorskip("skimage")
+    from test_core_object_seed import write_two_circle_tiff
+
+    path = tmp_path / "two_circle.tif"
+    write_two_circle_tiff(path)
+    csv_path = tmp_path / "metrics.csv"
+    obj_path = tmp_path / "exported.obj"
+
+    result = main(
+        [
+            "analyze",
+            str(path),
+            "--threshold",
+            "100",
+            "--z-range",
+            "0",
+            "3",
+            "--seed-x",
+            "60",
+            "--seed-y",
+            "20",
+            "--seed-frame",
+            "1",
+            "--mesh-export",
+            str(obj_path),
+            "--out",
+            str(csv_path),
+            "--fallback-contours",
+        ]
+    )
+
+    assert result == 0
+    assert obj_path.exists()
+    obj_text = obj_path.read_text(encoding="utf-8")
+    assert obj_text.startswith("# MorphoStack mesh export\n")
+    assert "f " in obj_text
+    out = capsys.readouterr().out
+    assert "Mesh export (obj):" in out
+    manifest = json.loads(csv_path.with_suffix(".csv.manifest.json").read_text(encoding="utf-8"))
+    assert manifest["object_seed"]["frame_index"] == 1
+    assert manifest["z_range"] == {"zmin": 0, "zmax": 3}
+
+
 def test_analyze_can_write_mesh_summary_from_synthetic_tiff(tmp_path, capsys):
     pytest.importorskip("cv2")
     pytest.importorskip("skimage")

@@ -517,3 +517,57 @@ def test_upload_inspect_partial_voxel_returns_400(client):
     assert response.status_code == 400
     assert "Partial voxel override" in response.json()["detail"]
 
+
+def test_preview_with_z_range_accepts_global_frame_index(client, tmp_path):
+    pytest.importorskip("PIL")
+    path = tmp_path / "stack.tif"
+    write_stack(path)
+
+    response = client.post(
+        "/preview",
+        json={
+            "path": str(path),
+            "threshold": 100,
+            "frame_index": 1,
+            "z_range": {"zmin": 0, "zmax": 2},
+            "prefer_opencv": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["frame_index"] == 1
+
+
+def test_mesh_export_writes_obj_with_seed_and_z_range(client, tmp_path):
+    pytest.importorskip("cv2")
+    pytest.importorskip("skimage")
+    from test_core_object_seed import write_two_circle_tiff
+
+    path = tmp_path / "two_circle.tif"
+    write_two_circle_tiff(path)
+    destination = tmp_path / "exported.obj"
+
+    response = client.post(
+        "/mesh-export",
+        json={
+            "path": str(path),
+            "threshold": 100,
+            "z_range": {"zmin": 0, "zmax": 3},
+            "object_seed": {"x": 60, "y": 20, "frame_index": 1, "radius": 10},
+            "prefer_opencv": True,
+            "destination": str(destination),
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["format"] == "obj"
+    assert payload["face_count"] > 0
+    assert destination.exists()
+    obj_text = destination.read_text(encoding="utf-8")
+    assert obj_text.startswith("# MorphoStack mesh export\n")
+    assert "v " in obj_text
+    assert "f " in obj_text
+    assert payload["object_seed"]["x"] == 60
+    assert payload["tracking"] is not None
+

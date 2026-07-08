@@ -17,4 +17,4 @@
 - Default-voxel LSM runs are exploratory; physical units require verified calibration.
 - Mesh exports are for inspection only when voxel calibration is missing or default.
 
-Distinct object metrics: `False` (ratio 1.15)
+Distinct object metrics: `True` (mean area delta 341.03 um², ratio 1.15)

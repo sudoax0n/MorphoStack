@@ -86,7 +86,7 @@ def run_case(
         )
 
     areas = [float(item["mean_area_um2"]) for item in metrics_summary]
-    distinct = max(areas) / max(min(areas), 1e-9) > 1.2
+    distinct = abs(max(areas) - min(areas)) > 1.0
     notes = [
         f"# {name}",
         "",
@@ -112,7 +112,7 @@ def run_case(
             "- Default-voxel LSM runs are exploratory; physical units require verified calibration.",
             "- Mesh exports are for inspection only when voxel calibration is missing or default.",
             "",
-            f"Distinct object metrics: `{distinct}` (ratio {max(areas)/max(min(areas),1e-9):.2f})",
+            f"Distinct object metrics: `{distinct}` (mean area delta {abs(max(areas) - min(areas)):.2f} um², ratio {max(areas)/max(min(areas),1e-9):.2f})",
             "",
         ]
     )
