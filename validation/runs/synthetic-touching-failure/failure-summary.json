@@ -1,0 +1,14 @@
+{
+  "case": "synthetic-touching-failure",
+  "expected": "threshold vesicle profile merges touching neighbors despite circle seed",
+  "failure_mode_confirmed": true,
+  "threshold_only_mesh_volume_um3": 2430.6666666666665,
+  "threshold_seeded_mesh_volume_um3": 1660.0,
+  "active_surfaces_seeded_mesh_volume_um3": null,
+  "threshold_warning_codes": [],
+  "checks": {
+    "seed_ignored_same_mesh_as_unseeded": false,
+    "likely_neighbor_merge": false,
+    "center_frame_contour_bleeds_past_neighbor": true
+  }
+}

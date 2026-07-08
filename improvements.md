@@ -18,7 +18,7 @@ Supported workflow pieces include:
 - frame preview scrubbing in the web UI
 - global XY ROI controls, including drag-to-select ROI from the preview image
 - per-frame shape analysis
-- vesicle, RBC, and LimeSeg-lite active-surfaces profile selection
+- vesicle, RBC, and active-surfaces active-surfaces profile selection
 - optional 3D mesh measurements for surface area, volume, equivalent sphere
   diameter, and sphericity
 - interactive Plotly-based 3D mesh preview in the web UI
@@ -45,7 +45,7 @@ but still uses the same threshold-contour measurement engine as vesicles.
   ROIs, multiple ROIs, saved ROI presets, or manual contour correction.
 - The web UI now includes a fast Plotly 3D mesh preview. It is still a minimal
   visual QC viewer: export controls, camera presets, color controls, and
-  LimeSeg/Fiji bridges are future work.
+  Fiji bridges are future work.
 - Mesh measurements should be treated as optional and carefully documented.
   Surface area and volume depend on segmentation quality, voxel calibration, and
   stack sampling; reports should make those assumptions obvious.
@@ -177,7 +177,7 @@ High priority:
 - collect small representative vesicle and RBC test datasets
 - create trusted reference CSV outputs for regression validation
 - improve the interactive 3D preview with export controls, camera presets,
-  stronger loading states, and optional LimeSeg/Fiji export
+  stronger loading states, and optional Fiji export
 - add manual contour correction after the preview overlay so users can fix
   difficult RBC/vesicle segmentations before exporting final metrics
 - make voxel calibration unavoidable or visibly warned

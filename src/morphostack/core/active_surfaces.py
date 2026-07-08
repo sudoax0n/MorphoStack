@@ -1,4 +1,4 @@
-"""LimeSeg-lite active surfaces segmentation engine in Python."""
+"""MorphoStack active-surfaces (surfel) segmentation engine."""
 
 from __future__ import annotations
 
@@ -756,7 +756,16 @@ def compute_grad_force_max(
     return grad_force, relaxed
 
 
-def run_limeseg_optimization(
+ACTIVE_SURFACES_DEFAULTS: dict[str, float | int] = {
+    "d_0": 2.0,
+    "f_pressure": 0.02,
+    "k_grad": 0.05,
+    "relaxation_steps": 100,
+    "optimization_steps": 300,
+}
+
+
+def run_active_surfaces_optimization(
     arr: np.ndarray,
     seed_x: float,
     seed_y: float,
@@ -764,11 +773,11 @@ def run_limeseg_optimization(
     seed_radius: float,
     voxel_size_x: float = 1.0,
     voxel_size_z: float = 1.0,
-    d_0: float = 2.0,
-    f_pressure: float = 0.015,
-    k_grad: float = 0.03,
-    relaxation_steps: int = 100,
-    optimization_steps: int = 200,
+    d_0: float = float(ACTIVE_SURFACES_DEFAULTS["d_0"]),
+    f_pressure: float = float(ACTIVE_SURFACES_DEFAULTS["f_pressure"]),
+    k_grad: float = float(ACTIVE_SURFACES_DEFAULTS["k_grad"]),
+    relaxation_steps: int = int(ACTIVE_SURFACES_DEFAULTS["relaxation_steps"]),
+    optimization_steps: int = int(ACTIVE_SURFACES_DEFAULTS["optimization_steps"]),
     polygon_points: list[tuple[float, float]] | None = None,
 ) -> list[dict[str, Any]]:
     """Run relaxation and optimization steps on the surfel cloud."""

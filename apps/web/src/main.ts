@@ -6,7 +6,7 @@ type VoxelOverride = {
   z_um: number;
 };
 
-type AnalysisProfile = "vesicle" | "rbc" | "limeseg";
+type AnalysisProfile = "vesicle" | "rbc" | "active_surfaces";
 
 type RectRoi = {
   xmin: number;
@@ -371,7 +371,7 @@ app.innerHTML = `
           <select id="profile-input">
             <option value="vesicle" selected>Vesicle</option>
             <option value="rbc">RBC</option>
-            <option value="limeseg">LimeSeg Active Surfaces</option>
+            <option value="active_surfaces">Active Surfaces</option>
           </select>
         </label>
         <label class="wide frame-control">
@@ -933,13 +933,23 @@ function downloadCurrentProject(): void {
   }
 }
 
+function uploadStatusMarkup(label: string, percent: number | null): string {
+  if (percent === null) {
+    return `${escapeHtml(label)}<div class="upload-progress indeterminate" aria-hidden="true"><span></span></div>`;
+  }
+  const clamped = Math.max(0, Math.min(100, percent));
+  return `${escapeHtml(label)} (${clamped}%)<div class="upload-progress" aria-hidden="true"><span style="width:${clamped}%"></span></div>`;
+}
+
 async function inspectStack(): Promise<void> {
-  inspectOutput.textContent = "Inspecting...";
   const file = selectedFile();
+  inspectOutput.innerHTML = uploadStatusMarkup(file ? `Uploading ${file.name}` : "Inspecting stack", file ? 0 : null);
   logAction("Inspect Stack Started", file ? `Uploading "${file.name}"` : `Local path "${readPath()}"`);
   try {
     const payload = file
-      ? await apiUploadPost<InspectResponse>("/api/upload/inspect", inspectUploadForm(file))
+      ? await apiUploadPost<InspectResponse>("/api/upload/inspect", inspectUploadForm(file), (percent) => {
+          inspectOutput.innerHTML = uploadStatusMarkup(`Uploading ${file.name}`, percent);
+        })
       : await apiPost<InspectResponse>("/api/inspect", {
           path: readPath(),
           voxel: readVoxel()
@@ -1016,12 +1026,14 @@ function hasStackInput(): boolean {
 }
 
 async function previewMesh(): Promise<void> {
-  meshOutput.textContent = "Rendering 3D mesh...";
+  const file = selectedFile();
+  meshOutput.innerHTML = uploadStatusMarkup(file ? `Uploading ${file.name}` : "Rendering 3D mesh", file ? 0 : null);
   logAction("Render 3D Mesh Started");
   try {
-    const file = selectedFile();
     const payload = file
-      ? await apiUploadPost<MeshPreviewResponse>("/api/upload/mesh-preview", meshPreviewUploadForm(file))
+      ? await apiUploadPost<MeshPreviewResponse>("/api/upload/mesh-preview", meshPreviewUploadForm(file), (percent) => {
+          meshOutput.innerHTML = uploadStatusMarkup(`Uploading ${file.name}`, percent);
+        })
       : await apiPost<MeshPreviewResponse>("/api/mesh-preview", {
           path: readPath(),
           threshold: readNumber("threshold-input"),
@@ -1079,10 +1091,13 @@ async function analyzeStack(options: { keepExclusions?: boolean } = {}): Promise
   downloadReportButton.disabled = true;
   downloadManifestButton.disabled = true;
   reanalyzeExcludedButton.disabled = true;
-  analysisSummary.textContent = "Analyzing...";
-  resultsBody.innerHTML = `<tr><td colspan="12" class="muted">Running analysis...</td></tr>`;
   const file = selectedFile();
   const excluded = Array.from(excludedFrameIndices).sort((a, b) => a - b);
+  const analyzeLabel = file
+    ? `Uploading ${file.name}${excluded.length ? ` (excluding ${excluded.length} frames)` : ""}`
+    : "Analyzing stack";
+  analysisSummary.innerHTML = uploadStatusMarkup(analyzeLabel, file ? 0 : null);
+  resultsBody.innerHTML = `<tr><td colspan="12" class="muted">Running analysis...</td></tr>`;
   logAction(
     "Analyze Stack Started",
     file
@@ -1091,7 +1106,9 @@ async function analyzeStack(options: { keepExclusions?: boolean } = {}): Promise
   );
   try {
     const payload = file
-      ? await apiUploadPost<AnalyzeResponse>("/api/upload/analyze", analyzeUploadForm(file, excluded))
+      ? await apiUploadPost<AnalyzeResponse>("/api/upload/analyze", analyzeUploadForm(file, excluded), (percent) => {
+          analysisSummary.innerHTML = uploadStatusMarkup(analyzeLabel, percent);
+        })
       : await apiPost<AnalyzeResponse>("/api/analyze", {
           path: readPath(),
           threshold: readNumber("threshold-input"),
@@ -1858,12 +1875,28 @@ function renderMeshPreview(payload: MeshPreviewResponse): void {
       sphericity ${formatNumber(payload.sphericity)}
     </div>
     <div class="button-row mesh-export-row">
-      <button id="download-mesh-html-btn" class="secondary" type="button">Download Standalone HTML</button>
-      <span class="inline-status muted">Use the viewer toolbar inside the mesh frame for camera presets, opacity, and PNG export.</span>
+      <button id="download-mesh-obj-btn" class="secondary" type="button">OBJ</button>
+      <button id="download-mesh-stl-btn" class="secondary" type="button">STL</button>
+      <button id="download-mesh-ply-btn" class="secondary" type="button">PLY</button>
+      <button id="download-mesh-glb-btn" class="secondary" type="button">GLB</button>
+      <button id="download-mesh-html-btn" class="secondary" type="button">Standalone HTML</button>
+      <span class="inline-status muted">Viewer toolbar: camera presets, opacity, PNG. Mesh files use the preview geometry (may be downsampled).</span>
     </div>
     <iframe id="mesh-frame" title="3D mesh preview"></iframe>
   `;
   mustElement<HTMLIFrameElement>("mesh-frame").srcdoc = meshPreviewHtml(payload);
+  mustElement<HTMLButtonElement>("download-mesh-obj-btn").addEventListener("click", () => {
+    downloadLatestMeshFile("obj");
+  });
+  mustElement<HTMLButtonElement>("download-mesh-stl-btn").addEventListener("click", () => {
+    downloadLatestMeshFile("stl");
+  });
+  mustElement<HTMLButtonElement>("download-mesh-ply-btn").addEventListener("click", () => {
+    downloadLatestMeshFile("ply");
+  });
+  mustElement<HTMLButtonElement>("download-mesh-glb-btn").addEventListener("click", () => {
+    downloadLatestMeshFile("glb");
+  });
   mustElement<HTMLButtonElement>("download-mesh-html-btn").addEventListener("click", () => {
     downloadLatestMeshHtml();
   });
@@ -2255,6 +2288,180 @@ function downloadLatestManifest(): void {
   anchor.remove();
   URL.revokeObjectURL(url);
   logAction("Export File", `Downloaded analysis JSON manifest: "${filename}"`);
+}
+
+type MeshDownloadFormat = "obj" | "stl" | "ply" | "glb";
+
+function meshBaseFilename(sourcePath: string): string {
+  const rawName = sourcePath.split(/[\\/]/).pop() || "morphostack-mesh";
+  const baseName = rawName.replace(/\.[^.]+$/, "") || "morphostack-mesh";
+  return baseName.replace(/[^a-z0-9._-]+/gi, "_");
+}
+
+function meshObjText(payload: MeshPreviewResponse): string {
+  const lines = ["# MorphoStack mesh export"];
+  for (const vertex of payload.vertices) {
+    lines.push(`v ${vertex[0]} ${vertex[1]} ${vertex[2]}`);
+  }
+  for (const face of payload.faces) {
+    lines.push(`f ${face[0] + 1} ${face[1] + 1} ${face[2] + 1}`);
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+function meshStlText(payload: MeshPreviewResponse): string {
+  const lines = ["solid morphostack"];
+  for (const face of payload.faces) {
+    const triangle = face.map((index) => payload.vertices[index]);
+    const edgeA = [
+      triangle[1][0] - triangle[0][0],
+      triangle[1][1] - triangle[0][1],
+      triangle[1][2] - triangle[0][2]
+    ];
+    const edgeB = [
+      triangle[2][0] - triangle[0][0],
+      triangle[2][1] - triangle[0][1],
+      triangle[2][2] - triangle[0][2]
+    ];
+    const normal = [
+      edgeA[1] * edgeB[2] - edgeA[2] * edgeB[1],
+      edgeA[2] * edgeB[0] - edgeA[0] * edgeB[2],
+      edgeA[0] * edgeB[1] - edgeA[1] * edgeB[0]
+    ];
+    const norm = Math.hypot(normal[0], normal[1], normal[2]) || 1;
+    lines.push(`  facet normal ${normal[0] / norm} ${normal[1] / norm} ${normal[2] / norm}`);
+    lines.push("    outer loop");
+    for (const vertex of triangle) {
+      lines.push(`      vertex ${vertex[0]} ${vertex[1]} ${vertex[2]}`);
+    }
+    lines.push("    endloop");
+    lines.push("  endfacet");
+  }
+  lines.push("endsolid morphostack");
+  return `${lines.join("\n")}\n`;
+}
+
+function meshPlyText(payload: MeshPreviewResponse): string {
+  const header = [
+    "ply",
+    "format ascii 1.0",
+    `element vertex ${payload.vertices.length}`,
+    "property float x",
+    "property float y",
+    "property float z",
+    `element face ${payload.faces.length}`,
+    "property list uchar int vertex_indices",
+    "end_header"
+  ];
+  const body = payload.vertices.map((vertex) => `${vertex[0]} ${vertex[1]} ${vertex[2]}`);
+  for (const face of payload.faces) {
+    body.push(`3 ${face[0]} ${face[1]} ${face[2]}`);
+  }
+  return `${header.join("\n")}\n${body.join("\n")}\n`;
+}
+
+function align4(length: number): number {
+  return (length + 3) & ~3;
+}
+
+function meshGlbBlob(payload: MeshPreviewResponse): Blob {
+  const vertices = new Float32Array(payload.vertices.flat());
+  const indices = new Uint32Array(payload.faces.flat());
+  const mins = [Infinity, Infinity, Infinity];
+  const maxs = [-Infinity, -Infinity, -Infinity];
+  for (let index = 0; index < vertices.length; index += 3) {
+    for (let axis = 0; axis < 3; axis += 1) {
+      const value = vertices[index + axis];
+      mins[axis] = Math.min(mins[axis], value);
+      maxs[axis] = Math.max(maxs[axis], value);
+    }
+  }
+  const vertexBytes = new Uint8Array(vertices.buffer, vertices.byteOffset, vertices.byteLength);
+  const indexBytes = new Uint8Array(indices.buffer, indices.byteOffset, indices.byteLength);
+  const vertexPaddedLen = align4(vertexBytes.length);
+  const indexOffset = vertexPaddedLen;
+  const binBody = new Uint8Array(align4(vertexPaddedLen + indexBytes.length));
+  binBody.set(vertexBytes, 0);
+  binBody.set(indexBytes, indexOffset);
+  const gltf = {
+    asset: { version: "2.0", generator: "MorphoStack" },
+    scene: 0,
+    scenes: [{ nodes: [0] }],
+    nodes: [{ mesh: 0 }],
+    meshes: [{ primitives: [{ attributes: { POSITION: 0 }, indices: 1, mode: 4 }] }],
+    buffers: [{ byteLength: binBody.length }],
+    bufferViews: [
+      { buffer: 0, byteOffset: 0, byteLength: vertexBytes.length, target: 34962 },
+      { buffer: 0, byteOffset: indexOffset, byteLength: indexBytes.length, target: 34963 }
+    ],
+    accessors: [
+      {
+        bufferView: 0,
+        componentType: 5126,
+        count: payload.vertices.length,
+        type: "VEC3",
+        min: mins,
+        max: maxs
+      },
+      {
+        bufferView: 1,
+        componentType: 5125,
+        count: indices.length,
+        type: "SCALAR"
+      }
+    ]
+  };
+  const jsonBytes = new TextEncoder().encode(JSON.stringify(gltf));
+  const jsonPaddedLen = align4(jsonBytes.length);
+  const jsonChunk = new Uint8Array(jsonPaddedLen);
+  jsonChunk.set(jsonBytes);
+  for (let index = jsonBytes.length; index < jsonPaddedLen; index += 1) {
+    jsonChunk[index] = 0x20;
+  }
+  const totalLength = 12 + 8 + jsonPaddedLen + 8 + binBody.length;
+  const output = new Uint8Array(totalLength);
+  const view = new DataView(output.buffer);
+  output.set(new Uint8Array([0x67, 0x6c, 0x54, 0x46]), 0);
+  view.setUint32(4, 2, true);
+  view.setUint32(8, totalLength, true);
+  let offset = 12;
+  view.setUint32(offset, jsonPaddedLen, true);
+  output.set(new Uint8Array([0x4a, 0x53, 0x4f, 0x4e]), offset + 4);
+  output.set(jsonChunk, offset + 8);
+  offset += 8 + jsonPaddedLen;
+  view.setUint32(offset, binBody.length, true);
+  output.set(new Uint8Array([0x42, 0x49, 0x4e, 0x00]), offset + 4);
+  output.set(binBody, offset + 8);
+  return new Blob([output], { type: "model/gltf-binary" });
+}
+
+function meshFileBlob(payload: MeshPreviewResponse, format: MeshDownloadFormat): Blob {
+  if (format === "obj") {
+    return new Blob([meshObjText(payload)], { type: "text/plain;charset=utf-8" });
+  }
+  if (format === "stl") {
+    return new Blob([meshStlText(payload)], { type: "text/plain;charset=utf-8" });
+  }
+  if (format === "ply") {
+    return new Blob([meshPlyText(payload)], { type: "text/plain;charset=utf-8" });
+  }
+  return meshGlbBlob(payload);
+}
+
+function downloadLatestMeshFile(format: MeshDownloadFormat): void {
+  if (!latestMeshPreview) {
+    return;
+  }
+  const blob = meshFileBlob(latestMeshPreview, format);
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `${meshBaseFilename(latestMeshPreview.source_path)}_mesh.${format}`;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+  logAction("Export File", `Downloaded mesh ${format.toUpperCase()}: "${anchor.download}"`);
 }
 
 function downloadLatestMeshHtml(): void {
@@ -2681,12 +2888,51 @@ async function apiPost<T>(url: string, body: unknown): Promise<T> {
   return parseResponse<T>(response);
 }
 
-async function apiUploadPost<T>(url: string, formData: FormData): Promise<T> {
-  const response = await fetch(url, {
-    method: "POST",
-    body: formData
+async function apiUploadPost<T>(
+  url: string,
+  formData: FormData,
+  onUploadProgress?: (percent: number) => void
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    xhr.responseType = "json";
+    xhr.upload.onprogress = (event) => {
+      if (!onUploadProgress || !event.lengthComputable || event.total <= 0) {
+        return;
+      }
+      onUploadProgress(Math.round((event.loaded / event.total) * 100));
+    };
+    xhr.onload = () => {
+      const payload = xhr.response;
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(payload as T);
+        return;
+      }
+      let message = xhr.statusText || "Request failed";
+      if (payload && typeof payload === "object" && "detail" in payload) {
+        const detail = (payload as { detail?: unknown }).detail;
+        if (typeof detail === "string") {
+          message = detail;
+        } else if (Array.isArray(detail)) {
+          message = detail
+            .map((item) => {
+              if (item && typeof item === "object" && "msg" in item) {
+                const loc = "loc" in item && Array.isArray(item.loc) ? item.loc.join(".") : "";
+                return loc ? `${loc}: ${String(item.msg)}` : String(item.msg);
+              }
+              return String(item);
+            })
+            .join(", ");
+        } else if (detail !== undefined) {
+          message = JSON.stringify(detail);
+        }
+      }
+      reject(new Error(message));
+    };
+    xhr.onerror = () => reject(new Error("Network error during upload"));
+    xhr.send(formData);
   });
-  return parseResponse<T>(response);
 }
 
 async function parseResponse<T>(response: Response): Promise<T> {
@@ -2912,8 +3158,8 @@ function readVoxel(): VoxelOverride | null {
 
 function readProfile(): AnalysisProfile {
   const value = mustElement<HTMLSelectElement>("profile-input").value;
-  if (value !== "vesicle" && value !== "rbc" && value !== "limeseg") {
-    throw new Error("Analysis profile must be vesicle, rbc, or limeseg.");
+  if (value !== "vesicle" && value !== "rbc" && value !== "active_surfaces") {
+    throw new Error("Analysis profile must be vesicle, rbc, or active_surfaces.");
   }
   return value as AnalysisProfile;
 }

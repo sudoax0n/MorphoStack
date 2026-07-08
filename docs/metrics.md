@@ -48,4 +48,4 @@ Users can exclude bad slices before trusting summary statistics or mesh output. 
 
 - `vesicle`: default threshold-contour pipeline with optional object seed tracking.
 - `rbc`: same contour engine with RBC-oriented reporting; mesh outputs remain exploratory unless calibration and segmentation quality are verified.
-- `limeseg`: experimental active-surfaces refinement; use only when threshold contours fail on touching objects.
+- `active_surfaces`: experimental surfel-based refinement; use only when threshold contours fail on touching objects.

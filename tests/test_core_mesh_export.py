@@ -5,7 +5,14 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from morphostack.core.mesh import MeshGeometry, MeshMeasurement, write_mesh_file, write_mesh_obj, write_mesh_stl
+from morphostack.core.mesh import (
+    MeshGeometry,
+    MeshMeasurement,
+    write_mesh_file,
+    write_mesh_glb,
+    write_mesh_obj,
+    write_mesh_stl,
+)
 
 
 def unit_tetrahedron_geometry() -> MeshGeometry:
@@ -48,5 +55,19 @@ def test_write_mesh_file_selects_format_by_suffix(tmp_path: Path):
     assert obj_path.exists()
     assert obj_path.stat().st_size > 0
 
-    with pytest.raises(ValueError, match="supports"):
-        write_mesh_file(geometry, tmp_path / "mesh.glb")
+    glb_path = tmp_path / "mesh.glb"
+    assert write_mesh_file(geometry, glb_path) == "glb"
+    assert glb_path.exists()
+    assert glb_path.stat().st_size > 32
+    glb_bytes = glb_path.read_bytes()
+    assert glb_bytes[:4] == b"glTF"
+
+
+def test_write_mesh_glb_contains_vertex_and_index_chunks(tmp_path: Path):
+    geometry = unit_tetrahedron_geometry()
+    destination = tmp_path / "export.glb"
+    write_mesh_glb(geometry, destination)
+    data = destination.read_bytes()
+    assert data[:4] == b"glTF"
+    assert b"JSON" in data[:128]
+    assert b"BIN" in data

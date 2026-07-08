@@ -1,5 +1,5 @@
 {
-  "title": "LimeSeg vs Threshold \u2014 Crowded RBC Image 46 (object A)",
+  "title": "Active Surfaces vs Threshold \u2014 Crowded RBC Image 46 (object A)",
   "source": "D:\\rbc data pranay\\Image 46.lsm",
   "threshold": 43.0,
   "seed": {
@@ -22,8 +22,8 @@
       "default_voxel_size"
     ]
   },
-  "limeseg": {
-    "profile": "limeseg",
+  "Active Surfaces": {
+    "profile": "Active Surfaces",
     "valid_frame_count": 22,
     "valid_fraction": 0.7857142857142857,
     "mean_area_um2": 152.5681818181818,

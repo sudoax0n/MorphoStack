@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import struct
 from dataclasses import dataclass
 from math import pi
 from pathlib import Path
@@ -308,6 +310,91 @@ def write_mask_stack_tiff(
     tifffile.imwrite(path, (mask_stack * 255).astype(np.uint8), photometric="minisblack")
 
 
+def _align4(length: int) -> int:
+    return (length + 3) & ~3
+
+
+def write_mesh_glb(geometry: MeshGeometry, destination: str | Path) -> None:
+    """Write mesh geometry to binary glTF (.glb) for 3D viewers."""
+
+    path = Path(destination)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    vertices = np.asarray(geometry.vertices_xyz, dtype=np.float32)
+    faces = np.asarray(geometry.faces, dtype=np.uint32)
+    if vertices.ndim != 2 or vertices.shape[1] != 3:
+        raise ValueError("vertices must have shape (n, 3)")
+    if faces.ndim != 2 or faces.shape[1] != 3:
+        raise ValueError("faces must have shape (n, 3)")
+
+    vertex_bytes = vertices.tobytes()
+    index_bytes = faces.reshape(-1).astype(np.uint32).tobytes()
+    vertex_padded_len = _align4(len(vertex_bytes))
+    index_offset = vertex_padded_len
+    bin_body = vertex_bytes.ljust(vertex_padded_len, b"\x00") + index_bytes
+    bin_padded_len = _align4(len(bin_body))
+    bin_body = bin_body.ljust(bin_padded_len, b"\x00")
+
+    mins = vertices.min(axis=0).tolist()
+    maxs = vertices.max(axis=0).tolist()
+    gltf = {
+        "asset": {"version": "2.0", "generator": "MorphoStack"},
+        "scene": 0,
+        "scenes": [{"nodes": [0]}],
+        "nodes": [{"mesh": 0}],
+        "meshes": [
+            {
+                "primitives": [
+                    {
+                        "attributes": {"POSITION": 0},
+                        "indices": 1,
+                        "mode": 4,
+                    }
+                ]
+            }
+        ],
+        "buffers": [{"byteLength": len(bin_body)}],
+        "bufferViews": [
+            {
+                "buffer": 0,
+                "byteOffset": 0,
+                "byteLength": len(vertex_bytes),
+                "target": 34962,
+            },
+            {
+                "buffer": 0,
+                "byteOffset": index_offset,
+                "byteLength": len(index_bytes),
+                "target": 34963,
+            },
+        ],
+        "accessors": [
+            {
+                "bufferView": 0,
+                "componentType": 5126,
+                "count": int(len(vertices)),
+                "type": "VEC3",
+                "min": [float(v) for v in mins],
+                "max": [float(v) for v in maxs],
+            },
+            {
+                "bufferView": 1,
+                "componentType": 5125,
+                "count": int(faces.size),
+                "type": "SCALAR",
+            },
+        ],
+    }
+    json_bytes = json.dumps(gltf, separators=(",", ":")).encode("utf-8")
+    json_padded_len = _align4(len(json_bytes))
+    json_chunk = json_bytes.ljust(json_padded_len, b" ")
+
+    total_length = 12 + 8 + json_padded_len + 8 + bin_padded_len
+    header = struct.pack("<4sII", b"glTF", 2, total_length)
+    json_header = struct.pack("<I4s", json_padded_len, b"JSON")
+    bin_header = struct.pack("<I4s", bin_padded_len, b"BIN\x00")
+    path.write_bytes(header + json_header + json_chunk + bin_header + bin_body)
+
+
 def write_mesh_file(geometry: MeshGeometry, destination: str | Path) -> str:
     """Write mesh geometry using the destination file extension."""
 
@@ -322,7 +409,10 @@ def write_mesh_file(geometry: MeshGeometry, destination: str | Path) -> str:
     if suffix == ".ply":
         write_mesh_ply(geometry, path)
         return "ply"
-    raise ValueError("Mesh export supports .obj, .stl, and .ply destinations")
+    if suffix == ".glb":
+        write_mesh_glb(geometry, path)
+        return "glb"
+    raise ValueError("Mesh export supports .obj, .stl, .ply, and .glb destinations")
 
 
 def _filter_outlier_contours(

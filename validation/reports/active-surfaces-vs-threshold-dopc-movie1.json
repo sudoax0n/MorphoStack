@@ -1,5 +1,5 @@
 {
-  "title": "LimeSeg vs Threshold \u2014 DOPC Movie 1",
+  "title": "Active Surfaces vs Threshold \u2014 DOPC Movie 1",
   "source": "D:\\lab-data\\paper-data\\syst202400052-sup-0001-movie1-dopc.tif",
   "threshold": 127.0,
   "seed": {
@@ -20,8 +20,8 @@
       "default_voxel_size"
     ]
   },
-  "limeseg": {
-    "profile": "limeseg",
+  "Active Surfaces": {
+    "profile": "Active Surfaces",
     "valid_frame_count": 26,
     "valid_fraction": 1.0,
     "mean_area_um2": 164.01923076923077,

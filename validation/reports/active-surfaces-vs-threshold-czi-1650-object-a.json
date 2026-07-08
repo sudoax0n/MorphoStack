@@ -1,5 +1,5 @@
 {
-  "title": "LimeSeg vs Threshold \u2014 Crowded CZI 1650 (object A)",
+  "title": "Active Surfaces vs Threshold \u2014 Crowded CZI 1650 (object A)",
   "source": "C:\\Users\\systemm\\Downloads\\1650_z stack.czi",
   "threshold": 190.0,
   "seed": {
@@ -20,8 +20,8 @@
       "roi_boundary_touch"
     ]
   },
-  "limeseg": {
-    "profile": "limeseg",
+  "Active Surfaces": {
+    "profile": "Active Surfaces",
     "valid_frame_count": 30,
     "valid_fraction": 1.0,
     "mean_area_um2": 6.763932946382071,

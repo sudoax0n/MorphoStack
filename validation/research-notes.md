@@ -93,24 +93,17 @@ Surveyed to inform MorphoStack development. Repos cloned to `D:\morphostack-rese
 
 ---
 
-## LimeSeg
+## External Fiji active-surfaces plugin (reference only)
 
-- **Repo:** https://github.com/NicoKiaru/LimeSeg
-- **License:** CC0 1.0 Universal (public domain dedication).
-- **Direct code reuse safe?** YES — CC0, maximum permissiveness.
-- **Reference only or integrate?** Reference for algorithm ideas; Java/Fiji plugin so no
-  direct Python code to reuse.
-- **Useful files/functions/ideas:**
-  - 3D membrane fitting via active surface model ("SurfaceTension" parameter).
-  - The approach of initialising surfaces from a seed point is similar to MorphoStack's
-    object-seed tracking.
-  - Useful as a ground-truth validation tool: run LimeSeg on the DOPC dataset in Fiji and
-    compare exported surface area/volume against MorphoStack outputs.
-  - The CC0 license means any algorithm ideas can be reimplemented without restriction.
+- **License:** CC0 1.0 Universal (public domain dedication) on the upstream Fiji plugin we surveyed.
+- **Direct code reuse safe?** YES for algorithm ideas — CC0; Java/Fiji implementation is not imported into MorphoStack.
+- **Reference only or integrate?** Reference for validation comparisons only. MorphoStack ships its own `active_surfaces` profile instead.
+- **Useful ideas:**
+  - 3D membrane fitting via particle/surfel surface evolution.
+  - Seed-initialised surfaces are conceptually similar to MorphoStack object-seed tracking.
+  - Can be used as optional external ground truth on DOPC in Fiji when you want an independent check.
 - **Relevant now or later?**
-  Now (reference/validation): run LimeSeg on DOPC as external ground truth.
-  Later (integration): possibly implement LimeSeg-style active-surface refinement as an
-  optional mesh-smoothing step.
+  Now (optional external validation in Fiji). MorphoStack's built-in active-surfaces path is separate.
 
 ---
 
@@ -123,13 +116,13 @@ Surveyed to inform MorphoStack development. Repos cloned to `D:\morphostack-rese
 | cellpose | BSD-3 | YES | Later — heavy dep (PyTorch) |
 | GeoV | **GPL v3** | **NO** | Reference ONLY — copyleft, cannot reuse in MIT project |
 | redtell | **No license** | **NO** | Reference only — contact authors for license |
-| LimeSeg | CC0 | YES | Reference/validation now; Java so no direct Python reuse |
+| External Fiji active-surfaces plugin | CC0 | YES | Optional external validation; not bundled in MorphoStack |
 
 ---
 
 ## Immediate Actions from Research
 
-1. **Validation:** Use LimeSeg (Fiji) on DOPC data as external ground-truth comparison.
+1. **Validation:** Optionally compare MorphoStack against external Fiji active-surfaces output on DOPC.
 2. **Mesh cross-check:** Install `trimesh` in a scratch venv, load MorphoStack OBJ output,
    verify `is_watertight` and compare `area`/`volume` to MorphoStack's reported values.
 3. **GeoV:** Attempt to reproduce their reported surface area/volume for DOPC vesicles and

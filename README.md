@@ -1,7 +1,7 @@
 # MorphoStack
 
 MorphoStack is a local morphometry toolkit for microscopy Z-stacks: vesicle/GUV
-analysis, RBC shape analysis, and an experimental LimeSeg active-surfaces profile.
+analysis, RBC shape analysis, and an experimental active-surfaces profile.
 
 It loads TIFF/TIF, LSM, and CZI stacks, supports object seed selection for crowded
 fields, emits calibration warnings, exports meshes (OBJ/STL/PLY), and ships
@@ -221,7 +221,7 @@ spreadsheet-friendly summary rows for threshold sensitivity checks.
 Analysis warnings are shown in the UI and included in the run manifest.
 If voxel spacing falls back to MorphoStack defaults, analysis outputs include a
 `default_voxel_size` warning because physical units are uncalibrated.
-The analysis profile selector supports `vesicle`, `rbc`, and `limeseg` (active
+The analysis profile selector supports `vesicle`, `rbc`, and `active_surfaces` (active
 surfaces, experimental). See [REFERENCE_FOLDERS.md](REFERENCE_FOLDERS.md) for
 local-only reference folders that are not product source.
 

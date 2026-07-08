@@ -44,7 +44,7 @@ $docsEvidence = Join-Path $Scratch "docs-ui-evidence.txt"
     (Select-String -Path apps\web\src\main.ts -Pattern "voxelSourceMarkup|show-tracking-debug|globalPreviewFrameIndex|calibration-help" | ForEach-Object { $_.Line }),
     "",
     "=== docs mentions ===",
-    (Select-String -Path README.md,docs\*.md -Pattern "object selection|calibration|validation|troubleshooting|LimeSeg" | ForEach-Object { "$($_.Filename):$($_.LineNumber):$($_.Line)" })
+    (Select-String -Path README.md,docs\*.md -Pattern "object selection|calibration|validation|troubleshooting|Active Surfaces" | ForEach-Object { "$($_.Filename):$($_.LineNumber):$($_.Line)" })
 ) | Out-File -FilePath $docsEvidence -Encoding utf8
 
 try {

@@ -52,6 +52,14 @@ For a full analysis stack, install optional dependencies as well:
 pip install "morphostack[all] @ file:///D:/MorphoStack/dist/morphostack-0.1.0-py3-none-any.whl"
 ```
 
+## Local wheel verification
+
+Before tagging a release, smoke-test the wheel in an isolated venv:
+
+```powershell
+.\scripts\verify_release_wheel.ps1
+```
+
 ## GitHub Releases
 
 Tag a version to build and attach a wheel automatically:

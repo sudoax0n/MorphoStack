@@ -42,7 +42,7 @@ def test_health(client):
     assert response.status_code == 200
     payload = response.json()
     assert payload["ok"] is True
-    assert payload["profiles"] == ["vesicle", "rbc", "limeseg"]
+    assert payload["profiles"] == ["vesicle", "rbc", "active_surfaces"]
 
 
 def test_inspect_stack(client, tmp_path):

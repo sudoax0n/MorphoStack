@@ -1,4 +1,4 @@
-# LimeSeg vs Threshold — Crowded RBC Image 46 (object A)
+# Active Surfaces vs Threshold — Crowded RBC Image 46 (object A)
 
 - Source: `D:\rbc data pranay\Image 46.lsm`
 - Threshold: `43.0`
@@ -6,7 +6,7 @@
 
 ## Summary
 
-| Metric | Threshold (rbc) | LimeSeg | Delta |
+| Metric | Threshold (rbc) | Active Surfaces | Delta |
 | --- | ---: | ---: | ---: |
 | Valid frames | 10 | 22 | — |
 | Valid fraction | 0.357 | 0.786 | — |
@@ -18,10 +18,10 @@
 ## Warnings
 
 - Threshold: `partial_contours, tracking_lost_many_frames, default_voxel_size`
-- LimeSeg: `partial_contours, default_voxel_size`
+- Active Surfaces: `partial_contours, default_voxel_size`
 
 ## Interpretation
 
-- Large mesh-volume deltas on crowded or touching data usually mean LimeSeg or tracking picked a different object region.
+- Large mesh-volume deltas on crowded or touching data usually mean Active Surfaces or tracking picked a different object region.
 - On synthetic spheres, profiles should agree within a few percent when the seed sits on the object center.
-- Treat LimeSeg as experimental until side-by-side previews look correct on your dataset.
+- Treat Active Surfaces as experimental until side-by-side previews look correct on your dataset.

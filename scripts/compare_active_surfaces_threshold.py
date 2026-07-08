@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare threshold (vesicle) and LimeSeg profiles on the same stack and seed."""
+"""Compare threshold (vesicle) and Active Surfaces profiles on the same stack and seed."""
 
 from __future__ import annotations
 
@@ -84,11 +84,11 @@ def compare_on_array(
         object_seed=seed,
         z_range=z_range,
     )
-    limeseg_analysis = analyze_stack(
+    active_surfaces_analysis = analyze_stack(
         stack,
         thresholds=threshold,
         voxel_size=voxel,
-        profile="limeseg",
+        profile="active_surfaces",
         include_mesh=True,
         prefer_opencv=prefer_opencv,
         object_seed=seed,
@@ -96,7 +96,7 @@ def compare_on_array(
     )
     return (
         snapshot(threshold_analysis, voxel_source=voxel_source),
-        snapshot(limeseg_analysis, voxel_source=voxel_source),
+        snapshot(active_surfaces_analysis, voxel_source=voxel_source),
     )
 
 
@@ -113,7 +113,7 @@ def report_markdown(
     threshold: float,
     seed: ObjectSeed,
     vesicle: ProfileSnapshot,
-    limeseg: ProfileSnapshot,
+    active_surfaces: ProfileSnapshot,
     threshold_profile: str = "vesicle",
 ) -> str:
     lines = [
@@ -125,25 +125,25 @@ def report_markdown(
         "",
         "## Summary",
         "",
-        f"| Metric | Threshold ({threshold_profile}) | LimeSeg | Delta |",
+        f"| Metric | Threshold ({threshold_profile}) | Active Surfaces | Delta |",
         "| --- | ---: | ---: | ---: |",
-        f"| Valid frames | {vesicle.valid_frame_count} | {limeseg.valid_frame_count} | — |",
-        f"| Valid fraction | {vesicle.valid_fraction:.3f} | {limeseg.valid_fraction:.3f} | — |",
-        f"| Mean area (µm²) | {vesicle.mean_area_um2} | {limeseg.mean_area_um2} | {pct_delta(vesicle.mean_area_um2, limeseg.mean_area_um2)} |",
-        f"| Mesh volume (µm³) | {vesicle.mesh_volume_um3} | {limeseg.mesh_volume_um3} | {pct_delta(vesicle.mesh_volume_um3, limeseg.mesh_volume_um3)} |",
-        f"| Mesh surface (µm²) | {vesicle.mesh_surface_area_um2} | {limeseg.mesh_surface_area_um2} | {pct_delta(vesicle.mesh_surface_area_um2, limeseg.mesh_surface_area_um2)} |",
-        f"| Mesh sphericity | {vesicle.mesh_sphericity} | {limeseg.mesh_sphericity} | {pct_delta(vesicle.mesh_sphericity, limeseg.mesh_sphericity)} |",
+        f"| Valid frames | {vesicle.valid_frame_count} | {active_surfaces.valid_frame_count} | — |",
+        f"| Valid fraction | {vesicle.valid_fraction:.3f} | {active_surfaces.valid_fraction:.3f} | — |",
+        f"| Mean area (µm²) | {vesicle.mean_area_um2} | {active_surfaces.mean_area_um2} | {pct_delta(vesicle.mean_area_um2, active_surfaces.mean_area_um2)} |",
+        f"| Mesh volume (µm³) | {vesicle.mesh_volume_um3} | {active_surfaces.mesh_volume_um3} | {pct_delta(vesicle.mesh_volume_um3, active_surfaces.mesh_volume_um3)} |",
+        f"| Mesh surface (µm²) | {vesicle.mesh_surface_area_um2} | {active_surfaces.mesh_surface_area_um2} | {pct_delta(vesicle.mesh_surface_area_um2, active_surfaces.mesh_surface_area_um2)} |",
+        f"| Mesh sphericity | {vesicle.mesh_sphericity} | {active_surfaces.mesh_sphericity} | {pct_delta(vesicle.mesh_sphericity, active_surfaces.mesh_sphericity)} |",
         "",
         "## Warnings",
         "",
         f"- Threshold: `{', '.join(vesicle.warning_codes) or 'none'}`",
-        f"- LimeSeg: `{', '.join(limeseg.warning_codes) or 'none'}`",
+        f"- Active Surfaces: `{', '.join(active_surfaces.warning_codes) or 'none'}`",
         "",
         "## Interpretation",
         "",
-        "- Large mesh-volume deltas on crowded or touching data usually mean LimeSeg or tracking picked a different object region.",
+        "- Large mesh-volume deltas on crowded or touching data usually mean Active Surfaces or tracking picked a different object region.",
         "- On synthetic spheres, profiles should agree within a few percent when the seed sits on the object center.",
-        "- Treat LimeSeg as experimental until side-by-side previews look correct on your dataset.",
+        "- Treat Active Surfaces as experimental until side-by-side previews look correct on your dataset.",
         "",
     ]
     return "\n".join(lines)
@@ -157,13 +157,13 @@ def write_case(
     threshold: float,
     seed: ObjectSeed,
     vesicle: ProfileSnapshot,
-    limeseg: ProfileSnapshot,
+    active_surfaces: ProfileSnapshot,
     reports_dir: Path,
     threshold_profile: str = "vesicle",
 ) -> Path:
     reports_dir.mkdir(parents=True, exist_ok=True)
-    report_path = reports_dir / f"limeseg-vs-threshold-{slug}.md"
-    summary_path = reports_dir / f"limeseg-vs-threshold-{slug}.json"
+    report_path = reports_dir / f"active-surfaces-vs-threshold-{slug}.md"
+    summary_path = reports_dir / f"active-surfaces-vs-threshold-{slug}.json"
     report_path.write_text(
         report_markdown(
             title=title,
@@ -171,7 +171,7 @@ def write_case(
             threshold=threshold,
             seed=seed,
             vesicle=vesicle,
-            limeseg=limeseg,
+            active_surfaces=active_surfaces,
             threshold_profile=threshold_profile,
         ),
         encoding="utf-8",
@@ -189,7 +189,7 @@ def write_case(
                     "radius": seed.radius,
                 },
                 "vesicle": asdict(vesicle),
-                "limeseg": asdict(limeseg),
+                "active_surfaces": asdict(active_surfaces),
             },
             indent=2,
         )
@@ -202,15 +202,15 @@ def write_case(
 def run_synthetic(reports_dir: Path) -> Path:
     stack = build_sphere_stack()
     seed = ObjectSeed(x=20.0, y=20.0, frame_index=5, radius=6.0)
-    vesicle, limeseg = compare_on_array(stack, threshold=100.0, voxel=VoxelSize(1.0, 1.0, 1.0), seed=seed)
+    vesicle, active_surfaces = compare_on_array(stack, threshold=100.0, voxel=VoxelSize(1.0, 1.0, 1.0), seed=seed)
     return write_case(
         slug="synthetic-sphere",
-        title="LimeSeg vs Threshold — Synthetic Sphere",
+        title="Active Surfaces vs Threshold — Synthetic Sphere",
         source_label="in-memory synthetic sphere (r=6 µm)",
         threshold=100.0,
         seed=seed,
         vesicle=vesicle,
-        limeseg=limeseg,
+        active_surfaces=active_surfaces,
         reports_dir=reports_dir,
     )
 
@@ -224,7 +224,7 @@ def run_crowded_rbc(reports_dir: Path, source: Path) -> Path | None:
     stack = load_image_stack(source)
     seed = ObjectSeed(x=290.61, y=731.79, frame_index=10, radius=12.0)
     z_range = ZRange(zmin=0, zmax=28)
-    vesicle, limeseg = compare_on_array(
+    vesicle, active_surfaces = compare_on_array(
         stack.grayscale,
         threshold=43.0,
         voxel=stack.voxel_size,
@@ -236,12 +236,12 @@ def run_crowded_rbc(reports_dir: Path, source: Path) -> Path | None:
     )
     return write_case(
         slug="rbc-image46-object-a",
-        title="LimeSeg vs Threshold — Crowded RBC Image 46 (object A)",
+        title="Active Surfaces vs Threshold — Crowded RBC Image 46 (object A)",
         source_label=str(source),
         threshold=43.0,
         seed=seed,
         vesicle=vesicle,
-        limeseg=limeseg,
+        active_surfaces=active_surfaces,
         reports_dir=reports_dir,
         threshold_profile="rbc",
     )
@@ -284,7 +284,7 @@ def run_dopc(reports_dir: Path, source: Path) -> Path | None:
         threshold=127.0,
         frame_index=frame_index,
     )
-    vesicle, limeseg = compare_on_array(
+    vesicle, active_surfaces = compare_on_array(
         stack.grayscale,
         threshold=127.0,
         voxel=stack.voxel_size,
@@ -294,12 +294,12 @@ def run_dopc(reports_dir: Path, source: Path) -> Path | None:
     )
     return write_case(
         slug="dopc-movie1",
-        title="LimeSeg vs Threshold — DOPC Movie 1",
+        title="Active Surfaces vs Threshold — DOPC Movie 1",
         source_label=str(source),
         threshold=127.0,
         seed=seed,
         vesicle=vesicle,
-        limeseg=limeseg,
+        active_surfaces=active_surfaces,
         reports_dir=reports_dir,
     )
 
@@ -313,7 +313,7 @@ def run_crowded_vesicle_1644(reports_dir: Path, source: Path) -> Path | None:
     stack = load_image_stack(source)
     seed = ObjectSeed(x=337.0, y=319.0, frame_index=56, radius=12.0)
     z_range = ZRange(zmin=40, zmax=80)
-    vesicle, limeseg = compare_on_array(
+    vesicle, active_surfaces = compare_on_array(
         stack.grayscale,
         threshold=484.0,
         voxel=stack.voxel_size,
@@ -324,12 +324,12 @@ def run_crowded_vesicle_1644(reports_dir: Path, source: Path) -> Path | None:
     )
     return write_case(
         slug="czi-1644-object-a",
-        title="LimeSeg vs Threshold — Crowded CZI 1644 (object A)",
+        title="Active Surfaces vs Threshold — Crowded CZI 1644 (object A)",
         source_label=str(source),
         threshold=484.0,
         seed=seed,
         vesicle=vesicle,
-        limeseg=limeseg,
+        active_surfaces=active_surfaces,
         reports_dir=reports_dir,
     )
 
@@ -343,7 +343,7 @@ def run_crowded_rbc_image32(reports_dir: Path, source: Path) -> Path | None:
     stack = load_image_stack(source)
     seed = ObjectSeed(x=293.0, y=510.0, frame_index=16, radius=12.0)
     z_range = ZRange(zmin=0, zmax=28)
-    vesicle, limeseg = compare_on_array(
+    vesicle, active_surfaces = compare_on_array(
         stack.grayscale,
         threshold=49.0,
         voxel=stack.voxel_size,
@@ -355,12 +355,12 @@ def run_crowded_rbc_image32(reports_dir: Path, source: Path) -> Path | None:
     )
     return write_case(
         slug="rbc-image32-object-a",
-        title="LimeSeg vs Threshold — Crowded RBC Image 32 (object A)",
+        title="Active Surfaces vs Threshold — Crowded RBC Image 32 (object A)",
         source_label=str(source),
         threshold=49.0,
         seed=seed,
         vesicle=vesicle,
-        limeseg=limeseg,
+        active_surfaces=active_surfaces,
         reports_dir=reports_dir,
         threshold_profile="rbc",
     )
@@ -375,7 +375,7 @@ def run_crowded_vesicle(reports_dir: Path, source: Path) -> Path | None:
     stack = load_image_stack(source)
     seed = ObjectSeed(x=359.97, y=516.78, frame_index=105, radius=12.0)
     z_range = ZRange(zmin=90, zmax=120)
-    vesicle, limeseg = compare_on_array(
+    vesicle, active_surfaces = compare_on_array(
         stack.grayscale,
         threshold=190.0,
         voxel=stack.voxel_size,
@@ -386,12 +386,12 @@ def run_crowded_vesicle(reports_dir: Path, source: Path) -> Path | None:
     )
     return write_case(
         slug="czi-1650-object-a",
-        title="LimeSeg vs Threshold — Crowded CZI 1650 (object A)",
+        title="Active Surfaces vs Threshold — Crowded CZI 1650 (object A)",
         source_label=str(source),
         threshold=190.0,
         seed=seed,
         vesicle=vesicle,
-        limeseg=limeseg,
+        active_surfaces=active_surfaces,
         reports_dir=reports_dir,
     )
 
@@ -427,7 +427,7 @@ def main() -> int:
         if report is not None:
             paths.append(report)
 
-    print("LimeSeg vs threshold comparison complete:")
+    print("Active Surfaces vs threshold comparison complete:")
     for path in paths:
         print(f"- {path}")
     return 0

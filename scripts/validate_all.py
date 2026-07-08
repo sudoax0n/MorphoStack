@@ -64,8 +64,10 @@ def write_report(
     reports_dir: Path,
     synthetic_ok: bool,
     ellipsoid_ok: bool,
+    touching_ok: bool,
     synthetic_output: str,
     ellipsoid_output: str,
+    touching_output: str,
     preview_output: str,
     run_summaries: list[dict[str, object]],
 ) -> Path:
@@ -80,6 +82,7 @@ def write_report(
         f"- Generated: `{timestamp}`",
         f"- Synthetic sphere regression: `{'PASS' if synthetic_ok else 'FAIL'}`",
         f"- Synthetic ellipsoid regression: `{'PASS' if ellipsoid_ok else 'FAIL'}`",
+        f"- Synthetic touching failure reference: `{'PASS' if touching_ok else 'FAIL'}`",
         f"- Validation runs indexed: `{len(run_summaries)}`",
         "",
         "## Synthetic Sphere",
@@ -92,6 +95,12 @@ def write_report(
         "",
         "```text",
         ellipsoid_output or "(no output)",
+        "```",
+        "",
+        "## Synthetic Touching Failure Reference",
+        "",
+        "```text",
+        touching_output or "(no output)",
         "```",
         "",
         "## Preview Capture",
@@ -118,6 +127,7 @@ def write_report(
                 "generated_at_utc": timestamp,
                 "synthetic_ok": synthetic_ok,
                 "ellipsoid_ok": ellipsoid_ok,
+                "touching_ok": touching_ok,
                 "runs": run_summaries,
             },
             indent=2,
@@ -152,6 +162,9 @@ def main() -> int:
     ellipsoid_code, ellipsoid_output = run_command(
         [sys.executable, str(PROJECT_ROOT / "scripts" / "validate_synthetic_ellipsoid.py")]
     )
+    touching_code, touching_output = run_command(
+        [sys.executable, str(PROJECT_ROOT / "scripts" / "validate_synthetic_touching.py")]
+    )
     preview_output = ""
     if not args.skip_previews:
         preview_code, preview_output = run_command(
@@ -166,13 +179,15 @@ def main() -> int:
         reports_dir=reports_dir,
         synthetic_ok=synthetic_code == 0,
         ellipsoid_ok=ellipsoid_code == 0,
+        touching_ok=touching_code == 0,
         synthetic_output=synthetic_output,
         ellipsoid_output=ellipsoid_output,
+        touching_output=touching_output,
         preview_output=preview_output,
         run_summaries=run_summaries,
     )
     print(f"Validation summary: {report_path}")
-    ok = synthetic_code == 0 and ellipsoid_code == 0
+    ok = synthetic_code == 0 and ellipsoid_code == 0 and touching_code == 0
     return 0 if ok else 1
 
 

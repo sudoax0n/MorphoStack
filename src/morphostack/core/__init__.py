@@ -35,6 +35,7 @@ from morphostack.core.mesh import (
     measure_contour_stack,
     surface_area_volume,
     write_mesh_file,
+    write_mesh_glb,
     write_mesh_obj,
     write_mesh_ply,
     write_mesh_stl,

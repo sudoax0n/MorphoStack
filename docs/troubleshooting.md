@@ -17,7 +17,7 @@
 - Raise contrast: adjust threshold or run `morphostack threshold --method otsu`.
 - Ensure contours exist: check `valid_frame_count` in the manifest.
 - For crowded stacks, set an object seed on the target vesicle/RBC.
-- LimeSeg requires a seed and is slower; try vesicle/RBC profile first.
+- Active Surfaces requires a seed and is slower; try vesicle/RBC profile first.
 
 ## Tracking lost / wrong object
 
@@ -37,8 +37,8 @@
 - Start dev mode: `morphostack dev` or `morphostack dev --check`.
 - Confirm `morphostack doctor` shows API dependencies installed (`morphostack init`).
 
-## LimeSeg looks wrong
+## Active Surfaces looks wrong
 
-- LimeSeg is experimental. Compare threshold mesh and LimeSeg mesh on the same seed.
-- Avoid LimeSeg when objects are densely touching without ROI isolation.
+- Active Surfaces is experimental. Compare threshold mesh and Active Surfaces mesh on the same seed.
+- Avoid Active Surfaces when objects are densely touching without ROI isolation.
 - See `docs/limitations.md` for profile guidance.

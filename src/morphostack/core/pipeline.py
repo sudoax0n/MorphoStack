@@ -290,7 +290,7 @@ def analyze_stack(
     prefer_opencv: bool = True,
     include_mesh: bool = False,
     object_seed: ObjectSeed | None = None,
-    limeseg_watershed_pre_split: bool = True,
+    active_surfaces_watershed_pre_split: bool = True,
     excluded_frames: Sequence[int] | None = None,
 ) -> StackAnalysis:
     analysis_profile = normalize_profile(profile)
@@ -319,13 +319,14 @@ def analyze_stack(
     if object_seed is not None:
         local_seed = transform.to_local_seed_object(object_seed)
 
-    if analysis_profile == "limeseg":
+    if analysis_profile == "active_surfaces":
         if local_seed is None:
-            raise ValueError("LimeSeg active surfaces profile requires an object seed")
+            raise ValueError("Active surfaces profile requires an object seed")
 
-        from morphostack.core.limeseg import (
+        from morphostack.core.active_surfaces import (
+            ACTIVE_SURFACES_DEFAULTS,
             apply_watershed_pre_split_stack,
-            run_limeseg_optimization,
+            run_active_surfaces_optimization,
             surfels_to_mask_stack,
             watershed_split_stack,
         )
@@ -345,39 +346,38 @@ def analyze_stack(
                 seed_radius=local_seed.radius,
                 polygon_points=poly_points,
             )
-            if limeseg_watershed_pre_split
+            if active_surfaces_watershed_pre_split
             else None
         )
-        arr_for_limeseg = apply_watershed_pre_split_stack(
+        arr_for_active_surfaces = apply_watershed_pre_split_stack(
             arr,
             per_frame_thresholds,
             seed_x=local_seed.x,
             seed_y=local_seed.y,
             seed_radius=local_seed.radius,
             polygon_points=poly_points,
-            enabled=limeseg_watershed_pre_split,
+            enabled=active_surfaces_watershed_pre_split,
             splits=watershed_splits,
         )
 
-        # Run LimeSeg active surfaces optimization
-        surfels = run_limeseg_optimization(
-            arr=arr_for_limeseg,
+        surfels = run_active_surfaces_optimization(
+            arr=arr_for_active_surfaces,
             seed_x=local_seed.x,
             seed_y=local_seed.y,
             seed_z=local_seed.frame_index,
             seed_radius=local_seed.radius,
             voxel_size_x=voxel_x,
             voxel_size_z=voxel_z,
-            d_0=2.0,
-            f_pressure=0.015,
-            k_grad=0.03,
-            relaxation_steps=100,
-            optimization_steps=200,
+            d_0=float(ACTIVE_SURFACES_DEFAULTS["d_0"]),
+            f_pressure=float(ACTIVE_SURFACES_DEFAULTS["f_pressure"]),
+            k_grad=float(ACTIVE_SURFACES_DEFAULTS["k_grad"]),
+            relaxation_steps=int(ACTIVE_SURFACES_DEFAULTS["relaxation_steps"]),
+            optimization_steps=int(ACTIVE_SURFACES_DEFAULTS["optimization_steps"]),
             polygon_points=poly_points,
         )
 
         ZScale = voxel_z / voxel_x if voxel_x > 0.0 else 1.0
-        limeseg_mask = surfels_to_mask_stack(
+        active_surfaces_mask = surfels_to_mask_stack(
             surfels,
             arr.shape,
             ZScale,
@@ -395,7 +395,7 @@ def analyze_stack(
 
         frames_list = []
         for idx in range(arr.shape[0]):
-            frame_mask = limeseg_mask[idx]
+            frame_mask = active_surfaces_mask[idx]
             contour = largest_opencv_contour(frame_mask)
             if contour is None and np.sum(frame_mask) > 0:
                 contour = largest_component_boundary(frame_mask)
@@ -413,7 +413,7 @@ def analyze_stack(
                     area_px2=area_px,
                     perimeter_px=perimeter_px,
                     circularity=circ,
-                    method="limeseg"
+                    method="active_surfaces"
                 )
             else:
                 metrics = None
@@ -423,7 +423,7 @@ def analyze_stack(
                     area_px2=0.0,
                     perimeter_px=0.0,
                     circularity=0.0,
-                    method="limeseg_empty"
+                    method="active_surfaces_empty"
                 )
 
             fa = FrameAnalysis(

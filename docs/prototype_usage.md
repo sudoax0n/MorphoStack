@@ -37,7 +37,7 @@ If the default ports are busy:
 4. In **Preview & Analyze**, choose profile:
    - `Vesicle` for GUV / vesicle threshold contours.
    - `RBC` for red blood cell stacks.
-   - `LimeSeg` (experimental) when threshold contours leak — requires object seed.
+   - `Active Surfaces` (experimental) when threshold contours leak — requires object seed.
 5. Optional **Object selection** for crowded images:
    - Click **Select Object**, then circle-drag or polygon on the preview.
    - Set seed radius and max track distance if needed.

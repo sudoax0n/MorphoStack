@@ -1,4 +1,4 @@
-# LimeSeg vs Threshold — Crowded CZI 1650 (object A)
+# Active Surfaces vs Threshold — Crowded CZI 1650 (object A)
 
 - Source: `C:\Users\systemm\Downloads\1650_z stack.czi`
 - Threshold: `190.0`
@@ -6,7 +6,7 @@
 
 ## Summary
 
-| Metric | Threshold (vesicle) | LimeSeg | Delta |
+| Metric | Threshold (vesicle) | Active Surfaces | Delta |
 | --- | ---: | ---: | ---: |
 | Valid frames | 30 | 30 | — |
 | Valid fraction | 1.000 | 1.000 | — |
@@ -18,10 +18,10 @@
 ## Warnings
 
 - Threshold: `roi_boundary_touch`
-- LimeSeg: `none`
+- Active Surfaces: `none`
 
 ## Interpretation
 
-- Large mesh-volume deltas on crowded or touching data usually mean LimeSeg or tracking picked a different object region.
+- Large mesh-volume deltas on crowded or touching data usually mean Active Surfaces or tracking picked a different object region.
 - On synthetic spheres, profiles should agree within a few percent when the seed sits on the object center.
-- Treat LimeSeg as experimental until side-by-side previews look correct on your dataset.
+- Treat Active Surfaces as experimental until side-by-side previews look correct on your dataset.

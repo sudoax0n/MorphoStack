@@ -1,4 +1,4 @@
-# LimeSeg vs Threshold — DOPC Movie 1
+# Active Surfaces vs Threshold — DOPC Movie 1
 
 - Source: `D:\lab-data\paper-data\syst202400052-sup-0001-movie1-dopc.tif`
 - Threshold: `127.0`
@@ -6,7 +6,7 @@
 
 ## Summary
 
-| Metric | Threshold (vesicle) | LimeSeg | Delta |
+| Metric | Threshold (vesicle) | Active Surfaces | Delta |
 | --- | ---: | ---: | ---: |
 | Valid frames | 26 | 26 | — |
 | Valid fraction | 1.000 | 1.000 | — |
@@ -18,10 +18,10 @@
 ## Warnings
 
 - Threshold: `default_voxel_size`
-- LimeSeg: `default_voxel_size`
+- Active Surfaces: `default_voxel_size`
 
 ## Interpretation
 
-- Large mesh-volume deltas on crowded or touching data usually mean LimeSeg or tracking picked a different object region.
+- Large mesh-volume deltas on crowded or touching data usually mean Active Surfaces or tracking picked a different object region.
 - On synthetic spheres, profiles should agree within a few percent when the seed sits on the object center.
-- Treat LimeSeg as experimental until side-by-side previews look correct on your dataset.
+- Treat Active Surfaces as experimental until side-by-side previews look correct on your dataset.

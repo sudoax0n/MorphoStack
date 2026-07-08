@@ -9,7 +9,7 @@ from morphostack.core import (
     StackViewTransform,
     analyze_stack,
 )
-from morphostack.core.limeseg import (
+from morphostack.core.active_surfaces import (
     _sample_intensity_profile,
     _surfel_in_contact_zone,
     apply_watershed_pre_split_stack,
@@ -299,7 +299,7 @@ def test_apply_watershed_pre_split_stack_can_be_disabled():
     assert np.array_equal(masked, stack)
 
 
-def test_analyze_stack_limeseg_watershed_pre_split_opt_out():
+def test_analyze_stack_active_surfaces_watershed_pre_split_opt_out():
     shape = (5, 80, 80)
     stack = np.zeros(shape, dtype=np.uint8)
     for z in range(shape[0]):
@@ -313,16 +313,16 @@ def test_analyze_stack_limeseg_watershed_pre_split_opt_out():
         stack,
         thresholds=100,
         voxel_size=VoxelSize(1.0, 1.0, 1.0),
-        profile="limeseg",
+        profile="active_surfaces",
         object_seed=seed,
-        limeseg_watershed_pre_split=False,
+        active_surfaces_watershed_pre_split=False,
     )
     frame = analysis.frames[2]
     assert frame.contour is not None
     assert float(np.max(frame.contour[:, 0])) < 42.0
 
 
-def test_limeseg_touching_vesicles_stays_inside_seed():
+def test_active_surfaces_touching_vesicles_stays_inside_seed():
     shape = (5, 80, 80)
     stack = np.zeros(shape, dtype=np.uint8)
     large_cx, large_cy, large_r = 30.0, 40.0, 12.0
@@ -343,7 +343,7 @@ def test_limeseg_touching_vesicles_stays_inside_seed():
         stack,
         thresholds=100,
         voxel_size=voxel,
-        profile="limeseg",
+        profile="active_surfaces",
         object_seed=circle_seed,
     )
 
@@ -354,7 +354,7 @@ def test_limeseg_touching_vesicles_stays_inside_seed():
     assert float(np.max(contour_x)) < 42.0
 
 
-def test_limeseg_segmentation_active_surfaces():
+def test_active_surfaces_segmentation_active_surfaces():
     # Build a synthetic 3D sphere stack
     shape = (10, 40, 40)
     stack = np.zeros(shape, dtype=np.uint8)
@@ -372,12 +372,12 @@ def test_limeseg_segmentation_active_surfaces():
     voxel = VoxelSize(1.0, 1.0, 1.0)
     circle_seed = ObjectSeed(x=20, y=20, frame_index=5, radius=5.0, type="circle")
 
-    # Run LimeSeg-lite profile
+    # Run Active surfaces-lite profile
     analysis = analyze_stack(
         stack,
         thresholds=100,
         voxel_size=voxel,
-        profile="limeseg",
+        profile="active_surfaces",
         include_mesh=True,
         object_seed=circle_seed
     )

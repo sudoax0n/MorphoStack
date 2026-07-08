@@ -12,7 +12,7 @@ MorphoStack development.
 | `mcps/` | Local MCP server configs and tooling artifacts from agent/IDE sessions. |
 | `scratch/` | Throwaway scripts, temp outputs, and ad-hoc experiments. |
 | `terminals/` | Captured terminal session logs from development tooling. |
-| `.clones/` | Cloned external research software (e.g. LimeSeg-work) kept for reference. |
+| `.clones/` | Cloned external research software (e.g. external Fiji plugin clones) kept for reference. |
 
 ## What belongs in the repo
 

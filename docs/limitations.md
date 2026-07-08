@@ -19,12 +19,12 @@ MorphoStack is a lab prototype for vesicle and RBC shape analysis. Treat outputs
 
 - **Vesicle** — threshold contours with optional 3D mesh from rasterized contours.
 - **RBC** — same pipeline with RBC-oriented defaults; biconcavity and thickness metrics are not validated yet.
-- **LimeSeg** — experimental active-surfaces refinement. Use only when threshold contours merge neighbors or miss weak edges. Compare against threshold mesh before trusting output.
+- **Active Surfaces** — experimental surfel-based refinement. Use only when threshold contours merge neighbors or miss weak edges. Compare against threshold mesh before trusting output.
 
 ## Mesh and export
 
 - 3D meshes come from marching cubes on aligned contour masks. Empty or tiny contours produce empty meshes.
-- Exported OBJ/STL/PLY files use the active voxel calibration. Uncalibrated exports are useful for shape review, not quantitative biology.
+- Exported OBJ/STL/PLY/GLB files use the active voxel calibration. Uncalibrated exports are useful for shape review, not quantitative biology.
 
 ## Crowded fields
 

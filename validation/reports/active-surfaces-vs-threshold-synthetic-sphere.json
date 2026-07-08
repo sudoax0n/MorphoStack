@@ -1,5 +1,5 @@
 {
-  "title": "LimeSeg vs Threshold \u2014 Synthetic Sphere",
+  "title": "Active Surfaces vs Threshold \u2014 Synthetic Sphere",
   "source": "in-memory synthetic sphere (r=6 \u00b5m)",
   "threshold": 100.0,
   "seed": {
@@ -20,14 +20,14 @@
       "likely_neighbor_merge"
     ]
   },
-  "limeseg": {
-    "profile": "limeseg",
+  "active_surfaces": {
+    "profile": "active_surfaces",
     "valid_frame_count": 10,
     "valid_fraction": 1.0,
-    "mean_area_um2": 57.95,
-    "mesh_volume_um3": 323.125,
-    "mesh_surface_area_um2": 542.5706008230591,
-    "mesh_sphericity": 0.41970251689516436,
+    "mean_area_um2": 78.05,
+    "mesh_volume_um3": 570.25,
+    "mesh_surface_area_um2": 696.656116569129,
+    "mesh_sphericity": 0.47735616147667004,
     "warning_codes": []
   }
 }

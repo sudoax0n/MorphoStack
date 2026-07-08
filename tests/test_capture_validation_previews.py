@@ -45,11 +45,11 @@ def test_local_frame_index_respects_z_range():
 
 
 def load_compare_module():
-    compare_path = Path(__file__).resolve().parents[1] / "scripts" / "compare_limeseg_threshold.py"
-    spec = importlib.util.spec_from_file_location("compare_limeseg_threshold", compare_path)
+    compare_path = Path(__file__).resolve().parents[1] / "scripts" / "compare_active_surfaces_threshold.py"
+    spec = importlib.util.spec_from_file_location("compare_active_surfaces_threshold", compare_path)
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
-    sys.modules["compare_limeseg_threshold"] = module
+    sys.modules["compare_active_surfaces_threshold"] = module
     spec.loader.exec_module(module)
     return module
 

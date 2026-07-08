@@ -22,7 +22,8 @@ validation/
 │   ├── rbc-image46-crowded-two-objects/
 │   ├── rbc-image32-crowded-two-objects/
 │   ├── synthetic-sphere/  # Known-geometry sphere regression
-│   └── synthetic-ellipsoid/ # Known-geometry ellipsoid regression
+│   ├── synthetic-ellipsoid/ # Known-geometry ellipsoid regression
+│   └── synthetic-touching-failure/ # Documented threshold-merge negative case
 │       ├── metrics.csv
 │       ├── manifest.json
 │       └── report.md
@@ -54,15 +55,16 @@ acquisition metadata or instrument log.
 .\scripts\validate_dopc.ps1
 python scripts\validate_synthetic.py
 python scripts\validate_synthetic_ellipsoid.py
+python scripts\validate_synthetic_touching.py
 python scripts\validate_crowded.py
 python scripts\validate_crowded.py --only czi-1644-crowded-two-objects rbc-image32-crowded-two-objects
 python scripts\validate_dopc_seeded.py
 python scripts\capture_validation_previews.py
 python scripts\validate_all.py
-python scripts\compare_limeseg_threshold.py
+python scripts\compare_active_surfaces_threshold.py
 ```
 
-LimeSeg vs threshold comparison reports are written to `validation/reports/limeseg-vs-threshold-*.md`.
+Active surfaces vs threshold comparison reports are written to `validation/reports/active-surfaces-vs-threshold-*.md`.
 
 See `scripts/validate_dopc.ps1` for full details.
 

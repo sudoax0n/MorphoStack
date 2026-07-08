@@ -19,7 +19,7 @@ Use this list when preparing acknowledgements, a methods supplement, or license 
 ## Segmentation methods
 
 - **Threshold segmentation with connected components** — standard image-processing practice; MorphoStack implementation is original but follows approaches common in Fiji/ImageJ and OpenCV workflows.
-- **LimeSeg active surfaces (experimental profile)** — inspired by the LimeSeg particle-based surface evolution method for bioimaging. When comparing against published LimeSeg results, cite the original LimeSeg paper/software named in your Fiji plugin or reference implementation. Treat MorphoStack's built-in `limeseg` profile as a lightweight reimplementation for local experimentation, not a byte-for-byte reproduction of the Java plugin.
+- **Active surfaces (experimental profile)** — MorphoStack's in-house surfel-based surface evolution for seeded objects. Describe it as an experimental refinement step in methods text; it is not a third-party plugin port.
 
 ## Reference datasets
 

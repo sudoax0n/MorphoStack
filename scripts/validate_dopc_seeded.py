@@ -14,7 +14,7 @@ MORPHO = REPO_ROOT / ".venv" / "Scripts" / "morphostack.exe"
 DOPC_SOURCE = Path(r"D:\lab-data\paper-data\syst202400052-sup-0001-movie1-dopc.tif")
 OUT_DIR = REPO_ROOT / "validation" / "runs" / "dopc-seeded-object"
 
-# From LimeSeg vs threshold report on middle frame (largest component centroid).
+# From active-surfaces vs threshold report on middle frame (largest component centroid).
 SEED_FRAME = 13
 SEED_X = 209.0
 SEED_Y = 419.0

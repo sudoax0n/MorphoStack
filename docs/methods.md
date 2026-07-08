@@ -39,6 +39,6 @@ object seed, excluded frames, and MorphoStack version in the exported manifest.
 ## Limitations
 
 Default 1×1×1 µm voxel spacing is a placeholder. Biological interpretation of absolute area,
-volume, or sphericity requires validated microscope calibration. LimeSeg active-surface
+volume, or sphericity requires validated microscope calibration. Active-surfaces
 segmentation is experimental on crowded or touching objects and should be compared against
 threshold segmentation on representative frames before publication use.

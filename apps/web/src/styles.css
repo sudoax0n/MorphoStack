@@ -320,6 +320,36 @@ legend {
   line-height: 1.6;
 }
 
+.upload-progress {
+  margin-top: 8px;
+  height: 6px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  overflow: hidden;
+}
+
+.upload-progress > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #2563eb, #38bdf8);
+  transition: width 0.15s ease;
+}
+
+.upload-progress.indeterminate > span {
+  width: 35%;
+  animation: upload-indeterminate 1.2s ease-in-out infinite;
+}
+
+@keyframes upload-indeterminate {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(320%);
+  }
+}
+
 .preview-output {
   display: grid;
   gap: 12px;
