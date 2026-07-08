@@ -57,7 +57,7 @@ def parse_object_seed(payload: object) -> ObjectSeed | None:
 def case_from_manifest(manifest_path: Path) -> PreviewCase | None:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     source_raw = manifest.get("source_path")
-    if not isinstance(source_raw, str) or source_raw in ("synthetic-sphere", ""):
+    if not isinstance(source_raw, str) or source_raw in ("synthetic-sphere", "synthetic-ellipsoid", ""):
         return None
     source_path = Path(source_raw)
     if not source_path.exists():

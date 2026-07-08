@@ -24,10 +24,10 @@
     "mesh_equivalent_sphere_diameter_um",
     "mesh_sphericity"
   ],
-  "created_at_utc": "2026-07-08T17:46:03.930073+00:00",
+  "created_at_utc": "2026-07-08T17:46:04.845382+00:00",
   "excluded_frame_count": 0,
   "excluded_frames": [],
-  "frame_count": 10,
+  "frame_count": 12,
   "include_mesh": true,
   "mesh": null,
   "morphostack_version": "0.1.0",
@@ -35,10 +35,10 @@
   "prefer_opencv": false,
   "profile": "vesicle",
   "roi": null,
-  "source_path": "synthetic-sphere",
+  "source_path": "synthetic-ellipsoid",
   "source_sha256": null,
   "summary": {
-    "frame_count": 10,
+    "frame_count": 12,
     "metrics": {},
     "valid_fraction": 0.0,
     "valid_frame_count": 0

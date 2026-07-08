@@ -16,9 +16,13 @@ validation/
 ├── research-notes.md      # External library survey (licenses, reuse guidance)
 ├── runs/                  # One subdirectory per validation run
 │   ├── dopc-smoke-test/   # First real-data run on the DOPC movie
+│   ├── dopc-seeded-object/ # DOPC with explicit GUV seed
 │   ├── czi-1650-crowded-two-objects/
+│   ├── czi-1644-crowded-two-objects/
 │   ├── rbc-image46-crowded-two-objects/
-│   └── synthetic-sphere/  # Known-geometry regression case
+│   ├── rbc-image32-crowded-two-objects/
+│   ├── synthetic-sphere/  # Known-geometry sphere regression
+│   └── synthetic-ellipsoid/ # Known-geometry ellipsoid regression
 │       ├── metrics.csv
 │       ├── manifest.json
 │       └── report.md
@@ -49,7 +53,12 @@ acquisition metadata or instrument log.
 # From D:\MorphoStack
 .\scripts\validate_dopc.ps1
 python scripts\validate_synthetic.py
+python scripts\validate_synthetic_ellipsoid.py
 python scripts\validate_crowded.py
+python scripts\validate_crowded.py --only czi-1644-crowded-two-objects rbc-image32-crowded-two-objects
+python scripts\validate_dopc_seeded.py
+python scripts\capture_validation_previews.py
+python scripts\validate_all.py
 python scripts\compare_limeseg_threshold.py
 ```
 

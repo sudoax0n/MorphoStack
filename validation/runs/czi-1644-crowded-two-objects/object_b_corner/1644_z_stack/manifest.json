@@ -1,0 +1,515 @@
+{
+  "columns": [
+    "frame_index",
+    "threshold",
+    "profile",
+    "method",
+    "excluded",
+    "has_contour",
+    "area_px2",
+    "perimeter_px",
+    "area_um2",
+    "perimeter_um",
+    "circularity",
+    "bbox_width_um",
+    "bbox_height_um",
+    "aspect_ratio",
+    "elongation",
+    "deformation_index",
+    "extent",
+    "equivalent_diameter_um",
+    "solidity",
+    "mesh_surface_area_um2",
+    "mesh_volume_um3",
+    "mesh_equivalent_sphere_diameter_um",
+    "mesh_sphericity"
+  ],
+  "created_at_utc": "2026-07-08T17:23:59.436937+00:00",
+  "excluded_frame_count": 0,
+  "excluded_frames": [],
+  "frame_count": 40,
+  "include_mesh": true,
+  "mesh": {
+    "equivalent_sphere_diameter_um": 9.76510740946297,
+    "sphericity": 0.16882438424324328,
+    "surface_area_um2": 1774.4703519032357,
+    "volume_um3": 487.56182734762325
+  },
+  "morphostack_version": "0.1.0",
+  "object_seed": {
+    "frame_index": 56,
+    "max_tracking_dist_um": null,
+    "radius": 12.0,
+    "type": "circle",
+    "x": 637.0,
+    "y": 170.0
+  },
+  "prefer_opencv": true,
+  "profile": "vesicle",
+  "roi": null,
+  "source_path": "C:\\Users\\systemm\\Downloads\\1644_z stack.czi",
+  "source_sha256": "e9319b31b969c062cddabc0188d176f99fcee553119d6abb811866cd1858aa2d",
+  "summary": {
+    "frame_count": 40,
+    "metrics": {
+      "area_um2": {
+        "max": 92.84489131392911,
+        "mean": 21.927517259446358,
+        "min": 0.09611272394249681,
+        "std": 31.27748968512762
+      },
+      "aspect_ratio": {
+        "max": 2.8000000000000034,
+        "mean": 1.5129460953717508,
+        "min": 1.0000000000000042,
+        "std": 0.5142917485497722
+      },
+      "bbox_height_um": {
+        "max": 44.28195787863767,
+        "mean": 12.385795149222908,
+        "min": 1.3153056795634956,
+        "std": 10.792210231145418
+      },
+      "bbox_width_um": {
+        "max": 17.537409060846613,
+        "mean": 8.719380567439684,
+        "min": 0.8768704530423292,
+        "std": 5.65872117622116
+      },
+      "circularity": {
+        "max": 0.195523656763287,
+        "mean": 0.05695031938528953,
+        "min": 0.009045858440705939,
+        "std": 0.04650495908642993
+      },
+      "deformation_index": {
+        "max": 0.47368421052631626,
+        "mean": 0.17540317078999582,
+        "min": 2.113869544845578e-15,
+        "std": 0.14228568305779338
+      },
+      "elongation": {
+        "max": 0.6428571428571432,
+        "mean": 0.2749181709047586,
+        "min": 4.218847493575595e-15,
+        "std": 0.19542495223644077
+      },
+      "equivalent_diameter_um": {
+        "max": 10.872616389238276,
+        "mean": 3.992052164512507,
+        "min": 0.34982069818094097,
+        "std": 3.4615750184563248
+      },
+      "extent": {
+        "max": 0.4075231481490614,
+        "mean": 0.13398537957403683,
+        "min": 0.02619562605276115,
+        "std": 0.10093554538326786
+      },
+      "perimeter_um": {
+        "max": 223.80430667164023,
+        "mean": 63.052632429767996,
+        "min": 5.163966645710592,
+        "std": 55.007923759097686
+      },
+      "solidity": {
+        "max": 0.710308654429662,
+        "mean": 0.2845549293676844,
+        "min": 0.06557377050221973,
+        "std": 0.1444859062391158
+      }
+    },
+    "valid_fraction": 1.0,
+    "valid_frame_count": 40
+  },
+  "threshold": 484.0,
+  "tracking": [
+    {
+      "area_px": 289,
+      "centroid_x": 671.0553633217993,
+      "centroid_y": 203.03806228373702,
+      "frame_index": 40,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 300,
+      "centroid_x": 671.4966666666667,
+      "centroid_y": 203.03,
+      "frame_index": 41,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 337,
+      "centroid_x": 662.9792284866469,
+      "centroid_y": 192.7833827893175,
+      "frame_index": 42,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 1135,
+      "centroid_x": 660.8916299559471,
+      "centroid_y": 209.84493392070485,
+      "frame_index": 43,
+      "likely_neighbor_merge": true,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 925,
+      "centroid_x": 669.5081081081081,
+      "centroid_y": 231.9827027027027,
+      "frame_index": 44,
+      "likely_neighbor_merge": true,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 791,
+      "centroid_x": 666.7332490518331,
+      "centroid_y": 228.02149178255374,
+      "frame_index": 45,
+      "likely_neighbor_merge": true,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 674,
+      "centroid_x": 662.8976261127597,
+      "centroid_y": 217.90504451038575,
+      "frame_index": 46,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 868,
+      "centroid_x": 669.1900921658986,
+      "centroid_y": 240.66589861751152,
+      "frame_index": 47,
+      "likely_neighbor_merge": true,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 691,
+      "centroid_x": 657.2098408104197,
+      "centroid_y": 205.92040520984082,
+      "frame_index": 48,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 716,
+      "centroid_x": 661.7025139664804,
+      "centroid_y": 214.58659217877096,
+      "frame_index": 49,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 655,
+      "centroid_x": 661.6106870229007,
+      "centroid_y": 215.65343511450382,
+      "frame_index": 50,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 728,
+      "centroid_x": 663.1126373626373,
+      "centroid_y": 217.00274725274724,
+      "frame_index": 51,
+      "likely_neighbor_merge": true,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 1041,
+      "centroid_x": 654.9875120076849,
+      "centroid_y": 197.8683957732949,
+      "frame_index": 52,
+      "likely_neighbor_merge": true,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 752,
+      "centroid_x": 660.2340425531914,
+      "centroid_y": 213.1994680851064,
+      "frame_index": 53,
+      "likely_neighbor_merge": true,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 677,
+      "centroid_x": 661.7444608567208,
+      "centroid_y": 215.30280649926144,
+      "frame_index": 54,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 406,
+      "centroid_x": 660.0665024630542,
+      "centroid_y": 195.84975369458127,
+      "frame_index": 55,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 321,
+      "centroid_x": 663.7632398753894,
+      "centroid_y": 202.14018691588785,
+      "frame_index": 56,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 320,
+      "centroid_x": 660.1375,
+      "centroid_y": 198.484375,
+      "frame_index": 57,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 139,
+      "centroid_x": 654.6690647482014,
+      "centroid_y": 195.01438848920864,
+      "frame_index": 58,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 236,
+      "centroid_x": 661.1440677966102,
+      "centroid_y": 202.41949152542372,
+      "frame_index": 59,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 145,
+      "centroid_x": 677.8551724137931,
+      "centroid_y": 217.28275862068966,
+      "frame_index": 60,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 221,
+      "centroid_x": 654.579185520362,
+      "centroid_y": 193.1266968325792,
+      "frame_index": 61,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 144,
+      "centroid_x": 659.7916666666666,
+      "centroid_y": 200.66666666666666,
+      "frame_index": 62,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 71,
+      "centroid_x": 655.1408450704225,
+      "centroid_y": 196.1549295774648,
+      "frame_index": 63,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 48,
+      "centroid_x": 656.6458333333334,
+      "centroid_y": 197.75,
+      "frame_index": 64,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 48,
+      "centroid_x": 653.75,
+      "centroid_y": 194.70833333333334,
+      "frame_index": 65,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 38,
+      "centroid_x": 660.6578947368421,
+      "centroid_y": 200.97368421052633,
+      "frame_index": 66,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 69,
+      "centroid_x": 637.536231884058,
+      "centroid_y": 166.7391304347826,
+      "frame_index": 67,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 21,
+      "centroid_x": 634.3333333333334,
+      "centroid_y": 160.0952380952381,
+      "frame_index": 68,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 42,
+      "centroid_x": 640.7857142857143,
+      "centroid_y": 171.5,
+      "frame_index": 69,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 24,
+      "centroid_x": 638.5416666666666,
+      "centroid_y": 167.08333333333334,
+      "frame_index": 70,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 20,
+      "centroid_x": 636.35,
+      "centroid_y": 161.25,
+      "frame_index": 71,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 25,
+      "centroid_x": 631.0,
+      "centroid_y": 143.56,
+      "frame_index": 72,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 17,
+      "centroid_x": 629.2941176470588,
+      "centroid_y": 84.11764705882354,
+      "frame_index": 73,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 19,
+      "centroid_x": 633.6842105263158,
+      "centroid_y": 66.89473684210526,
+      "frame_index": 74,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 17,
+      "centroid_x": 640.4705882352941,
+      "centroid_y": 50.294117647058826,
+      "frame_index": 75,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 19,
+      "centroid_x": 628.6315789473684,
+      "centroid_y": 94.89473684210526,
+      "frame_index": 76,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 236,
+      "centroid_x": 626.2754237288135,
+      "centroid_y": 157.78813559322035,
+      "frame_index": 77,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 302,
+      "centroid_x": 624.5529801324503,
+      "centroid_y": 156.18543046357615,
+      "frame_index": 78,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 128,
+      "centroid_x": 631.5859375,
+      "centroid_y": 152.890625,
+      "frame_index": 79,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": true
+    }
+  ],
+  "valid_frame_count": 40,
+  "voxel_size": {
+    "x_um": 0.2192176132605825,
+    "y_um": 0.2192176132605825,
+    "z_um": 0.5
+  },
+  "voxel_source": "metadata",
+  "warnings": [
+    {
+      "code": "likely_neighbor_merge",
+      "frame_indices": [
+        43,
+        44,
+        45,
+        47,
+        51,
+        52,
+        53
+      ],
+      "message": "Tracked component area grew sharply on 7 frame(s); neighbors may have merged.",
+      "severity": "warning"
+    }
+  ],
+  "z_range": {
+    "zmax": 80,
+    "zmin": 40
+  }
+}

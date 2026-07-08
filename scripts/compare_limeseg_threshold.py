@@ -304,6 +304,68 @@ def run_dopc(reports_dir: Path, source: Path) -> Path | None:
     )
 
 
+def run_crowded_vesicle_1644(reports_dir: Path, source: Path) -> Path | None:
+    if not source.exists():
+        print(f"Skipping crowded vesicle 1644 case; source missing: {source}")
+        return None
+    from morphostack.core.pipeline import ZRange
+
+    stack = load_image_stack(source)
+    seed = ObjectSeed(x=337.0, y=319.0, frame_index=56, radius=12.0)
+    z_range = ZRange(zmin=40, zmax=80)
+    vesicle, limeseg = compare_on_array(
+        stack.grayscale,
+        threshold=484.0,
+        voxel=stack.voxel_size,
+        seed=seed,
+        prefer_opencv=True,
+        voxel_source=stack.voxel_source,
+        z_range=z_range,
+    )
+    return write_case(
+        slug="czi-1644-object-a",
+        title="LimeSeg vs Threshold — Crowded CZI 1644 (object A)",
+        source_label=str(source),
+        threshold=484.0,
+        seed=seed,
+        vesicle=vesicle,
+        limeseg=limeseg,
+        reports_dir=reports_dir,
+    )
+
+
+def run_crowded_rbc_image32(reports_dir: Path, source: Path) -> Path | None:
+    if not source.exists():
+        print(f"Skipping crowded RBC Image 32 case; source missing: {source}")
+        return None
+    from morphostack.core.pipeline import ZRange
+
+    stack = load_image_stack(source)
+    seed = ObjectSeed(x=293.0, y=510.0, frame_index=16, radius=12.0)
+    z_range = ZRange(zmin=0, zmax=28)
+    vesicle, limeseg = compare_on_array(
+        stack.grayscale,
+        threshold=49.0,
+        voxel=stack.voxel_size,
+        seed=seed,
+        threshold_profile="rbc",
+        prefer_opencv=True,
+        voxel_source=stack.voxel_source,
+        z_range=z_range,
+    )
+    return write_case(
+        slug="rbc-image32-object-a",
+        title="LimeSeg vs Threshold — Crowded RBC Image 32 (object A)",
+        source_label=str(source),
+        threshold=49.0,
+        seed=seed,
+        vesicle=vesicle,
+        limeseg=limeseg,
+        reports_dir=reports_dir,
+        threshold_profile="rbc",
+    )
+
+
 def run_crowded_vesicle(reports_dir: Path, source: Path) -> Path | None:
     if not source.exists():
         print(f"Skipping crowded vesicle case; source missing: {source}")
@@ -350,7 +412,9 @@ def main() -> int:
     if not args.skip_crowded:
         for runner, source in (
             (run_crowded_vesicle, Path(r"C:\Users\systemm\Downloads\1650_z stack.czi")),
+            (run_crowded_vesicle_1644, Path(r"C:\Users\systemm\Downloads\1644_z stack.czi")),
             (run_crowded_rbc, Path(r"D:\rbc data pranay\Image 46.lsm")),
+            (run_crowded_rbc_image32, Path(r"D:\rbc data pranay\Image 32.lsm")),
         ):
             report = runner(reports_dir, source)
             if report is not None:

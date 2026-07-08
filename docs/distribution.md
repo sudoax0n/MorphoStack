@@ -51,3 +51,20 @@ For a full analysis stack, install optional dependencies as well:
 ```powershell
 pip install "morphostack[all] @ file:///D:/MorphoStack/dist/morphostack-0.1.0-py3-none-any.whl"
 ```
+
+## GitHub Releases
+
+Tag a version to build and attach a wheel automatically:
+
+```powershell
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The `.github/workflows/release.yml` workflow builds `apps/web`, packages `morphostack/_web_static`,
+and uploads `dist/*.whl` to the GitHub Release. Install from a release asset with pipx:
+
+```powershell
+pipx install https://github.com/<org>/MorphoStack/releases/download/v0.1.0/morphostack-0.1.0-py3-none-any.whl
+morphostack app
+```

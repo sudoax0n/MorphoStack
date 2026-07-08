@@ -63,7 +63,9 @@ def write_report(
     *,
     reports_dir: Path,
     synthetic_ok: bool,
+    ellipsoid_ok: bool,
     synthetic_output: str,
+    ellipsoid_output: str,
     preview_output: str,
     run_summaries: list[dict[str, object]],
 ) -> Path:
@@ -76,13 +78,20 @@ def write_report(
         "# MorphoStack Validation Summary",
         "",
         f"- Generated: `{timestamp}`",
-        f"- Synthetic regression: `{'PASS' if synthetic_ok else 'FAIL'}`",
+        f"- Synthetic sphere regression: `{'PASS' if synthetic_ok else 'FAIL'}`",
+        f"- Synthetic ellipsoid regression: `{'PASS' if ellipsoid_ok else 'FAIL'}`",
         f"- Validation runs indexed: `{len(run_summaries)}`",
         "",
         "## Synthetic Sphere",
         "",
         "```text",
         synthetic_output or "(no output)",
+        "```",
+        "",
+        "## Synthetic Ellipsoid",
+        "",
+        "```text",
+        ellipsoid_output or "(no output)",
         "```",
         "",
         "## Preview Capture",
@@ -108,6 +117,7 @@ def write_report(
             {
                 "generated_at_utc": timestamp,
                 "synthetic_ok": synthetic_ok,
+                "ellipsoid_ok": ellipsoid_ok,
                 "runs": run_summaries,
             },
             indent=2,
@@ -139,6 +149,9 @@ def main() -> int:
     synthetic_code, synthetic_output = run_command(
         [sys.executable, str(PROJECT_ROOT / "scripts" / "validate_synthetic.py")]
     )
+    ellipsoid_code, ellipsoid_output = run_command(
+        [sys.executable, str(PROJECT_ROOT / "scripts" / "validate_synthetic_ellipsoid.py")]
+    )
     preview_output = ""
     if not args.skip_previews:
         preview_code, preview_output = run_command(
@@ -152,12 +165,15 @@ def main() -> int:
     report_path = write_report(
         reports_dir=reports_dir,
         synthetic_ok=synthetic_code == 0,
+        ellipsoid_ok=ellipsoid_code == 0,
         synthetic_output=synthetic_output,
+        ellipsoid_output=ellipsoid_output,
         preview_output=preview_output,
         run_summaries=run_summaries,
     )
     print(f"Validation summary: {report_path}")
-    return 0 if synthetic_code == 0 else synthetic_code
+    ok = synthetic_code == 0 and ellipsoid_code == 0
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":
