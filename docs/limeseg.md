@@ -18,4 +18,11 @@ MorphoStack ships a **LimeSeg-lite** active-surfaces profile for advanced segmen
 
 LimeSeg remains **experimental**. Compare against threshold-based mesh on the same seed before using LimeSeg outputs in figures or tables.
 
+Side-by-side reports live under `validation/reports/`:
+
+```powershell
+python scripts/compare_limeseg_threshold.py
+python scripts/compare_limeseg_threshold.py --skip-crowded   # synthetic only (~30s)
+```
+
 Regression tests cover seed masks, watershed pre-split, and touching-object cases in `tests/test_core_limeseg.py`.

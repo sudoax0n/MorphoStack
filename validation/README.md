@@ -50,7 +50,10 @@ acquisition metadata or instrument log.
 .\scripts\validate_dopc.ps1
 python scripts\validate_synthetic.py
 python scripts\validate_crowded.py
+python scripts\compare_limeseg_threshold.py
 ```
+
+LimeSeg vs threshold comparison reports are written to `validation/reports/limeseg-vs-threshold-*.md`.
 
 See `scripts/validate_dopc.ps1` for full details.
 

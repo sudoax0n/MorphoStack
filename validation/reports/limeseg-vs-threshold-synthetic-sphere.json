@@ -1,0 +1,33 @@
+{
+  "title": "LimeSeg vs Threshold \u2014 Synthetic Sphere",
+  "source": "in-memory synthetic sphere (r=6 \u00b5m)",
+  "threshold": 100.0,
+  "seed": {
+    "x": 20.0,
+    "y": 20.0,
+    "frame_index": 5,
+    "radius": 6.0
+  },
+  "vesicle": {
+    "profile": "vesicle",
+    "valid_frame_count": 10,
+    "valid_fraction": 1.0,
+    "mean_area_um2": 71.2,
+    "mesh_volume_um3": 622.1666666666666,
+    "mesh_surface_area_um2": 357.65199050045214,
+    "mesh_sphericity": 0.9854349725269891,
+    "warning_codes": [
+      "likely_neighbor_merge"
+    ]
+  },
+  "limeseg": {
+    "profile": "limeseg",
+    "valid_frame_count": 10,
+    "valid_fraction": 1.0,
+    "mean_area_um2": 57.95,
+    "mesh_volume_um3": 323.125,
+    "mesh_surface_area_um2": 542.5706008230591,
+    "mesh_sphericity": 0.41970251689516436,
+    "warning_codes": []
+  }
+}

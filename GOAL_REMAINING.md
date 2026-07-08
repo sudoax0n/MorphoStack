@@ -7,11 +7,11 @@ This file tracks what is still left from the original MorphoStack goal: a refres
 ## Current Progress Estimate
 
 - Working demo / prototype: **97%** done
-- Internship/lab-usable internal tool: **92%** done
+- Internship/lab-usable internal tool: **93%** done
 - Paper-supporting, biologically validated tool: **78%** done
 - Publicly distributable open-source app: **72%** done
 
-Single-number answer for the original goal: about **92%** done for a solid internal lab tool. The remaining work is mostly RBC science sign-off, LimeSeg real-data stabilization, fuller validation visuals, and packaging polish.
+Single-number answer for the original goal: about **93%** done for a solid internal lab tool. The remaining work is mostly RBC science sign-off, LimeSeg real-data stabilization, fuller validation visuals, and packaging polish.
 
 ## What Is Already In Good Shape
 
@@ -101,15 +101,17 @@ Still open:
 - Camera presets, opacity controls, screenshot button.
 - Stronger loading/progress state for large stacks.
 
-### 8. LimeSeg Profile Stabilization — PARTIAL
+### 8. LimeSeg Profile Stabilization — MOSTLY DONE
 
 Done:
 - LimeSeg-lite engine with watershed/seed-mask improvements and unit tests.
 - `docs/limeseg.md` guidance.
+- **`scripts/compare_limeseg_threshold.py`** with reports for synthetic sphere, crowded CZI 1650, and RBC Image 46 under `validation/reports/`.
+- Comparison shows large deltas on real crowded data — LimeSeg correctly documented as experimental.
 
 Still open:
-- Real-data comparison runs on DOPC, multi-vesicle CZI, and RBC LSM.
-- Regression against threshold-contour meshes with saved manifests.
+- DOPC movie comparison run.
+- Tune LimeSeg defaults until synthetic/real deltas are acceptable for publication use.
 
 ### 9. UI Ergonomics For Researchers — PARTIAL
 
@@ -155,8 +157,8 @@ Still open:
 
 ## Suggested Next Implementation Order
 
-1. LimeSeg vs threshold comparison on crowded validation stacks.
-2. Save preview overlay screenshots into validation folders.
+1. Save preview overlay screenshots into validation folders.
+2. DOPC LimeSeg vs threshold comparison.
 3. RBC-specific science after lab feedback.
 4. Standalone mesh HTML export and presentation screenshot controls.
 5. Wheel packaging with bundled `apps/web/dist`.

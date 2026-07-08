@@ -1,0 +1,38 @@
+{
+  "title": "LimeSeg vs Threshold \u2014 Crowded RBC Image 46 (object A)",
+  "source": "D:\\rbc data pranay\\Image 46.lsm",
+  "threshold": 43.0,
+  "seed": {
+    "x": 290.61,
+    "y": 731.79,
+    "frame_index": 10,
+    "radius": 12.0
+  },
+  "vesicle": {
+    "profile": "rbc",
+    "valid_frame_count": 10,
+    "valid_fraction": 0.35714285714285715,
+    "mean_area_um2": 2274.55,
+    "mesh_volume_um3": 23610.791666666668,
+    "mesh_surface_area_um2": 7977.764532303003,
+    "mesh_sphericity": 0.49889590994440375,
+    "warning_codes": [
+      "partial_contours",
+      "tracking_lost_many_frames",
+      "default_voxel_size"
+    ]
+  },
+  "limeseg": {
+    "profile": "limeseg",
+    "valid_frame_count": 22,
+    "valid_fraction": 0.7857142857142857,
+    "mean_area_um2": 152.5681818181818,
+    "mesh_volume_um3": 3586.0833333333335,
+    "mesh_surface_area_um2": 3054.923285191493,
+    "mesh_sphericity": 0.37087771111469814,
+    "warning_codes": [
+      "partial_contours",
+      "default_voxel_size"
+    ]
+  }
+}
