@@ -28,18 +28,22 @@ select {
   justify-content: space-between;
   gap: 24px;
   padding: 22px 28px;
-  border-bottom: 1px solid #dde4f0;
+  border-bottom: 1px solid #1e293b;
   background: #0f172a;
+  color: #f8fafc;
 }
 
 .topbar h1 {
   margin: 0;
   font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: #f8fafc;
 }
 
 .topbar p {
   margin: 4px 0 0;
-  color: #657089;
+  color: #94a3b8;
 }
 
 .status {
