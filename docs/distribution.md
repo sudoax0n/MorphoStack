@@ -1,78 +1,81 @@
-# Distribution Notes
+# Distribution
 
-MorphoStack should grow through these stages:
+How MorphoStack is installed and packaged. Canonical command: **`morphostack`**. Short alias: **`mst`**.
 
-1. Local source checkout with `python -m pip install -e ".[dev]"`.
-2. Python application install through `pipx install morphostack`.
-3. GitHub Releases with packaged Windows builds.
-4. Windows package-manager manifests for winget, Scoop, or Chocolatey.
-5. Optional desktop wrapper around the same local web app.
+## Intended stages
 
-The canonical command is `morphostack`. The short alias is `mst`.
-First-run setup is owned by `morphostack init`; pass `--web` to include the
-browser UI's npm dependencies and `--yes` for unattended setup in a known-safe
-environment.
+1. Local source: `pip install -e ".[all]"`
+2. Isolated app install: `pipx install` from a wheel / release asset
+3. GitHub Releases with built wheels (UI static assets included)
+4. Optional later: winget / Scoop / Chocolatey manifests
+5. Optional later: desktop wrapper around the same local web app
 
-For day-to-day lab use on one machine:
+## Day-to-day lab machine
 
-```powershell
+```bash
 morphostack init --web --yes
 morphostack app
+# http://127.0.0.1:8000
 ```
 
-`morphostack app` serves the built browser UI and API together on one port
-(default `http://127.0.0.1:8000`). Developers can still use `morphostack dev`
-for hot-reload during UI work.
+- `morphostack app` — built UI + API on one port  
+- `morphostack dev` — hot-reload for UI development  
 
-Remote script installation such as `irm ... | iex` can be convenient, but should
-be optional because institutional systems may block or distrust it.
+First-run setup is owned by `morphostack init` (`--web` for npm UI deps, `--yes` for unattended).
 
 ## Wheel packaging
 
-To build a wheel that bundles the compiled browser UI:
-
 ```powershell
-.\scripts\build_wheel.ps1
+./scripts/build_wheel.ps1
 ```
 
-The script runs `npm run build` in `apps/web`, then `python -m build --wheel`.
-Installed wheels expose the UI through `morphostack/_web_static`, which `morphostack app`
-uses automatically when a source checkout is not present.
+Builds `apps/web`, then `python -m build --wheel`. The wheel embeds UI files as `morphostack/_web_static` for `morphostack app`.
 
-Install the wheel in an isolated environment:
+Local install:
 
 ```powershell
-pipx install dist\morphostack-0.1.0-py3-none-any.whl
+pipx install dist/morphostack-0.1.0-py3-none-any.whl
 morphostack app
 ```
 
-For a full analysis stack, install optional dependencies as well:
+Full analysis extras:
 
-```powershell
-pip install "morphostack[all] @ file:///D:/MorphoStack/dist/morphostack-0.1.0-py3-none-any.whl"
+```bash
+pip install "morphostack[all] @ file:///absolute/path/to/morphostack-0.1.0-py3-none-any.whl"
 ```
 
 ## Local wheel verification
 
-Before tagging a release, smoke-test the wheel in an isolated venv:
+Before tagging a release:
 
 ```powershell
-.\scripts\verify_release_wheel.ps1
+./scripts/verify_release_wheel.ps1
 ```
 
 ## GitHub Releases
 
-Tag a version to build and attach a wheel automatically:
-
-```powershell
+```bash
 git tag v0.1.0
 git push origin v0.1.0
 ```
 
-The `.github/workflows/release.yml` workflow builds `apps/web`, packages `morphostack/_web_static`,
-and uploads `dist/*.whl` to the GitHub Release. Install from a release asset with pipx:
+`.github/workflows/release.yml` builds the web UI, packages the wheel, and uploads `dist/*.whl` to the release.
 
-```powershell
+```bash
 pipx install https://github.com/<org>/MorphoStack/releases/download/v0.1.0/morphostack-0.1.0-py3-none-any.whl
 morphostack app
 ```
+
+## What not to ship in the git tree
+
+See root `.gitignore` and [REFERENCE_FOLDERS.md](../REFERENCE_FOLDERS.md):
+
+- `.venv/`, `node_modules/`, `apps/web/dist/`
+- raw stacks (`*.tif`, `*.czi`, `*.lsm`, …)
+- local tooling: `mcps/`, `scratch/`, `terminals/`, `.clones/`
+
+Keep intentional `validation/runs/` metrics and reports; avoid committing private raw data.
+
+## Related
+
+[getting-started.md](getting-started.md) · root [README.md](../README.md)

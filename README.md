@@ -1,259 +1,219 @@
 # MorphoStack
 
-MorphoStack is a local morphometry toolkit for microscopy Z-stacks: vesicle/GUV
-analysis, RBC shape analysis, and an experimental active-surfaces profile.
+<p align="center">
+  <img src="docs/public/logo-mark.jpg" alt="MorphoStack logo — stacked slices forming a measured vesicle" width="220" />
+</p>
 
-It loads TIFF/TIF, LSM, and CZI stacks, supports object seed selection for crowded
-fields, emits calibration warnings, exports meshes (OBJ/STL/PLY), and ships
-validation runs under `validation/runs/`.
+<p align="center">
+  <strong>Local morphometry for microscopy Z-stacks</strong><br/>
+  Vesicles · GUVs · RBCs · seeded objects in crowded fields<br/>
+  CLI · FastAPI · browser UI · reproducible run bundles
+</p>
 
-See [docs/prototype_usage.md](docs/prototype_usage.md) for the demo workflow,
-[docs/validation.md](docs/validation.md) for regression runs,
-[docs/limitations.md](docs/limitations.md) for scientific caveats, and
-[docs/troubleshooting.md](docs/troubleshooting.md) for common failures.
+<p align="center">
+  <img src="docs/public/hero-banner.jpg" alt="MorphoStack hero — volumetric vesicle in a biophysics lab" width="100%" />
+</p>
 
-## Current Commands
+<p align="center">
+  <code>morphostack</code> &nbsp;·&nbsp; short alias <code>mst</code> &nbsp;·&nbsp; v0.1.0 &nbsp;·&nbsp; MIT
+</p>
+
+---
+
+## See it before you read it
+
+<table>
+  <tr>
+    <td width="50%" align="center">
+      <img src="docs/public/pipeline-concept.jpg" alt="Pipeline: Z-stack → contour → 3D mesh" width="100%" /><br/>
+      <sub><b>Pipeline</b> — stack → seed/contour → mesh metrics</sub>
+    </td>
+    <td width="50%" align="center">
+      <img src="docs/public/mesh-3d.jpg" alt="3D membrane mesh reconstruction" width="100%" /><br/>
+      <sub><b>Mesh export</b> — OBJ / STL / PLY / GLB</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" align="center">
+      <img src="docs/public/vesicle-glow.jpg" alt="Glowing vesicle membrane concept" width="100%" /><br/>
+      <sub><b>Vesicle / GUV profile</b></sub>
+    </td>
+    <td width="50%" align="center">
+      <img src="docs/public/rbc-photoreal.jpg" alt="Red blood cell photoreal concept" width="100%" /><br/>
+      <sub><b>RBC profile</b> (shared engine; lab metrics evolving)</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" align="center">
+      <img src="docs/public/crowded-seed-concept.jpg" alt="Crowded field with object seed" width="100%" /><br/>
+      <sub><b>Crowded fields</b> — seed one object, track in Z</sub>
+    </td>
+    <td width="50%" align="center">
+      <img src="docs/public/active-surfaces-sketch.jpg" alt="Active surfaces refinement sketch" width="100%" /><br/>
+      <sub><b>Active surfaces</b> — experimental refinement</sub>
+    </td>
+  </tr>
+</table>
+
+### Real validation previews (from the pipeline)
+
+| DOPC vesicle (seeded) | Crowded CZI field | RBC field |
+| :---: | :---: | :---: |
+| <img src="docs/public/preview-dopc-seed.png" width="260" alt="DOPC seed-frame preview" /> | <img src="docs/public/preview-crowded-czi.png" width="260" alt="Crowded CZI seed preview" /> | <img src="docs/public/preview-rbc-seed.png" width="260" alt="RBC seed preview" /> |
+
+These PNGs are **actual MorphoStack outputs** stored under `validation/runs/` — not mockups.
+
+<p align="center">
+  <img src="docs/public/brand-board.jpg" alt="MorphoStack brand board" width="90%" />
+</p>
+
+---
+
+## What it does
+
+MorphoStack turns confocal (and related) **Z-stacks** into **2D shape metrics** and optional **3D surface/volume** measurements — with honest calibration, manifests, and batch workflows built for biophysics lab use.
+
+| Capability | Details |
+| --- | --- |
+| **Formats** | TIFF/TIF, LSM, CZI |
+| **Profiles** | `vesicle`, `rbc`, experimental `active_surfaces` |
+| **Selection** | Z-range, rectangular ROI, circle/polygon **object seed**, frame exclusion |
+| **Analysis** | Threshold suggestion, sweeps, headless `analyze` / `batch` |
+| **3D** | Marching-cubes mesh, preview, export OBJ/STL/PLY/GLB + mask TIFF |
+| **Provenance** | SHA-256 source hash, JSON manifests, Markdown reports, CSV validate |
+| **Surfaces** | CLI (`morphostack` / `mst`), FastAPI, Vite browser UI |
+
+> **Calibration honesty:** if voxel size is unknown, MorphoStack falls back to 1×1×1 µm and **warns**. Those numbers are geometry in default units — not automatic biology. See [docs/limitations.md](docs/limitations.md).
+
+---
+
+## Quick start
+
+### Install (development)
+
+```bash
+git clone https://github.com/<your-org>/MorphoStack.git
+cd MorphoStack
+python -m venv .venv
+
+# Windows
+.\.venv\Scripts\python -m pip install -e ".[all]"
+.\.venv\Scripts\morphostack doctor
+
+# macOS / Linux
+source .venv/bin/activate
+python -m pip install -e ".[all]"
+morphostack doctor
+```
+
+Optional browser UI deps:
+
+```bash
+morphostack init --web
+```
+
+### Commands that matter
+
+Both entry points work (same code path):
+
+```bash
+morphostack --version    # MorphoStack 0.1.0
+mst --version            # MorphoStack 0.1.0
+```
 
 ```bash
 morphostack doctor
-morphostack init
-morphostack init --web
-morphostack project init --out morphostack.project.json
-morphostack inspect path\to\stack.tif
-morphostack threshold path\to\stack.tif
-morphostack sweep path\to\stack.tif --start 50 --stop 200 --step 10 --out sweep.csv
-morphostack analyze path\to\stack.tif --threshold 100 --out metrics.csv
-morphostack analyze path\to\stack.tif --threshold 100 --out metrics.csv --report
-morphostack analyze path\to\stack.tif --threshold 100 --bundle-dir runs
-morphostack analyze path\to\stack.tif --threshold 100 --profile rbc --z-range 5 30 --out metrics.csv
-morphostack analyze crowded.czi --threshold 190 --seed-x 360 --seed-y 517 --seed-frame 105 --mesh --mesh-export mesh.obj --bundle-dir runs
-morphostack batch path\to\stacks --threshold 100 --out batch_summary.csv
-morphostack batch path\to\stacks --threshold 100 --out batch_summary.csv --bundle-dir runs
-morphostack validate reference_metrics.csv new_metrics.csv
-morphostack validate reference_batch.csv new_batch.csv --key-column source_path --all-columns
-morphostack serve
-morphostack dev
-mst doctor
+morphostack inspect path/to/stack.tif
+morphostack threshold path/to/stack.tif
+morphostack analyze path/to/stack.tif --threshold 100 --out metrics.csv --report
+morphostack analyze crowded.czi --threshold 190 \
+  --seed-x 360 --seed-y 517 --seed-frame 105 \
+  --mesh --mesh-export mesh.obj --bundle-dir runs
+morphostack batch path/to/stacks --threshold 100 --out batch_summary.csv
+morphostack validate reference.csv new.csv
+morphostack app          # local UI + API (built web dist)
+morphostack dev          # API + Vite hot reload
+mst doctor               # short alias
 ```
 
-Both commands use the same CLI entry point. `mst` is the short alias.
+---
 
-## Development Install
+## Architecture (one engine, three doors)
+
+```text
+  CLI (morphostack / mst)  ─┐
+  FastAPI backend          ─┼─►  src/morphostack/core/
+  Browser UI (apps/web)    ─┘         I/O · segmentation · metrics
+                                      mesh · pipeline · export
+```
+
+| Path | Role |
+| --- | --- |
+| `src/morphostack/core/` | Science + pipeline |
+| `src/morphostack/cli/` | Command line |
+| `src/morphostack/api/` | HTTP API |
+| `apps/web/` | TypeScript UI |
+| `tests/` | pytest suite (195+) |
+| `validation/` | Real + synthetic regression runs |
+| `docs/` | Usage, methods, limitations |
+| `docs/public/` | README graphics & brand assets |
+
+---
+
+## Robustness you can inspect
+
+- **Synthetic geometry** — sphere & ellipsoid regression under `validation/runs/`
+- **Real stacks** — DOPC GUV, crowded CZI, RBC multi-object seeds
+- **Touching-object negative case** — documents failure modes honestly
+- **Active surfaces vs threshold** comparison reports in `validation/reports/`
+- **Wheel packaging** — `scripts/build_wheel.ps1`, `scripts/verify_release_wheel.ps1`
 
 ```bash
-python -m venv .venv
-.\.venv\Scripts\python -m pip install -e ".[dev]"
-.\.venv\Scripts\morphostack doctor
+pytest
+# optional heavy real-data tests:
+pytest -m slow
 ```
 
-`doctor` reports OS/Python hardware details, command paths and versions for
-Git/Node/npm, Python dependency availability, and whether the web app's
-`node_modules` directory is installed.
+---
 
-To inspect the machine and optionally install the heavier analysis/API
-dependencies into the active environment:
+## Documentation map
 
-```bash
-.\.venv\Scripts\morphostack init
-```
+Full index: **[docs/README.md](docs/README.md)**
 
-Add `--web` to also install browser UI dependencies in `apps\web`:
+| Doc | Topic |
+| --- | --- |
+| [docs/getting-started.md](docs/getting-started.md) | Install, doctor, first analyze |
+| [docs/usage.md](docs/usage.md) | Browser UI + CLI workflows |
+| [docs/metrics.md](docs/metrics.md) | Metric definitions |
+| [docs/methods.md](docs/methods.md) | Paste-ready methods text |
+| [docs/limitations.md](docs/limitations.md) | Scientific caveats |
+| [docs/active-surfaces.md](docs/active-surfaces.md) | Experimental profile |
+| [docs/validation.md](docs/validation.md) | Regression runs |
+| [docs/troubleshooting.md](docs/troubleshooting.md) | Common failures |
+| [docs/distribution.md](docs/distribution.md) | Wheels & releases |
+| [docs/citations.md](docs/citations.md) | Libraries & data citations |
 
-```bash
-.\.venv\Scripts\morphostack init --web
-```
+---
 
-To inspect a stack after installing analysis dependencies:
+## Scientific lineage
 
-```bash
-.\.venv\Scripts\morphostack inspect path\to\stack.tif --voxel-x 0.1 --voxel-y 0.1 --voxel-z 0.5
-```
+MorphoStack is a **ground-up redesign** of earlier Shape-Analysis tooling used in soft-matter vesicle work, aimed at cleaner units, headless automation, tests, and crowded-field seeding.
 
-To create a reusable project settings file for a dataset or experiment:
+When reporting analyses that use public DOPC supplementary stacks, cite the original experimental papers (see [docs/citations.md](docs/citations.md)).
 
-```bash
-.\.venv\Scripts\morphostack project init --out morphostack.project.json --profile rbc --threshold 100 --voxel-x 0.1 --voxel-y 0.1 --voxel-z 0.5 --fallback-contours --sweep-start 50 --sweep-stop 200 --sweep-step 10
-```
+Suggested software mention:
 
-The project file is plain JSON. `analyze`, `batch`, `threshold`, `sweep`, and
-`inspect` can read it with `--project morphostack.project.json`. Explicit
-command-line flags override project defaults.
+> MorphoStack v0.1.0 — local morphometry toolkit for microscopy Z-stacks.
 
-To suggest a starting threshold before analysis:
+---
 
-```bash
-.\.venv\Scripts\morphostack threshold path\to\stack.tif --method auto
-```
+## License
 
-To compare several thresholds and export one summary row per threshold:
+[MIT](LICENSE) © 2026 Abhinav
 
-```bash
-.\.venv\Scripts\morphostack sweep path\to\stack.tif --start 50 --stop 200 --step 10 --out sweep.csv --voxel-x 0.1 --voxel-y 0.1 --voxel-z 0.5
-```
+---
 
-The sweep CSV includes frame counts, valid contour fraction, warning codes, and
-summary statistics for the same shape descriptors used by `analyze`.
-
-To run the current headless analysis pipeline and export per-frame metrics:
-
-```bash
-.\.venv\Scripts\morphostack analyze path\to\stack.tif --threshold 100 --out metrics.csv --voxel-x 0.1 --voxel-y 0.1 --voxel-z 0.5
-```
-
-With a project file, the same command can reuse stored threshold, profile,
-voxel size, ROI, Z range, mesh, and contour settings:
-
-```bash
-.\.venv\Scripts\morphostack analyze path\to\stack.tif --out metrics.csv --project morphostack.project.json
-```
-
-Use `--profile vesicle` or `--profile rbc` to record the biological analysis
-profile. The current RBC profile shares the same threshold-contour engine while
-providing a clean branch point for RBC-specific metrics.
-
-Add `--mesh` to assemble contour masks and include marching-cubes 3D surface area, volume, equivalent sphere diameter, and sphericity in the CSV.
-Use `--z-range ZMIN ZMAX` to trim top/bottom stack slices before thresholding,
-preview, sweep, analysis, or batch processing. Bounds are inclusive-exclusive,
-so `--z-range 5 30` analyzes source frames 5 through 29 and preserves those
-source frame indices in exported rows.
-By default, `morphostack analyze` also writes `<metrics.csv>.manifest.json`
-with source path, version, profile, voxel size, ROI, Z range, threshold, mesh
-settings, source SHA-256, voxel source, run-level summary statistics, quality
-warnings, and CSV columns.
-Use `--no-manifest` to skip it or
-`--manifest path\to\run.json` to choose the JSON path.
-Add `--report` to also write a Markdown report at
-`<metrics.csv>.report.md`, or pass `--report path\to\report.md` to choose the
-path.
-Use `--bundle-dir runs` to create a run folder containing `metrics.csv`,
-`manifest.json`, and `report.md` together.
-
-To analyze a folder of stacks and produce one summary table:
-
-```bash
-.\.venv\Scripts\morphostack batch path\to\stacks --threshold 100 --out batch_summary.csv --voxel-x 0.1 --voxel-y 0.1 --voxel-z 0.5
-```
-
-Add `--recursive` to include subdirectories, and `--metrics-dir path\to\frames`
-to also save each stack's per-frame metrics CSV.
-Add `--bundle-dir path\to\runs` to create one run bundle per stack, each with
-`metrics.csv`, `manifest.json`, and `report.md`.
-The batch summary includes each stack's source SHA-256 so exported rows can be
-matched back to exact input files.
-
-To compare a new CSV export against a reference export:
-
-```bash
-.\.venv\Scripts\morphostack validate reference_metrics.csv new_metrics.csv --tolerance 0.000001
-```
-
-Use `--columns area_um2 circularity deformation_index` to restrict validation
-to selected metrics. This is intended for regression checks against trusted
-legacy outputs or curated lab reference datasets.
-Use `--all-columns` when comparing batch summary CSVs and provenance columns
-such as `source_sha256` should be checked exactly.
-
-To start the local backend for the future web UI:
-
-```bash
-.\.venv\Scripts\morphostack serve
-```
-
-To start the local backend and web UI together during development:
-
-```bash
-.\.venv\Scripts\morphostack dev
-```
-
-Use `.\.venv\Scripts\morphostack dev --check` to verify that Python API
-dependencies, npm, and web dependencies are available before launching.
-It also checks that the selected backend and web ports are free; use
-`--api-port` or `--web-port` if another process is already using the defaults.
-
-Current API endpoints:
-
-- `GET /health`
-- `POST /inspect`
-- `POST /analyze`
-- `POST /threshold`
-- `POST /preview`
-- `POST /mesh-preview`
-- `POST /mesh-export`
-- `POST /sweep`
-- `POST /upload/inspect`
-- `POST /upload/analyze`
-- `POST /upload/batch`
-- `POST /upload/validate`
-- `POST /upload/threshold`
-- `POST /upload/preview`
-- `POST /upload/sweep`
-
-To start only the browser UI during development:
-
-```bash
-cd apps\web
-npm install
-npm run dev
-```
-
-The browser UI can preview threshold segmentation, analyze a selected TIFF/CZI
-file through upload endpoints, or use a local stack path when the backend can
-already access the file. After analysis, the frame metrics table can be
-downloaded as a CSV file, and the run manifest can be downloaded as JSON.
-The browser can also download a Markdown report from the latest analysis run.
-The web app can also run a threshold sweep and download the sweep summary as
-CSV or a Markdown threshold sweep report.
-Project settings JSON can be loaded into the browser controls or downloaded
-from the current controls for reuse in the CLI.
-Multiple uploaded stacks can be batch analyzed into one spreadsheet-friendly
-summary CSV and a Markdown batch report.
-CSV validation is available in the browser for comparing new exports against
-reference metric files.
-The analysis summary reports valid-frame means, minima, maxima, and standard
-deviations for core shape descriptors.
-Current 2D descriptors include area, perimeter, circularity, bounding-box size,
-aspect ratio, elongation, deformation index, extent, equivalent diameter, and
-solidity.
-The `Suggest` threshold tool uses Otsu thresholding when available and falls
-back to a percentile-based suggestion.
-Threshold sweep support can compare a range of candidate thresholds and export
-spreadsheet-friendly summary rows for threshold sensitivity checks.
-Analysis warnings are shown in the UI and included in the run manifest.
-If voxel spacing falls back to MorphoStack defaults, analysis outputs include a
-`default_voxel_size` warning because physical units are uncalibrated.
-The analysis profile selector supports `vesicle`, `rbc`, and `active_surfaces` (active
-surfaces, experimental). See [REFERENCE_FOLDERS.md](REFERENCE_FOLDERS.md) for
-local-only reference folders that are not product source.
-
-## Architecture Direction
-
-- Python core package for scientific analysis.
-- FastAPI backend for local app/runtime APIs.
-- Vite web frontend in `apps/web`.
-- Later packaging through `pipx`, GitHub Releases, and a Windows installer.
-
-No GitHub remote is configured yet.
-
-## Core Migration Rules
-
-- Keep GUI behavior out of `morphostack.core`.
-- Load files non-interactively; voxel sizes must come from metadata, defaults, or explicit caller overrides.
-- Store physical spacing as micrometers through `VoxelSize`.
-- Record whether voxel spacing came from metadata, a user override, or defaults.
-- Use project settings JSON when a dataset needs reproducible CLI defaults.
-- Use `vx * vy` for areas and anisotropic segment lengths for perimeters.
-- Keep shape descriptors unit-consistent; solidity must compare physical area
-  with physical convex-hull area.
-- Keep basic threshold previews usable without OpenCV; use optional OpenCV only for richer contour smoothing/extraction.
-- When `opencv-python` is installed, `segmentation_preview` uses real external contours instead of the rectangular fallback.
-- Use `analyze_stack` as the headless core pipeline for CLI/API/UI workflows.
-- Use `morphostack batch` when a directory of stacks should become one
-  spreadsheet-friendly summary table.
-- Use `morphostack sweep` when a threshold needs sensitivity checking before a
-  fixed analysis run.
-- Use `morphostack validate` to compare generated CSV metrics against reference
-  outputs before trusting analysis changes.
-- Treat vesicle and RBC analysis as explicit profiles, even where early shared
-  processing is identical.
-- Treat heavy analysis libraries such as OpenCV and scikit-image as optional until the pipeline needs them.
-- Ambiguous 3D arrays with final channel size 3 or 4 are treated as single color images; grayscale stacks should be shaped `(z, y, x)` without an RGB-like final channel.
+<p align="center">
+  <img src="docs/public/logo-mark.jpg" width="96" alt="MorphoStack" /><br/>
+  <sub>Measure the stack. Trust the units. Ship the run.</sub>
+</p>

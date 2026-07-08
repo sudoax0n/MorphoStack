@@ -1,21 +1,104 @@
+# --- Python ---
 .venv/
+venv/
+env/
 __pycache__/
 *.py[cod]
+*$py.class
+*.so
+.Python
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# --- Build / packaging ---
 dist/
 build/
-*.egg-info/
+*.whl
+*.egg
+.wheels/
+
+# --- Node / web ---
 node_modules/
 apps/web/dist/
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# --- MorphoStack runtime / logs ---
 .morphostack-dev.err.log
 .morphostack-dev.out.log
+*.log
+runs/
+*.project.json
+!morphostack.project.example.json
+
+# --- Secrets & local env ---
 .env
 .env.*
 !.env.example
+*.pem
+*.key
+
+# --- Local tooling (not product source) ---
 .clones/
 mcps/
 scratch/
 terminals/
+researches/
+private/
+notes/
 
+# --- Personal / agent-only notes (NEVER ship) ---
+AGENTS.md
+improvements.md
+REFERENCE_FOLDERS.md
+grok*.md
+*rating*.md
+**/research-notes.md
+**/personal/
+**/_private/
+
+# --- Editor / OS ---
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# --- Large microscopy data (never commit raw stacks) ---
+*.tif
+*.tiff
+*.czi
+*.lsm
+*.nd2
+*.oib
+*.lif
+*.ims
+*.zarr/
+temp_uploads/
+**/raw-data/
+**/data/private/
+
+# --- Generated analysis dumps ---
+**/metrics_local.csv
+**/mesh_local.obj
+**/_tmp/
+**/tmp/
+
+# --- Optional heavy artifacts (uncomment if clone size is painful) ---
+# validation/runs/**/*.obj
+# validation/runs/**/*.glb
+# validation/runs/**/*.stl
+# validation/runs/**/*.ply
