@@ -15,7 +15,10 @@ validation/
 ├── README.md              # This file
 ├── research-notes.md      # External library survey (licenses, reuse guidance)
 ├── runs/                  # One subdirectory per validation run
-│   └── dopc-smoke-test/   # First real-data run on the DOPC movie
+│   ├── dopc-smoke-test/   # First real-data run on the DOPC movie
+│   ├── czi-1650-crowded-two-objects/
+│   ├── rbc-image46-crowded-two-objects/
+│   └── synthetic-sphere/  # Known-geometry regression case
 │       ├── metrics.csv
 │       ├── manifest.json
 │       └── report.md
@@ -45,6 +48,8 @@ acquisition metadata or instrument log.
 ```powershell
 # From D:\MorphoStack
 .\scripts\validate_dopc.ps1
+python scripts\validate_synthetic.py
+python scripts\validate_crowded.py
 ```
 
 See `scripts/validate_dopc.ps1` for full details.

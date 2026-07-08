@@ -38,6 +38,7 @@ from morphostack.core.mesh import (
     write_mesh_obj,
     write_mesh_ply,
     write_mesh_stl,
+    write_mask_stack_tiff,
 )
 from morphostack.core.metrics import ContourMetrics, contour_metrics
 from morphostack.core.models import ImageStack, VoxelSize
@@ -53,6 +54,8 @@ from morphostack.core.pipeline import (
     ZRange,
     analyze_frame,
     analyze_stack,
+    mesh_contours_from_analysis,
+    normalize_excluded_frames,
     object_seed_payload,
     tracking_diagnostics_payload,
 )
@@ -114,6 +117,8 @@ __all__ = [
     "as_grayscale_stack",
     "analyze_frame",
     "analyze_stack",
+    "mesh_contours_from_analysis",
+    "normalize_excluded_frames",
     "analysis_manifest",
     "analysis_report_markdown",
     "analysis_rows",
@@ -149,6 +154,7 @@ __all__ = [
     "write_mesh_obj",
     "write_mesh_ply",
     "write_mesh_stl",
+    "write_mask_stack_tiff",
     "suggest_threshold",
     "threshold_sweep",
     "threshold_sweep_rows",

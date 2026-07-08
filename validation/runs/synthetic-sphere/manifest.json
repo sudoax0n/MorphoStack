@@ -1,0 +1,63 @@
+{
+  "columns": [
+    "frame_index",
+    "threshold",
+    "profile",
+    "method",
+    "excluded",
+    "has_contour",
+    "area_px2",
+    "perimeter_px",
+    "area_um2",
+    "perimeter_um",
+    "circularity",
+    "bbox_width_um",
+    "bbox_height_um",
+    "aspect_ratio",
+    "elongation",
+    "deformation_index",
+    "extent",
+    "equivalent_diameter_um",
+    "solidity",
+    "mesh_surface_area_um2",
+    "mesh_volume_um3",
+    "mesh_equivalent_sphere_diameter_um",
+    "mesh_sphericity"
+  ],
+  "created_at_utc": "2026-07-08T15:58:15.291673+00:00",
+  "excluded_frame_count": 0,
+  "excluded_frames": [],
+  "frame_count": 10,
+  "include_mesh": true,
+  "mesh": null,
+  "morphostack_version": "0.1.0",
+  "object_seed": null,
+  "prefer_opencv": false,
+  "profile": "vesicle",
+  "roi": null,
+  "source_path": "synthetic-sphere",
+  "source_sha256": null,
+  "summary": {
+    "frame_count": 10,
+    "metrics": {},
+    "valid_fraction": 0.0,
+    "valid_frame_count": 0
+  },
+  "threshold": 100,
+  "tracking": null,
+  "valid_frame_count": 0,
+  "voxel_size": {
+    "x_um": 1.0,
+    "y_um": 1.0,
+    "z_um": 1.0
+  },
+  "voxel_source": "override",
+  "warnings": [
+    {
+      "code": "no_valid_contours",
+      "message": "No frames produced a valid contour. Check threshold, ROI, and image contrast.",
+      "severity": "error"
+    }
+  ],
+  "z_range": null
+}

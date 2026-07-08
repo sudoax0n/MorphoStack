@@ -40,8 +40,8 @@ from morphostack.core import (
     threshold_values,
 )
 from morphostack.core.export import BATCH_SUMMARY_COLUMNS, analysis_rows
-from morphostack.core.mesh import MeshGeometry, contour_stack_mesh_geometry, write_mesh_file
-from morphostack.core.pipeline import object_seed_payload, tracking_diagnostics_payload
+from morphostack.core.mesh import MeshGeometry, contour_stack_mesh_geometry, write_mask_stack_tiff, write_mesh_file
+from morphostack.core.pipeline import mesh_contours_from_analysis, object_seed_payload, tracking_diagnostics_payload
 from morphostack.core.preview import PreviewImage, render_segmentation_preview_png
 from morphostack.core.segmentation import apply_rect_roi, apply_z_range
 
@@ -94,6 +94,7 @@ class AnalyzeRequest(BaseModel):
     include_mesh: bool = False
     prefer_opencv: bool = True
     object_seed: ObjectSeedRequest | None = None
+    excluded_frames: list[int] = Field(default_factory=list)
 
 
 class MeshPreviewRequest(BaseModel):
@@ -107,6 +108,7 @@ class MeshPreviewRequest(BaseModel):
     downsample: int = Field(default=2, ge=1, le=8)
     max_faces: int = Field(default=12000, ge=1000, le=50000)
     object_seed: ObjectSeedRequest | None = None
+    excluded_frames: list[int] = Field(default_factory=list)
 
 
 class MeshExportRequest(BaseModel):
@@ -120,6 +122,20 @@ class MeshExportRequest(BaseModel):
     downsample: int = Field(default=1, ge=1, le=8)
     max_faces: int = Field(default=50000, ge=1000, le=100000)
     object_seed: ObjectSeedRequest | None = None
+    excluded_frames: list[int] = Field(default_factory=list)
+    destination: str
+
+
+class MaskExportRequest(BaseModel):
+    path: str
+    threshold: float
+    profile: str = DEFAULT_PROFILE
+    voxel: VoxelOverride | None = None
+    roi: ROIRequest | None = None
+    z_range: ZRangeRequest | None = None
+    prefer_opencv: bool = True
+    object_seed: ObjectSeedRequest | None = None
+    excluded_frames: list[int] = Field(default_factory=list)
     destination: str
 
 
@@ -155,7 +171,7 @@ class SweepRequest(BaseModel):
     prefer_opencv: bool = True
 
 
-def create_app() -> FastAPI:
+def create_app(*, static_dir: Path | None = None) -> FastAPI:
     app = FastAPI(title="MorphoStack API", version=__version__)
 
     @app.get("/health")
@@ -192,6 +208,7 @@ def create_app() -> FastAPI:
                 prefer_opencv=request.prefer_opencv,
                 include_mesh=request.include_mesh,
                 object_seed=to_object_seed(request.object_seed),
+                excluded_frames=request.excluded_frames,
             )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -209,6 +226,7 @@ def create_app() -> FastAPI:
             "profile": analysis.profile,
             "frame_count": len(analysis.frames),
             "valid_frame_count": len(analysis.valid_frames),
+            "excluded_frames": sorted(analysis.excluded_frames),
             "voxel_size": voxel_payload(stack.voxel_size),
             "voxel_source": stack.voxel_source,
             "mesh": mesh,
@@ -300,10 +318,11 @@ def create_app() -> FastAPI:
                 prefer_opencv=request.prefer_opencv,
                 include_mesh=False,
                 object_seed=to_object_seed(request.object_seed),
+                excluded_frames=request.excluded_frames,
             )
             filtered = apply_preview_filters(stack.grayscale, roi, z_range)
             geometry = contour_stack_mesh_geometry(
-                tuple(frame.contour for frame in analysis.frames),
+                mesh_contours_from_analysis(analysis),
                 shape=filtered.shape,
                 voxel=stack.voxel_size,
                 downsample=request.downsample,
@@ -330,10 +349,11 @@ def create_app() -> FastAPI:
                 prefer_opencv=request.prefer_opencv,
                 include_mesh=False,
                 object_seed=to_object_seed(request.object_seed),
+                excluded_frames=request.excluded_frames,
             )
             filtered = apply_preview_filters(stack.grayscale, roi, z_range)
             geometry = contour_stack_mesh_geometry(
-                tuple(frame.contour for frame in analysis.frames),
+                mesh_contours_from_analysis(analysis),
                 shape=filtered.shape,
                 voxel=stack.voxel_size,
                 downsample=request.downsample,
@@ -354,6 +374,42 @@ def create_app() -> FastAPI:
             "voxel_source": stack.voxel_source,
             "object_seed": object_seed_payload(to_object_seed(request.object_seed)),
             "tracking": tracking_diagnostics_payload(analysis.tracking),
+        }
+
+    @app.post("/mask-export")
+    def mask_export(request: MaskExportRequest) -> dict[str, object]:
+        try:
+            stack = load_image_stack(request.path, voxel_override=to_voxel_size(request.voxel))
+            roi = to_rect_roi(request.roi)
+            z_range = to_z_range(request.z_range)
+            analysis = analyze_stack(
+                stack.grayscale,
+                thresholds=request.threshold,
+                voxel_size=stack.voxel_size,
+                roi=roi,
+                z_range=z_range,
+                profile=request.profile,
+                prefer_opencv=request.prefer_opencv,
+                include_mesh=False,
+                object_seed=to_object_seed(request.object_seed),
+                excluded_frames=request.excluded_frames,
+            )
+            filtered = apply_preview_filters(stack.grayscale, roi, z_range)
+            write_mask_stack_tiff(
+                mesh_contours_from_analysis(analysis),
+                shape=filtered.shape,
+                destination=request.destination,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        return {
+            "source_path": str(stack.source_path),
+            "destination": request.destination,
+            "format": "tiff",
+            "frame_count": len(analysis.frames),
+            "voxel_source": stack.voxel_source,
+            "excluded_frames": sorted(analysis.excluded_frames),
         }
 
     @app.post("/sweep")
@@ -432,6 +488,7 @@ def create_app() -> FastAPI:
         object_seed_max_dist_um: Annotated[float | None, Form()] = None,
         object_seed_type: Annotated[str, Form()] = "circle",
         object_seed_points: Annotated[str | None, Form()] = None,
+        excluded_frames: Annotated[str | None, Form()] = None,
     ) -> dict[str, object]:
         temp_path = save_upload_to_temp(file)
         try:
@@ -460,6 +517,7 @@ def create_app() -> FastAPI:
                 prefer_opencv=prefer_opencv,
                 include_mesh=include_mesh,
                 object_seed=seed,
+                excluded_frames=parse_excluded_frames_text(excluded_frames),
             )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -479,6 +537,7 @@ def create_app() -> FastAPI:
             "profile": analysis.profile,
             "frame_count": len(analysis.frames),
             "valid_frame_count": len(analysis.valid_frames),
+            "excluded_frames": sorted(analysis.excluded_frames),
             "voxel_size": voxel_payload(stack.voxel_size),
             "voxel_source": stack.voxel_source,
             "mesh": mesh,
@@ -632,7 +691,7 @@ def create_app() -> FastAPI:
             )
             filtered = apply_preview_filters(stack.grayscale, roi, z_range)
             geometry = contour_stack_mesh_geometry(
-                tuple(frame.contour for frame in analysis.frames),
+                mesh_contours_from_analysis(analysis),
                 shape=filtered.shape,
                 voxel=stack.voxel_size,
                 downsample=downsample,
@@ -832,7 +891,9 @@ def create_app() -> FastAPI:
             results=results,
         )
 
-    return app
+    if static_dir is None:
+        return app
+    return mount_static_ui(app, Path(static_dir))
 
 
 def to_voxel_size(voxel: VoxelOverride | None) -> VoxelSize | None:
@@ -1095,6 +1156,27 @@ def parse_columns(columns: str | None) -> list[str] | None:
 
 def voxel_payload(voxel: VoxelSize) -> dict[str, float]:
     return {"x_um": voxel.x_um, "y_um": voxel.y_um, "z_um": voxel.z_um}
+
+
+def parse_excluded_frames_text(value: str | None) -> list[int]:
+    if not value or not value.strip():
+        return []
+    frames: list[int] = []
+    for part in value.replace(";", ",").split(","):
+        part = part.strip()
+        if part:
+            frames.append(int(part))
+    return frames
+
+
+def mount_static_ui(api: FastAPI, static_dir: Path) -> FastAPI:
+    from fastapi import FastAPI as RootFastAPI
+    from fastapi.staticfiles import StaticFiles
+
+    root = RootFastAPI(title="MorphoStack", version=__version__)
+    root.mount("/api", api)
+    root.mount("/", StaticFiles(directory=static_dir, html=True), name="static")
+    return root
 
 
 app = create_app()

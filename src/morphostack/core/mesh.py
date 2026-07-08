@@ -289,6 +289,25 @@ def write_mesh_ply(geometry: MeshGeometry, destination: str | Path) -> None:
     path.write_text("\n".join(header + body) + "\n", encoding="utf-8")
 
 
+def write_mask_stack_tiff(
+    contours: list[np.ndarray | None] | tuple[np.ndarray | None, ...],
+    *,
+    shape: tuple[int, int, int],
+    destination: str | Path,
+) -> None:
+    """Write rasterized contour masks as an 8-bit TIFF stack shaped (z, y, x)."""
+
+    try:
+        import tifffile
+    except Exception as exc:  # pragma: no cover - dependency-specific branch
+        raise RuntimeError("tifffile is required for mask export") from exc
+
+    mask_stack = contours_to_mask_stack(contours, shape=shape)
+    path = Path(destination)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tifffile.imwrite(path, (mask_stack * 255).astype(np.uint8), photometric="minisblack")
+
+
 def write_mesh_file(geometry: MeshGeometry, destination: str | Path) -> str:
     """Write mesh geometry using the destination file extension."""
 

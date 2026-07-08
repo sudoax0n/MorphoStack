@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Sequence, Any
 
 import numpy as np
@@ -222,6 +222,19 @@ class FrameAnalysis:
     preview: SegmentationPreview
 
 
+def normalize_excluded_frames(excluded_frames: Sequence[int] | None) -> frozenset[int]:
+    if not excluded_frames:
+        return frozenset()
+    return frozenset(int(frame_index) for frame_index in excluded_frames)
+
+
+def mesh_contours_from_analysis(analysis: StackAnalysis) -> tuple[np.ndarray | None, ...]:
+    return tuple(
+        None if frame.frame_index in analysis.excluded_frames else frame.contour
+        for frame in analysis.frames
+    )
+
+
 @dataclass(frozen=True)
 class StackAnalysis:
     voxel_size: VoxelSize
@@ -230,10 +243,15 @@ class StackAnalysis:
     mesh: MeshMeasurement | None = None
     z_range: ZRange | None = None
     tracking: TrackingDiagnostics | None = None
+    excluded_frames: frozenset[int] = field(default_factory=frozenset)
 
     @property
     def valid_frames(self) -> tuple[FrameAnalysis, ...]:
-        return tuple(frame for frame in self.frames if frame.metrics is not None)
+        return tuple(
+            frame
+            for frame in self.frames
+            if frame.metrics is not None and frame.frame_index not in self.excluded_frames
+        )
 
 
 def analyze_frame(
@@ -273,6 +291,7 @@ def analyze_stack(
     include_mesh: bool = False,
     object_seed: ObjectSeed | None = None,
     limeseg_watershed_pre_split: bool = True,
+    excluded_frames: Sequence[int] | None = None,
 ) -> StackAnalysis:
     analysis_profile = normalize_profile(profile)
     arr = np.asarray(stack)
@@ -464,10 +483,19 @@ def analyze_stack(
                 frames_list.append(fa)
         frames = tuple(frames_list)
 
+    excluded_set = normalize_excluded_frames(excluded_frames)
+    if excluded_set:
+        frame_indices = {frame.frame_index for frame in frames}
+        invalid = sorted(excluded_set - frame_indices)
+        if invalid:
+            raise ValueError(f"excluded frame index(es) not in analyzed stack: {invalid}")
     mesh = None
     if include_mesh:
+        mesh_contours = tuple(
+            None if frame.frame_index in excluded_set else frame.contour for frame in frames
+        )
         mesh = measure_contour_stack(
-            tuple(frame.contour for frame in frames),
+            mesh_contours,
             shape=(len(frames), arr.shape[1], arr.shape[2]),
             voxel=voxel_size,
         )
@@ -479,6 +507,7 @@ def analyze_stack(
         mesh=mesh,
         z_range=z_range,
         tracking=tracking_value,
+        excluded_frames=excluded_set,
     )
 
 

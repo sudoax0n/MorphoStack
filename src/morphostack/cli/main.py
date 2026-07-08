@@ -45,6 +45,8 @@ from morphostack.core import (
     write_analysis_manifest_json,
     write_analysis_report_markdown,
     write_batch_summary_csv,
+    mesh_contours_from_analysis,
+    write_mask_stack_tiff,
     write_mesh_file,
     write_project_settings,
     write_threshold_sweep_csv,
@@ -129,6 +131,14 @@ def build_parser() -> argparse.ArgumentParser:
     serve = subparsers.add_parser("serve", help="Run the local FastAPI backend.")
     serve.add_argument("--host", default="127.0.0.1", help="Bind host. Default: 127.0.0.1.")
     serve.add_argument("--port", default=8000, type=int, help="Bind port. Default: 8000.")
+    app_cmd = subparsers.add_parser(
+        "app",
+        help="Run MorphoStack as a single local web app (built UI + API).",
+    )
+    app_cmd.add_argument("--host", default="127.0.0.1", help="Bind host. Default: 127.0.0.1.")
+    app_cmd.add_argument("--port", default=8000, type=int, help="Bind port. Default: 8000.")
+    app_cmd.add_argument("--no-open", action="store_true", help="Do not open the browser.")
+    app_cmd.add_argument("--no-build", action="store_true", help="Do not run npm build if dist is missing.")
     dev = subparsers.add_parser("dev", help="Run the local backend and browser UI together.")
     dev.add_argument("--host", default="127.0.0.1", help="Bind host. Default: 127.0.0.1.")
     dev.add_argument("--api-port", default=8000, type=int, help="Backend port. Default: 8000.")
@@ -254,6 +264,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--mesh-export",
         help="Write a 3D mesh file (.obj, .stl, or .ply) alongside analysis outputs.",
     )
+    analyze.add_argument(
+        "--mask-export",
+        help="Write a binary mask stack as TIFF alongside analysis outputs.",
+    )
+    analyze.add_argument(
+        "--exclude-frame",
+        action="append",
+        type=int,
+        dest="exclude_frames",
+        metavar="INDEX",
+        help="Exclude a frame index from metrics summary and 3D mesh. Repeat for multiple frames.",
+    )
     batch = subparsers.add_parser(
         "batch",
         help="Analyze every supported stack in a directory and write one summary CSV.",
@@ -367,6 +389,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "serve":
         return run_serve(host=args.host, port=args.port)
 
+    if args.command == "app":
+        return run_app(
+            host=args.host,
+            port=args.port,
+            open_browser=not args.no_open,
+            allow_build=not args.no_build,
+        )
+
     if args.command == "threshold":
         return run_threshold(
             path=args.path,
@@ -414,6 +444,8 @@ def main(argv: list[str] | None = None) -> int:
                 seed_max_dist_um=args.seed_max_dist_um,
             ),
             mesh_export=args.mesh_export,
+            mask_export=args.mask_export,
+            exclude_frames=args.exclude_frames,
         )
 
     if args.command == "sweep":
@@ -680,6 +712,8 @@ def run_analyze(
     project: str | None = None,
     object_seed: ObjectSeed | None = None,
     mesh_export: str | None = None,
+    mask_export: str | None = None,
+    exclude_frames: list[int] | None = None,
 ) -> int:
     project_settings = load_project_for_command(project)
     if isinstance(project_settings, int):
@@ -718,6 +752,7 @@ def run_analyze(
             prefer_opencv=resolved_prefer_opencv,
             include_mesh=resolved_mesh,
             object_seed=object_seed,
+            excluded_frames=exclude_frames,
         )
         warnings = analysis_run_warnings(analysis, voxel_source=stack.voxel_source)
         summary = analysis_summary(analysis)
@@ -765,7 +800,7 @@ def run_analyze(
                     ymax=rect_roi.ymax,
                 )
             geometry = contour_stack_mesh_geometry(
-                tuple(frame.contour for frame in analysis.frames),
+                mesh_contours_from_analysis(analysis),
                 shape=mesh_stack.shape,
                 voxel=stack.voxel_size,
             )
@@ -775,6 +810,29 @@ def run_analyze(
                 mesh_export_path.parent.mkdir(parents=True, exist_ok=True)
                 export_format = write_mesh_file(geometry, mesh_export_path)
                 print(f"Mesh export ({export_format}): {mesh_export_path}")
+        mask_export_path = None
+        if mask_export:
+            mask_export_path = Path(mask_export)
+            if run_bundle_dir is not None and not mask_export_path.is_absolute():
+                mask_export_path = run_bundle_dir / mask_export_path
+            mask_stack = stack.grayscale
+            if resolved_z_range is not None:
+                mask_stack = apply_z_range(mask_stack, zmin=resolved_z_range.zmin, zmax=resolved_z_range.zmax)
+            if rect_roi is not None:
+                mask_stack = apply_rect_roi(
+                    mask_stack,
+                    xmin=rect_roi.xmin,
+                    xmax=rect_roi.xmax,
+                    ymin=rect_roi.ymin,
+                    ymax=rect_roi.ymax,
+                )
+            mask_export_path.parent.mkdir(parents=True, exist_ok=True)
+            write_mask_stack_tiff(
+                mesh_contours_from_analysis(analysis),
+                shape=mask_stack.shape,
+                destination=mask_export_path,
+            )
+            print(f"Mask export (tiff): {mask_export_path}")
         report_path = None
         if report is not None or run_bundle_dir is not None:
             if report:
@@ -1164,6 +1222,49 @@ def run_serve(*, host: str, port: int) -> int:
         return 1
 
     uvicorn.run("morphostack.api:app", host=host, port=port)
+    return 0
+
+
+def run_app(
+    *,
+    host: str = "127.0.0.1",
+    port: int = 8000,
+    open_browser: bool = True,
+    allow_build: bool = True,
+) -> int:
+    try:
+        import uvicorn
+    except Exception as exc:
+        print(f"Failed to start MorphoStack app: uvicorn is required ({exc})")
+        return 1
+
+    dist_dir = WEB_APP_DIR / "dist"
+    if not dist_dir.exists():
+        if not allow_build:
+            print(f"Built web UI was not found at {dist_dir}. Run npm run build in apps/web first.")
+            return 1
+        npm_command = shutil.which("npm")
+        if npm_command is None:
+            print("npm is required to build the web UI. Run morphostack init --web first.")
+            return 1
+        print("Building MorphoStack web UI...")
+        build = subprocess.run(
+            [npm_command, "run", "build"],
+            cwd=WEB_APP_DIR,
+            check=False,
+        )
+        if build.returncode != 0 or not dist_dir.exists():
+            print("Web UI build failed. Fix apps/web build errors, then retry morphostack app.")
+            return build.returncode or 1
+
+    from morphostack.api.app import create_app
+
+    app_url = f"http://{host}:{port}"
+    print("MorphoStack app is starting.")
+    print(f"Open: {app_url}")
+    if open_browser:
+        webbrowser.open(app_url)
+    uvicorn.run(create_app(static_dir=dist_dir), host=host, port=port)
     return 0
 
 

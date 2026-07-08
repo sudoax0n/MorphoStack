@@ -60,10 +60,10 @@ def test_write_analysis_csv_writes_header_and_rows():
     write_analysis_csv(analysis, buffer)
 
     csv_text = buffer.getvalue()
-    assert "frame_index,threshold,profile,method,has_contour" in csv_text
+    assert "frame_index,threshold,profile,method,excluded,has_contour" in csv_text
     assert "bbox_width_um,bbox_height_um,aspect_ratio,elongation,deformation_index,extent,equivalent_diameter_um,solidity" in csv_text
     assert "mesh_surface_area_um2,mesh_volume_um3,mesh_equivalent_sphere_diameter_um,mesh_sphericity" in csv_text
-    assert "0,100.0,vesicle,fallback,True" in csv_text
+    assert "0,100.0,vesicle,fallback,False,True" in csv_text
 
 
 def test_analysis_manifest_records_run_settings():

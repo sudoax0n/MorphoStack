@@ -38,6 +38,7 @@ type AnalysisRow = {
   threshold: number;
   profile: AnalysisProfile;
   method: string;
+  excluded?: boolean;
   has_contour: boolean;
   area_px2: number;
   perimeter_px: number;
@@ -73,6 +74,7 @@ type AnalyzeResponse = {
   profile: AnalysisProfile;
   frame_count: number;
   valid_frame_count: number;
+  excluded_frames?: number[];
   voxel_size: VoxelOverride;
   voxel_source: string;
   object_seed: ObjectSeed | null;
@@ -598,6 +600,7 @@ app.innerHTML = `
     <div class="results-header">
       <h2><span class="step-badge">5</span> Frame Metrics</h2>
       <div class="button-row">
+        <button id="reanalyze-excluded-btn" class="secondary" type="button" disabled>Re-analyze with exclusions</button>
         <button id="download-report-btn" class="secondary" type="button" disabled>Download Report</button>
         <button id="download-manifest-btn" class="secondary" type="button" disabled>Download Manifest</button>
         <button id="download-csv-btn" class="secondary" type="button" disabled>Download CSV</button>
@@ -607,6 +610,7 @@ app.innerHTML = `
       <table>
         <thead>
           <tr>
+            <th>Exclude</th>
             <th>Frame</th>
             <th>Method</th>
             <th>Contour</th>
@@ -621,7 +625,7 @@ app.innerHTML = `
           </tr>
         </thead>
         <tbody id="results-body">
-          <tr><td colspan="11" class="muted">Run an analysis to populate metrics.</td></tr>
+          <tr><td colspan="12" class="muted">Run an analysis to populate metrics.</td></tr>
         </tbody>
       </table>
     </div>
@@ -665,6 +669,7 @@ const resultsBody = mustElement<HTMLTableSectionElement>("results-body");
 const batchResultsBody = mustElement<HTMLTableSectionElement>("batch-results-body");
 const sweepResultsBody = mustElement<HTMLTableSectionElement>("sweep-results-body");
 const validationResultsBody = mustElement<HTMLTableSectionElement>("validation-results-body");
+const reanalyzeExcludedButton = mustElement<HTMLButtonElement>("reanalyze-excluded-btn");
 const downloadCsvButton = mustElement<HTMLButtonElement>("download-csv-btn");
 const downloadReportButton = mustElement<HTMLButtonElement>("download-report-btn");
 const downloadManifestButton = mustElement<HTMLButtonElement>("download-manifest-btn");
@@ -687,6 +692,7 @@ let latestSweep: SweepResponse | null = null;
 let inspectedFrameCount: number | null = null;
 let previewDebounce: number | null = null;
 let selectedObjectSeed: ObjectSeed | null = null;
+let excludedFrameIndices = new Set<number>();
 let selectObjectMode = false;
 let polygonPoints: { imgX: number; imgY: number }[] = [];
 let polygonClosed = false;
@@ -705,6 +711,10 @@ mustElement<HTMLSelectElement>("calibration-mode").addEventListener("change", (e
 
 mustElement<HTMLButtonElement>("analyze-btn").addEventListener("click", () => {
   void analyzeStack();
+});
+
+mustElement<HTMLButtonElement>("reanalyze-excluded-btn").addEventListener("click", () => {
+  void analyzeStack({ keepExclusions: true });
 });
 
 mustElement<HTMLButtonElement>("preview-btn").addEventListener("click", () => {
@@ -1057,18 +1067,30 @@ async function suggestThreshold(): Promise<void> {
   }
 }
 
-async function analyzeStack(): Promise<void> {
+async function analyzeStack(options: { keepExclusions?: boolean } = {}): Promise<void> {
+  if (options.keepExclusions) {
+    syncExcludedFramesFromTable();
+  } else {
+    excludedFrameIndices = new Set<number>();
+  }
   latestAnalysis = null;
   downloadCsvButton.disabled = true;
   downloadReportButton.disabled = true;
   downloadManifestButton.disabled = true;
+  reanalyzeExcludedButton.disabled = true;
   analysisSummary.textContent = "Analyzing...";
-  resultsBody.innerHTML = `<tr><td colspan="11" class="muted">Running analysis...</td></tr>`;
+  resultsBody.innerHTML = `<tr><td colspan="12" class="muted">Running analysis...</td></tr>`;
   const file = selectedFile();
-  logAction("Analyze Stack Started", file ? `Uploading "${file.name}"` : `Local path "${readPath()}"`);
+  const excluded = Array.from(excludedFrameIndices).sort((a, b) => a - b);
+  logAction(
+    "Analyze Stack Started",
+    file
+      ? `Uploading "${file.name}"${excluded.length ? `, excluding frames: ${excluded.join(", ")}` : ""}`
+      : `Local path "${readPath()}"${excluded.length ? `, excluding frames: ${excluded.join(", ")}` : ""}`
+  );
   try {
     const payload = file
-      ? await apiUploadPost<AnalyzeResponse>("/api/upload/analyze", analyzeUploadForm(file))
+      ? await apiUploadPost<AnalyzeResponse>("/api/upload/analyze", analyzeUploadForm(file, excluded))
       : await apiPost<AnalyzeResponse>("/api/analyze", {
           path: readPath(),
           threshold: readNumber("threshold-input"),
@@ -1078,13 +1100,15 @@ async function analyzeStack(): Promise<void> {
           z_range: readZRange(),
           include_mesh: mustElement<HTMLInputElement>("mesh-input").checked,
           prefer_opencv: !mustElement<HTMLInputElement>("fallback-input").checked,
-          object_seed: selectedObjectSeed
+          object_seed: selectedObjectSeed,
+          excluded_frames: excluded
         });
+    excludedFrameIndices = new Set(payload.excluded_frames ?? excluded);
     renderAnalysis(payload);
     logAction("Analyze Stack Succeeded", `Source: "${payload.source_path}", Valid frames: ${payload.valid_frame_count}/${payload.frame_count}`);
   } catch (error) {
     analysisSummary.textContent = errorMessage(error);
-    resultsBody.innerHTML = `<tr><td colspan="11" class="muted">Analysis failed.</td></tr>`;
+    resultsBody.innerHTML = `<tr><td colspan="12" class="muted">Analysis failed.</td></tr>`;
     logAction("Analyze Stack Failed", `Error: ${errorMessage(error)}`);
   }
 }
@@ -1900,12 +1924,23 @@ function meshBounds(vertices: number[][]): {
   );
 }
 
+function syncExcludedFramesFromTable(): void {
+  const next = new Set<number>();
+  resultsBody.querySelectorAll<HTMLInputElement>("input[data-exclude-frame]").forEach((input) => {
+    if (input.checked) {
+      next.add(Number(input.dataset.excludeFrame));
+    }
+  });
+  excludedFrameIndices = next;
+}
+
 function renderAnalysis(payload: AnalyzeResponse): void {
   latestAnalysis = payload;
   latestTracking = payload.tracking;
   downloadCsvButton.disabled = payload.rows.length === 0;
   downloadReportButton.disabled = false;
   downloadManifestButton.disabled = false;
+  reanalyzeExcludedButton.disabled = payload.rows.length === 0;
   const meshText = payload.mesh
     ? `<br />3D surface: ${formatNumber(payload.mesh.surface_area_um2)} um2, volume: ${formatNumber(payload.mesh.volume_um3)} um3, sphericity: ${formatNumber(payload.mesh.sphericity)}`
     : "";
@@ -1917,7 +1952,11 @@ function renderAnalysis(payload: AnalyzeResponse): void {
   analysisSummary.innerHTML = `
     <strong>${escapeHtml(payload.source_path)}</strong><br />
     Profile: ${escapeHtml(payload.profile)}<br />
-    Frames: ${payload.frame_count}, valid: ${payload.valid_frame_count}<br />
+    Frames: ${payload.frame_count}, valid: ${payload.valid_frame_count}${
+      payload.excluded_frames && payload.excluded_frames.length > 0
+        ? `, excluded: ${payload.excluded_frames.join(", ")}`
+        : ""
+    }<br />
     ${voxelSourceMarkup(payload.voxel_source)}${summaryText}${meshText}
     ${warningText}
   `;
@@ -1925,14 +1964,15 @@ function renderAnalysis(payload: AnalyzeResponse): void {
   updateTrackingDebugOverlay(globalPreviewFrameIndex(readLocalPreviewFrameIndex()), readRoi());
 
   if (payload.rows.length === 0) {
-    resultsBody.innerHTML = `<tr><td colspan="11" class="muted">No rows returned.</td></tr>`;
+    resultsBody.innerHTML = `<tr><td colspan="12" class="muted">No rows returned.</td></tr>`;
     return;
   }
 
   resultsBody.innerHTML = payload.rows
     .map(
       (row) => `
-        <tr>
+        <tr class="${row.excluded ? "frame-excluded" : ""}">
+          <td><input type="checkbox" data-exclude-frame="${row.frame_index}" ${row.excluded ? "checked" : ""} aria-label="Exclude frame ${row.frame_index}" /></td>
           <td>${row.frame_index}</td>
           <td>${escapeHtml(row.method)}</td>
           <td>${row.has_contour ? "yes" : "no"}</td>
@@ -2637,7 +2677,7 @@ function appendObjectSeedFields(formData: FormData): void {
   }
 }
 
-function analyzeUploadForm(file: File): FormData {
+function analyzeUploadForm(file: File, excludedFrames: number[] = []): FormData {
   const formData = new FormData();
   appendFileAndVoxel(formData, file);
   formData.set("threshold", String(readNumber("threshold-input")));
@@ -2647,6 +2687,9 @@ function analyzeUploadForm(file: File): FormData {
   appendRoiFields(formData);
   appendZRangeFields(formData);
   appendObjectSeedFields(formData);
+  if (excludedFrames.length > 0) {
+    formData.set("excluded_frames", excludedFrames.join(","));
+  }
   return formData;
 }
 

@@ -23,6 +23,7 @@ CSV_COLUMNS = (
     "threshold",
     "profile",
     "method",
+    "excluded",
     "has_contour",
     "area_px2",
     "perimeter_px",
@@ -82,13 +83,15 @@ def analysis_rows(analysis: StackAnalysis) -> list[dict[str, object]]:
     for frame in analysis.frames:
         metrics = frame.metrics
         mesh = analysis.mesh
+        excluded = frame.frame_index in analysis.excluded_frames
         rows.append(
             {
                 "frame_index": frame.frame_index,
                 "threshold": frame.threshold,
                 "profile": frame.profile,
                 "method": frame.preview.method,
-                "has_contour": metrics is not None,
+                "excluded": excluded,
+                "has_contour": metrics is not None and not excluded,
                 "area_px2": metrics.area_px2 if metrics else 0.0,
                 "perimeter_px": metrics.perimeter_px if metrics else 0.0,
                 "area_um2": metrics.area_um2 if metrics else 0.0,
@@ -113,6 +116,17 @@ def analysis_rows(analysis: StackAnalysis) -> list[dict[str, object]]:
 
 def analysis_warnings(analysis: StackAnalysis) -> list[dict[str, object]]:
     warnings: list[dict[str, object]] = []
+    if analysis.excluded_frames:
+        warnings.append(
+            {
+                "code": "excluded_frames",
+                "severity": "info",
+                "message": (
+                    f"{len(analysis.excluded_frames)} frame(s) excluded from metrics summary and 3D mesh."
+                ),
+                "frame_indices": sorted(analysis.excluded_frames),
+            }
+        )
     frame_count = len(analysis.frames)
     valid_count = len(analysis.valid_frames)
     if frame_count == 0:
@@ -315,6 +329,8 @@ def analysis_manifest(
         "voxel_source": voxel_source,
         "frame_count": len(analysis.frames),
         "valid_frame_count": len(analysis.valid_frames),
+        "excluded_frames": sorted(analysis.excluded_frames),
+        "excluded_frame_count": len(analysis.excluded_frames),
         "mesh": mesh,
         "summary": analysis_summary(analysis),
         "warnings": analysis_run_warnings(analysis, voxel_source=voxel_source),
@@ -477,6 +493,7 @@ def analysis_report_markdown(
             f"- Frames: {summary['frame_count']}",
             f"- Valid frames: {summary['valid_frame_count']}",
             f"- Valid fraction: {format_report_number(summary['valid_fraction'])}",
+            f"- Excluded frames: {sorted(analysis.excluded_frames) if analysis.excluded_frames else 'none'}",
             "",
         ]
     )

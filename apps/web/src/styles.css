@@ -506,6 +506,12 @@ input.voxel-default-warning {
   font-weight: 700;
 }
 
+.frame-excluded td {
+  opacity: 0.55;
+  text-decoration: line-through;
+  text-decoration-color: rgba(248, 113, 113, 0.65);
+}
+
 .warning-list {
   margin-top: 0.75rem;
   padding: 0.65rem 0.75rem;
