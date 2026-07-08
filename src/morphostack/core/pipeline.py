@@ -53,6 +53,39 @@ class ObjectSeed:
 
 
 @dataclass(frozen=True)
+class FrameTrackingRecord:
+    frame_index: int
+    tracked: bool
+    centroid_x: float | None = None
+    centroid_y: float | None = None
+    area_px: int = 0
+    touches_roi_boundary: bool = False
+    likely_neighbor_merge: bool = False
+
+
+@dataclass(frozen=True)
+class TrackingDiagnostics:
+    records: tuple[FrameTrackingRecord, ...]
+    seed_frame_area_px: int = 0
+
+    @property
+    def lost_frame_count(self) -> int:
+        return sum(1 for record in self.records if not record.tracked)
+
+    @property
+    def lost_fraction(self) -> float:
+        if not self.records:
+            return 0.0
+        return self.lost_frame_count / len(self.records)
+
+
+@dataclass(frozen=True)
+class ObjectTrackingResult:
+    seeds: list[tuple[int, int] | None]
+    tracked_components: list[dict[str, Any] | None]
+
+
+@dataclass(frozen=True)
 class StackViewTransform:
     x_offset: int
     y_offset: int
@@ -196,6 +229,7 @@ class StackAnalysis:
     frames: tuple[FrameAnalysis, ...]
     mesh: MeshMeasurement | None = None
     z_range: ZRange | None = None
+    tracking: TrackingDiagnostics | None = None
 
     @property
     def valid_frames(self) -> tuple[FrameAnalysis, ...]:
@@ -387,7 +421,13 @@ def analyze_stack(
     else:
         # Build per-frame seeds via connected component tracking when local_seed is provided.
         # Note: frame_offset is 0 because local_seed is already in local coordinates.
-        per_frame_seeds = _build_per_frame_seeds(arr, per_frame_thresholds, local_seed, 0, voxel_size=voxel_size)
+        tracking_result = _track_object(arr, per_frame_thresholds, local_seed, 0, voxel_size=voxel_size)
+        per_frame_seeds = tracking_result.seeds
+        tracking = (
+            build_tracking_diagnostics(tracking_result, frame_offset=frame_offset, image_shape=arr.shape[1:])
+            if object_seed is not None
+            else None
+        )
 
         frames_list = []
         for idx, frame in enumerate(arr):
@@ -428,10 +468,18 @@ def analyze_stack(
     if include_mesh:
         mesh = measure_contour_stack(
             tuple(frame.contour for frame in frames),
-            shape=stack.shape,
+            shape=(len(frames), arr.shape[1], arr.shape[2]),
             voxel=voxel_size,
         )
-    return StackAnalysis(voxel_size=voxel_size, profile=analysis_profile, frames=frames, mesh=mesh, z_range=z_range)
+    tracking_value = tracking if "tracking" in locals() else None
+    return StackAnalysis(
+        voxel_size=voxel_size,
+        profile=analysis_profile,
+        frames=frames,
+        mesh=mesh,
+        z_range=z_range,
+        tracking=tracking_value,
+    )
 
 
 def get_connected_components(mask: np.ndarray, min_area_px: int = 16) -> list[dict[str, Any]]:
@@ -528,22 +576,92 @@ def get_connected_components(mask: np.ndarray, min_area_px: int = 16) -> list[di
     return components
 
 
-def _build_per_frame_seeds(
+def _component_touches_boundary(comp: dict[str, Any], *, height: int, width: int) -> bool:
+    ymin, ymax, xmin, xmax = comp["bbox"]
+    return ymin <= 0 or xmin <= 0 or ymax >= height or xmax >= width
+
+
+def build_tracking_diagnostics(
+    result: ObjectTrackingResult,
+    *,
+    frame_offset: int,
+    image_shape: tuple[int, int],
+) -> TrackingDiagnostics:
+    height, width = image_shape
+    seed_area = 0
+    records: list[FrameTrackingRecord] = []
+    for idx, comp in enumerate(result.tracked_components):
+        if comp is None:
+            records.append(FrameTrackingRecord(frame_index=idx + frame_offset, tracked=False))
+            continue
+        area_px = int(comp.get("area", 0))
+        if seed_area == 0:
+            seed_area = area_px
+        cx, cy = comp["centroid"]
+        records.append(
+            FrameTrackingRecord(
+                frame_index=idx + frame_offset,
+                tracked=True,
+                centroid_x=float(cx),
+                centroid_y=float(cy),
+                area_px=area_px,
+                touches_roi_boundary=_component_touches_boundary(comp, height=height, width=width),
+                likely_neighbor_merge=seed_area > 0 and area_px > seed_area * 2.5,
+            )
+        )
+    return TrackingDiagnostics(records=tuple(records), seed_frame_area_px=seed_area)
+
+
+def tracking_diagnostics_payload(diagnostics: TrackingDiagnostics | None) -> list[dict[str, object]] | None:
+    if diagnostics is None:
+        return None
+    return [
+        {
+            "frame_index": record.frame_index,
+            "tracked": record.tracked,
+            "centroid_x": record.centroid_x,
+            "centroid_y": record.centroid_y,
+            "area_px": record.area_px,
+            "touches_roi_boundary": record.touches_roi_boundary,
+            "likely_neighbor_merge": record.likely_neighbor_merge,
+        }
+        for record in diagnostics.records
+    ]
+
+
+def object_seed_payload(seed: ObjectSeed | None) -> dict[str, object] | None:
+    if seed is None:
+        return None
+    payload: dict[str, object] = {
+        "x": seed.x,
+        "y": seed.y,
+        "frame_index": seed.frame_index,
+        "radius": seed.radius,
+        "type": seed.type,
+        "max_tracking_dist_um": seed.max_tracking_dist_um,
+    }
+    if seed.points is not None:
+        payload["points"] = [{"x": point.x, "y": point.y} for point in seed.points]
+    return payload
+
+
+def _track_object(
     arr: np.ndarray,
     thresholds: tuple[float, ...],
     object_seed: ObjectSeed | None,
     frame_offset: int,
     voxel_size: VoxelSize | None = None,
-) -> list[tuple[int, int] | None]:
-    """Build a per-frame (x, y) seed list from a single ObjectSeed using overlap-first connected component tracking."""
+) -> ObjectTrackingResult:
+    """Track one object across frames and return per-frame seeds plus component metadata."""
     n = arr.shape[0]
     seeds: list[tuple[int, int] | None] = [None] * n
+    tracked_components: list[dict[str, Any] | None] = [None] * n
     if object_seed is None:
-        return seeds
+        return ObjectTrackingResult(seeds=seeds, tracked_components=tracked_components)
 
     local_seed_idx = object_seed.frame_index - frame_offset
     if local_seed_idx < 0 or local_seed_idx >= n:
-        return seeds
+        return ObjectTrackingResult(seeds=seeds, tracked_components=tracked_components)
 
     # Determine max tracking distance in pixels (voxel-aware and user-configurable)
     if object_seed.max_tracking_dist_um is not None and voxel_size is not None:
@@ -559,7 +677,7 @@ def _build_per_frame_seeds(
     mask = arr[local_seed_idx] >= thresholds[local_seed_idx]
     components = get_connected_components(mask)
     if not components:
-        return seeds
+        return ObjectTrackingResult(seeds=seeds, tracked_components=tracked_components)
 
     chosen_comp = None
     h, w = mask.shape
@@ -645,10 +763,11 @@ def _build_per_frame_seeds(
             chosen_comp = None
 
     if chosen_comp is None:
-        return seeds
+        return ObjectTrackingResult(seeds=seeds, tracked_components=tracked_components)
 
     cx, cy = chosen_comp["centroid"]
     seeds[local_seed_idx] = (int(round(cx)), int(round(cy)))
+    tracked_components[local_seed_idx] = chosen_comp
     seed_comp = chosen_comp
 
     # Track forward
@@ -699,6 +818,7 @@ def _build_per_frame_seeds(
 
         curr_cx, curr_cy = chosen_comp["centroid"]
         seeds[idx] = (int(round(curr_cx)), int(round(curr_cy)))
+        tracked_components[idx] = chosen_comp
         curr_comp = chosen_comp
 
     # Track backward
@@ -749,9 +869,10 @@ def _build_per_frame_seeds(
 
         curr_cx, curr_cy = chosen_comp["centroid"]
         seeds[idx] = (int(round(curr_cx)), int(round(curr_cy)))
+        tracked_components[idx] = chosen_comp
         curr_comp = chosen_comp
 
-    return seeds
+    return ObjectTrackingResult(seeds=seeds, tracked_components=tracked_components)
 
 
 def normalize_thresholds(thresholds: float | Sequence[float], *, frame_count: int) -> tuple[float, ...]:

@@ -40,7 +40,8 @@ from morphostack.core import (
     threshold_values,
 )
 from morphostack.core.export import BATCH_SUMMARY_COLUMNS, analysis_rows
-from morphostack.core.mesh import MeshGeometry, contour_stack_mesh_geometry
+from morphostack.core.mesh import MeshGeometry, contour_stack_mesh_geometry, write_mesh_file
+from morphostack.core.pipeline import object_seed_payload, tracking_diagnostics_payload
 from morphostack.core.preview import PreviewImage, render_segmentation_preview_png
 from morphostack.core.segmentation import apply_rect_roi, apply_z_range
 
@@ -106,6 +107,20 @@ class MeshPreviewRequest(BaseModel):
     downsample: int = Field(default=2, ge=1, le=8)
     max_faces: int = Field(default=12000, ge=1000, le=50000)
     object_seed: ObjectSeedRequest | None = None
+
+
+class MeshExportRequest(BaseModel):
+    path: str
+    threshold: float
+    profile: str = DEFAULT_PROFILE
+    voxel: VoxelOverride | None = None
+    roi: ROIRequest | None = None
+    z_range: ZRangeRequest | None = None
+    prefer_opencv: bool = True
+    downsample: int = Field(default=1, ge=1, le=8)
+    max_faces: int = Field(default=50000, ge=1000, le=100000)
+    object_seed: ObjectSeedRequest | None = None
+    destination: str
 
 
 class PreviewRequest(BaseModel):
@@ -199,6 +214,8 @@ def create_app() -> FastAPI:
             "mesh": mesh,
             "summary": analysis_summary(analysis),
             "warnings": analysis_run_warnings(analysis, voxel_source=stack.voxel_source),
+            "object_seed": object_seed_payload(to_object_seed(request.object_seed)),
+            "tracking": tracking_diagnostics_payload(analysis.tracking),
             "manifest": analysis_manifest(
                 analysis,
                 source_path=str(stack.source_path),
@@ -209,6 +226,7 @@ def create_app() -> FastAPI:
                 include_mesh=request.include_mesh,
                 prefer_opencv=request.prefer_opencv,
                 voxel_source=stack.voxel_source,
+                object_seed=to_object_seed(request.object_seed),
             ),
             "rows": analysis_rows(analysis),
         }
@@ -295,6 +313,48 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         return mesh_preview_payload(str(stack.source_path), geometry, downsample=request.downsample)
+
+    @app.post("/mesh-export")
+    def mesh_export(request: MeshExportRequest) -> dict[str, object]:
+        try:
+            stack = load_image_stack(request.path, voxel_override=to_voxel_size(request.voxel))
+            roi = to_rect_roi(request.roi)
+            z_range = to_z_range(request.z_range)
+            analysis = analyze_stack(
+                stack.grayscale,
+                thresholds=request.threshold,
+                voxel_size=stack.voxel_size,
+                roi=roi,
+                z_range=z_range,
+                profile=request.profile,
+                prefer_opencv=request.prefer_opencv,
+                include_mesh=False,
+                object_seed=to_object_seed(request.object_seed),
+            )
+            filtered = apply_preview_filters(stack.grayscale, roi, z_range)
+            geometry = contour_stack_mesh_geometry(
+                tuple(frame.contour for frame in analysis.frames),
+                shape=filtered.shape,
+                voxel=stack.voxel_size,
+                downsample=request.downsample,
+                max_faces=request.max_faces,
+            )
+            if geometry is None:
+                raise ValueError("Mesh export produced no geometry. Check threshold, seed, and ROI.")
+            export_format = write_mesh_file(geometry, request.destination)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        return {
+            "source_path": str(stack.source_path),
+            "destination": request.destination,
+            "format": export_format,
+            "vertex_count": int(len(geometry.vertices_xyz)),
+            "face_count": int(len(geometry.faces)),
+            "voxel_source": stack.voxel_source,
+            "object_seed": object_seed_payload(to_object_seed(request.object_seed)),
+            "tracking": tracking_diagnostics_payload(analysis.tracking),
+        }
 
     @app.post("/sweep")
     def sweep(request: SweepRequest) -> dict[str, object]:

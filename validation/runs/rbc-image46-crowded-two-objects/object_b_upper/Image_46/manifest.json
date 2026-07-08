@@ -1,0 +1,428 @@
+{
+  "columns": [
+    "frame_index",
+    "threshold",
+    "profile",
+    "method",
+    "has_contour",
+    "area_px2",
+    "perimeter_px",
+    "area_um2",
+    "perimeter_um",
+    "circularity",
+    "bbox_width_um",
+    "bbox_height_um",
+    "aspect_ratio",
+    "elongation",
+    "deformation_index",
+    "extent",
+    "equivalent_diameter_um",
+    "solidity",
+    "mesh_surface_area_um2",
+    "mesh_volume_um3",
+    "mesh_equivalent_sphere_diameter_um",
+    "mesh_sphericity"
+  ],
+  "created_at_utc": "2026-07-08T14:36:04.593358+00:00",
+  "frame_count": 28,
+  "include_mesh": true,
+  "mesh": {
+    "equivalent_sphere_diameter_um": 40.72341494442321,
+    "sphericity": 0.4024654813392864,
+    "surface_area_um2": 12945.225318482138,
+    "volume_um3": 35361.541666666664
+  },
+  "morphostack_version": "0.1.0",
+  "object_seed": {
+    "frame_index": 10,
+    "max_tracking_dist_um": null,
+    "radius": 12.0,
+    "type": "circle",
+    "x": 166.58,
+    "y": 304.13
+  },
+  "prefer_opencv": true,
+  "profile": "rbc",
+  "roi": null,
+  "source_path": "D:\\rbc data pranay\\Image 46.lsm",
+  "source_sha256": "097dcaa956d0aebece8c594307ed5fb7c53a1573d7cbca5416f5519835e77523",
+  "summary": {
+    "frame_count": 28,
+    "metrics": {
+      "area_um2": {
+        "max": 5181.0,
+        "mean": 2615.576923076923,
+        "min": 13.0,
+        "std": 2052.341887905636
+      },
+      "aspect_ratio": {
+        "max": 1.2083333333333333,
+        "mean": 1.120218782135957,
+        "min": 1.0,
+        "std": 0.046346079429292426
+      },
+      "bbox_height_um": {
+        "max": 92.0,
+        "mean": 60.46153846153846,
+        "min": 8.0,
+        "std": 30.315305564669643
+      },
+      "bbox_width_um": {
+        "max": 105.0,
+        "mean": 64.0,
+        "min": 8.0,
+        "std": 37.177329734044186
+      },
+      "circularity": {
+        "max": 0.7106322581999867,
+        "mean": 0.41027596106546077,
+        "min": 0.08935388871891353,
+        "std": 0.18017557133632903
+      },
+      "deformation_index": {
+        "max": 0.09433962264150944,
+        "mean": 0.05624178339639832,
+        "min": 0.0,
+        "std": 0.021028831090596327
+      },
+      "elongation": {
+        "max": 0.1724137931034483,
+        "mean": 0.10572765701707214,
+        "min": 0.0,
+        "std": 0.038522022570906936
+      },
+      "equivalent_diameter_um": {
+        "max": 81.21978872955087,
+        "mean": 50.60282494791953,
+        "min": 4.068428945128219,
+        "std": 27.741847055458884
+      },
+      "extent": {
+        "max": 0.7670723461798512,
+        "mean": 0.4993846738116179,
+        "min": 0.203125,
+        "std": 0.15101479830163744
+      },
+      "perimeter_um": {
+        "max": 675.2346314604058,
+        "mean": 263.1032798566331,
+        "min": 34.62741699796952,
+        "std": 171.6383541252942
+      },
+      "solidity": {
+        "max": 0.9649160110567723,
+        "mean": 0.8046474077643221,
+        "min": 0.37681159420289856,
+        "std": 0.15883636491166458
+      }
+    },
+    "valid_fraction": 0.4642857142857143,
+    "valid_frame_count": 13
+  },
+  "threshold": 43.0,
+  "tracking": [
+    {
+      "area_px": 0,
+      "centroid_x": null,
+      "centroid_y": null,
+      "frame_index": 0,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": false
+    },
+    {
+      "area_px": 0,
+      "centroid_x": null,
+      "centroid_y": null,
+      "frame_index": 1,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": false
+    },
+    {
+      "area_px": 0,
+      "centroid_x": null,
+      "centroid_y": null,
+      "frame_index": 2,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": false
+    },
+    {
+      "area_px": 0,
+      "centroid_x": null,
+      "centroid_y": null,
+      "frame_index": 3,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": false
+    },
+    {
+      "area_px": 0,
+      "centroid_x": null,
+      "centroid_y": null,
+      "frame_index": 4,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": false
+    },
+    {
+      "area_px": 26,
+      "centroid_x": 163.73076923076923,
+      "centroid_y": 291.84615384615387,
+      "frame_index": 5,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 3071,
+      "centroid_x": 168.05340280039076,
+      "centroid_y": 306.9247802018886,
+      "frame_index": 6,
+      "likely_neighbor_merge": true,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 4213,
+      "centroid_x": 162.28103489200095,
+      "centroid_y": 302.3289817232376,
+      "frame_index": 7,
+      "likely_neighbor_merge": true,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 3761,
+      "centroid_x": 158.3677213507046,
+      "centroid_y": 298.3916511566073,
+      "frame_index": 8,
+      "likely_neighbor_merge": true,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 2108,
+      "centroid_x": 164.36100569259963,
+      "centroid_y": 302.7424098671727,
+      "frame_index": 9,
+      "likely_neighbor_merge": true,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 2260,
+      "centroid_x": 166.61194690265486,
+      "centroid_y": 304.28761061946904,
+      "frame_index": 10,
+      "likely_neighbor_merge": true,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 3348,
+      "centroid_x": 160.9005376344086,
+      "centroid_y": 299.4047192353644,
+      "frame_index": 11,
+      "likely_neighbor_merge": true,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 1696,
+      "centroid_x": 184.91096698113208,
+      "centroid_y": 316.62205188679246,
+      "frame_index": 12,
+      "likely_neighbor_merge": true,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 1452,
+      "centroid_x": 185.62052341597797,
+      "centroid_y": 316.59090909090907,
+      "frame_index": 13,
+      "likely_neighbor_merge": true,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 674,
+      "centroid_x": 193.11721068249258,
+      "centroid_y": 306.5727002967359,
+      "frame_index": 14,
+      "likely_neighbor_merge": true,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 554,
+      "centroid_x": 193.36281588447653,
+      "centroid_y": 305.8971119133574,
+      "frame_index": 15,
+      "likely_neighbor_merge": true,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 348,
+      "centroid_x": 194.0344827586207,
+      "centroid_y": 306.07758620689657,
+      "frame_index": 16,
+      "likely_neighbor_merge": true,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 141,
+      "centroid_x": 193.14893617021278,
+      "centroid_y": 306.07092198581563,
+      "frame_index": 17,
+      "likely_neighbor_merge": true,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 0,
+      "centroid_x": null,
+      "centroid_y": null,
+      "frame_index": 18,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": false
+    },
+    {
+      "area_px": 0,
+      "centroid_x": null,
+      "centroid_y": null,
+      "frame_index": 19,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": false
+    },
+    {
+      "area_px": 0,
+      "centroid_x": null,
+      "centroid_y": null,
+      "frame_index": 20,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": false
+    },
+    {
+      "area_px": 0,
+      "centroid_x": null,
+      "centroid_y": null,
+      "frame_index": 21,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": false
+    },
+    {
+      "area_px": 0,
+      "centroid_x": null,
+      "centroid_y": null,
+      "frame_index": 22,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": false
+    },
+    {
+      "area_px": 0,
+      "centroid_x": null,
+      "centroid_y": null,
+      "frame_index": 23,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": false
+    },
+    {
+      "area_px": 0,
+      "centroid_x": null,
+      "centroid_y": null,
+      "frame_index": 24,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": false
+    },
+    {
+      "area_px": 0,
+      "centroid_x": null,
+      "centroid_y": null,
+      "frame_index": 25,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": false
+    },
+    {
+      "area_px": 0,
+      "centroid_x": null,
+      "centroid_y": null,
+      "frame_index": 26,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": false
+    },
+    {
+      "area_px": 0,
+      "centroid_x": null,
+      "centroid_y": null,
+      "frame_index": 27,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": false
+    }
+  ],
+  "valid_frame_count": 13,
+  "voxel_size": {
+    "x_um": 1.0,
+    "y_um": 1.0,
+    "z_um": 1.0
+  },
+  "voxel_source": "default",
+  "warnings": [
+    {
+      "code": "partial_contours",
+      "frame_count": 28,
+      "invalid_frame_count": 15,
+      "message": "15 of 28 frames did not produce a valid contour.",
+      "severity": "warning"
+    },
+    {
+      "code": "tracking_lost_many_frames",
+      "frame_count": 28,
+      "lost_frame_count": 15,
+      "message": "Object tracking was lost on 15 of 28 frames (54%). Metrics may mix frames or omit slices.",
+      "severity": "warning"
+    },
+    {
+      "code": "likely_neighbor_merge",
+      "frame_indices": [
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17
+      ],
+      "message": "Tracked component area grew sharply on 12 frame(s); neighbors may have merged.",
+      "severity": "warning"
+    },
+    {
+      "code": "default_voxel_size",
+      "message": "Voxel spacing came from MorphoStack defaults. Physical units should be treated as uncalibrated.",
+      "severity": "warning"
+    }
+  ],
+  "z_range": {
+    "zmax": 28,
+    "zmin": 0
+  }
+}

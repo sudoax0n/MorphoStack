@@ -1,0 +1,439 @@
+{
+  "columns": [
+    "frame_index",
+    "threshold",
+    "profile",
+    "method",
+    "has_contour",
+    "area_px2",
+    "perimeter_px",
+    "area_um2",
+    "perimeter_um",
+    "circularity",
+    "bbox_width_um",
+    "bbox_height_um",
+    "aspect_ratio",
+    "elongation",
+    "deformation_index",
+    "extent",
+    "equivalent_diameter_um",
+    "solidity",
+    "mesh_surface_area_um2",
+    "mesh_volume_um3",
+    "mesh_equivalent_sphere_diameter_um",
+    "mesh_sphericity"
+  ],
+  "created_at_utc": "2026-07-08T14:35:57.369309+00:00",
+  "frame_count": 30,
+  "include_mesh": true,
+  "mesh": {
+    "equivalent_sphere_diameter_um": 37.560313625410345,
+    "sphericity": 0.09084359564917512,
+    "surface_area_um2": 48788.108054318145,
+    "volume_um3": 27745.097294390307
+  },
+  "morphostack_version": "0.1.0",
+  "object_seed": {
+    "frame_index": 105,
+    "max_tracking_dist_um": null,
+    "radius": 12.0,
+    "type": "circle",
+    "x": 479.06,
+    "y": 94.07
+  },
+  "prefer_opencv": true,
+  "profile": "vesicle",
+  "roi": null,
+  "source_path": "C:\\Users\\systemm\\Downloads\\1650_z stack.czi",
+  "source_sha256": "9a8d42c04b63f7ee37ef8a5a6c8d70911a6326bd6d680b9362f75a110de46372",
+  "summary": {
+    "frame_count": 30,
+    "metrics": {
+      "area_um2": {
+        "max": 10084.171022664756,
+        "mean": 1849.7278170739146,
+        "min": 132.56347447657026,
+        "std": 3090.40733518523
+      },
+      "aspect_ratio": {
+        "max": 1.9268292682926835,
+        "mean": 1.2661798600503849,
+        "min": 1.0039525691699605,
+        "std": 0.18072979694532
+      },
+      "bbox_height_um": {
+        "max": 207.37986214451104,
+        "mean": 89.82807066041136,
+        "min": 39.897605613426016,
+        "std": 54.48857059316365
+      },
+      "bbox_width_um": {
+        "max": 142.7106662326392,
+        "mean": 81.11051690641553,
+        "min": 26.96376643105164,
+        "std": 37.60490570982854
+      },
+      "circularity": {
+        "max": 0.03019786759595579,
+        "mean": 0.006786818402983058,
+        "min": 0.001744277077612458,
+        "std": 0.006135421773732245
+      },
+      "deformation_index": {
+        "max": 0.3166666666666668,
+        "mean": 0.11233495660225841,
+        "min": 0.0019723865877711378,
+        "std": 0.0647904709913705
+      },
+      "elongation": {
+        "max": 0.4810126582278482,
+        "mean": 0.196097998118501,
+        "min": 0.00393700787401563,
+        "std": 0.10139128373815771
+      },
+      "equivalent_diameter_um": {
+        "max": 113.31180574825024,
+        "mean": 36.269233761690444,
+        "min": 12.991730365546372,
+        "std": 32.24421321780096
+      },
+      "extent": {
+        "max": 0.5131528107926738,
+        "mean": 0.12936280293777283,
+        "min": 0.04456876456874731,
+        "std": 0.1199889036782741
+      },
+      "perimeter_um": {
+        "max": 3819.3231817101296,
+        "mean": 1457.4197700264644,
+        "min": 467.0464303191026,
+        "std": 1039.5304636729718
+      },
+      "solidity": {
+        "max": 0.6848043886920858,
+        "mean": 0.1851400873032085,
+        "min": 0.0729390521483421,
+        "std": 0.1632968482963687
+      }
+    },
+    "valid_fraction": 1.0,
+    "valid_frame_count": 30
+  },
+  "threshold": 190.0,
+  "tracking": [
+    {
+      "area_px": 30580,
+      "centroid_x": 308.5095814257685,
+      "centroid_y": 483.940124264225,
+      "frame_index": 90,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": true,
+      "tracked": true
+    },
+    {
+      "area_px": 30554,
+      "centroid_x": 303.8312823198272,
+      "centroid_y": 488.33841722851344,
+      "frame_index": 91,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": true,
+      "tracked": true
+    },
+    {
+      "area_px": 29612,
+      "centroid_x": 301.9426246116439,
+      "centroid_y": 491.1384911522356,
+      "frame_index": 92,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 38384,
+      "centroid_x": 347.5840193830763,
+      "centroid_y": 406.10183930804504,
+      "frame_index": 93,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": true,
+      "tracked": true
+    },
+    {
+      "area_px": 29842,
+      "centroid_x": 309.7140272099725,
+      "centroid_y": 482.5786810535487,
+      "frame_index": 94,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 23999,
+      "centroid_x": 356.3706404433518,
+      "centroid_y": 508.4713113046377,
+      "frame_index": 95,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 27070,
+      "centroid_x": 314.36113779091244,
+      "centroid_y": 483.5414111562615,
+      "frame_index": 96,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 22595,
+      "centroid_x": 355.4081433945563,
+      "centroid_y": 516.2645718079222,
+      "frame_index": 97,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 21987,
+      "centroid_x": 361.3970982853504,
+      "centroid_y": 518.3101378087051,
+      "frame_index": 98,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 29609,
+      "centroid_x": 392.11938937485223,
+      "centroid_y": 412.4711743051099,
+      "frame_index": 99,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": true,
+      "tracked": true
+    },
+    {
+      "area_px": 7118,
+      "centroid_x": 484.4449283506603,
+      "centroid_y": 107.22127001966845,
+      "frame_index": 100,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": true,
+      "tracked": true
+    },
+    {
+      "area_px": 6697,
+      "centroid_x": 489.8680005972824,
+      "centroid_y": 101.39793937583993,
+      "frame_index": 101,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": true,
+      "tracked": true
+    },
+    {
+      "area_px": 7199,
+      "centroid_x": 494.09001250173634,
+      "centroid_y": 109.91151548826225,
+      "frame_index": 102,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": true,
+      "tracked": true
+    },
+    {
+      "area_px": 6239,
+      "centroid_x": 483.0823849975958,
+      "centroid_y": 96.33098252925149,
+      "frame_index": 103,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": true,
+      "tracked": true
+    },
+    {
+      "area_px": 6652,
+      "centroid_x": 488.8332832230908,
+      "centroid_y": 107.07095610342753,
+      "frame_index": 104,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": true,
+      "tracked": true
+    },
+    {
+      "area_px": 6044,
+      "centroid_x": 479.0957974851092,
+      "centroid_y": 94.22071475843812,
+      "frame_index": 105,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": true,
+      "tracked": true
+    },
+    {
+      "area_px": 6461,
+      "centroid_x": 486.80049527936853,
+      "centroid_y": 106.92400557189289,
+      "frame_index": 106,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": true,
+      "tracked": true
+    },
+    {
+      "area_px": 6365,
+      "centroid_x": 487.6234092694423,
+      "centroid_y": 108.09253731343284,
+      "frame_index": 107,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": true,
+      "tracked": true
+    },
+    {
+      "area_px": 6064,
+      "centroid_x": 477.345481530343,
+      "centroid_y": 103.33921503957784,
+      "frame_index": 108,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": true,
+      "tracked": true
+    },
+    {
+      "area_px": 5539,
+      "centroid_x": 478.0987542877776,
+      "centroid_y": 96.71854125293375,
+      "frame_index": 109,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": true,
+      "tracked": true
+    },
+    {
+      "area_px": 4182,
+      "centroid_x": 473.73601147776185,
+      "centroid_y": 97.06073648971784,
+      "frame_index": 110,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": true,
+      "tracked": true
+    },
+    {
+      "area_px": 3032,
+      "centroid_x": 451.5217678100264,
+      "centroid_y": 73.06398416886543,
+      "frame_index": 111,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": true,
+      "tracked": true
+    },
+    {
+      "area_px": 3557,
+      "centroid_x": 465.171773966826,
+      "centroid_y": 112.97076187798707,
+      "frame_index": 112,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": true,
+      "tracked": true
+    },
+    {
+      "area_px": 3001,
+      "centroid_x": 474.4915028323892,
+      "centroid_y": 117.68977007664112,
+      "frame_index": 113,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": true,
+      "tracked": true
+    },
+    {
+      "area_px": 3930,
+      "centroid_x": 475.995165394402,
+      "centroid_y": 125.28015267175573,
+      "frame_index": 114,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": true,
+      "tracked": true
+    },
+    {
+      "area_px": 3127,
+      "centroid_x": 459.864406779661,
+      "centroid_y": 101.02942117045092,
+      "frame_index": 115,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": true,
+      "tracked": true
+    },
+    {
+      "area_px": 3737,
+      "centroid_x": 479.92748193738294,
+      "centroid_y": 132.13192400321114,
+      "frame_index": 116,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": true,
+      "tracked": true
+    },
+    {
+      "area_px": 3187,
+      "centroid_x": 489.70913084405396,
+      "centroid_y": 142.2736115469093,
+      "frame_index": 117,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": true,
+      "tracked": true
+    },
+    {
+      "area_px": 3419,
+      "centroid_x": 490.40742907282834,
+      "centroid_y": 150.49517402749342,
+      "frame_index": 118,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": true,
+      "tracked": true
+    },
+    {
+      "area_px": 3380,
+      "centroid_x": 502.13491124260355,
+      "centroid_y": 156.65029585798817,
+      "frame_index": 119,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": true,
+      "tracked": true
+    }
+  ],
+  "valid_frame_count": 30,
+  "voxel_size": {
+    "x_um": 0.2192176132605825,
+    "y_um": 0.2192176132605825,
+    "z_um": 0.5
+  },
+  "voxel_source": "metadata",
+  "warnings": [
+    {
+      "code": "roi_boundary_touch",
+      "frame_indices": [
+        90,
+        91,
+        93,
+        99,
+        100,
+        101,
+        102,
+        103,
+        104,
+        105,
+        106,
+        107,
+        108,
+        109,
+        110,
+        111,
+        112,
+        113,
+        114,
+        115,
+        116,
+        117,
+        118,
+        119
+      ],
+      "message": "Selected component touches the ROI or crop boundary on 24 frame(s); area may be clipped.",
+      "severity": "warning"
+    }
+  ],
+  "z_range": {
+    "zmax": 120,
+    "zmin": 90
+  }
+}

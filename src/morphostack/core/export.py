@@ -10,7 +10,13 @@ from pathlib import Path
 from typing import TextIO
 
 from morphostack import __version__
-from morphostack.core.pipeline import StackAnalysis
+from morphostack.core.pipeline import (
+    ObjectSeed,
+    StackAnalysis,
+    TrackingDiagnostics,
+    object_seed_payload,
+    tracking_diagnostics_payload,
+)
 
 CSV_COLUMNS = (
     "frame_index",
@@ -149,8 +155,72 @@ def analysis_warnings(analysis: StackAnalysis) -> list[dict[str, object]]:
     return warnings
 
 
+def object_tracking_warnings(diagnostics: TrackingDiagnostics | None) -> list[dict[str, object]]:
+    if diagnostics is None or not diagnostics.records:
+        return []
+
+    warnings: list[dict[str, object]] = []
+    lost_count = diagnostics.lost_frame_count
+    frame_count = len(diagnostics.records)
+    if frame_count > 0 and lost_count > 0:
+        lost_fraction = diagnostics.lost_fraction
+        if lost_fraction >= 0.25:
+            warnings.append(
+                {
+                    "code": "tracking_lost_many_frames",
+                    "severity": "warning",
+                    "message": (
+                        f"Object tracking was lost on {lost_count} of {frame_count} frames "
+                        f"({lost_fraction:.0%}). Metrics may mix frames or omit slices."
+                    ),
+                    "lost_frame_count": lost_count,
+                    "frame_count": frame_count,
+                }
+            )
+        else:
+            warnings.append(
+                {
+                    "code": "tracking_lost_some_frames",
+                    "severity": "info",
+                    "message": f"Object tracking was lost on {lost_count} of {frame_count} frames.",
+                    "lost_frame_count": lost_count,
+                    "frame_count": frame_count,
+                }
+            )
+
+    boundary_frames = [record.frame_index for record in diagnostics.records if record.touches_roi_boundary]
+    if boundary_frames:
+        warnings.append(
+            {
+                "code": "roi_boundary_touch",
+                "severity": "warning",
+                "message": (
+                    "Selected component touches the ROI or crop boundary on "
+                    f"{len(boundary_frames)} frame(s); area may be clipped."
+                ),
+                "frame_indices": boundary_frames,
+            }
+        )
+
+    merge_frames = [record.frame_index for record in diagnostics.records if record.likely_neighbor_merge]
+    if merge_frames:
+        warnings.append(
+            {
+                "code": "likely_neighbor_merge",
+                "severity": "warning",
+                "message": (
+                    "Tracked component area grew sharply on "
+                    f"{len(merge_frames)} frame(s); neighbors may have merged."
+                ),
+                "frame_indices": merge_frames,
+            }
+        )
+    return warnings
+
+
 def analysis_run_warnings(analysis: StackAnalysis, *, voxel_source: str = "unknown") -> list[dict[str, object]]:
     warnings = analysis_warnings(analysis)
+    warnings.extend(object_tracking_warnings(analysis.tracking))
     if voxel_source == "default":
         warnings.append(
             {
@@ -216,6 +286,7 @@ def analysis_manifest(
     include_mesh: bool = False,
     prefer_opencv: bool = True,
     voxel_source: str = "unknown",
+    object_seed: ObjectSeed | None = None,
 ) -> dict[str, object]:
     mesh = None
     if analysis.mesh:
@@ -247,6 +318,8 @@ def analysis_manifest(
         "mesh": mesh,
         "summary": analysis_summary(analysis),
         "warnings": analysis_run_warnings(analysis, voxel_source=voxel_source),
+        "object_seed": object_seed_payload(object_seed),
+        "tracking": tracking_diagnostics_payload(analysis.tracking),
         "columns": list(CSV_COLUMNS),
     }
 
@@ -346,6 +419,7 @@ def analysis_report_markdown(
     include_mesh: bool = False,
     prefer_opencv: bool = True,
     voxel_source: str = "unknown",
+    object_seed: ObjectSeed | None = None,
     row_limit: int = 10,
 ) -> str:
     summary = analysis_summary(analysis)
@@ -373,13 +447,39 @@ def analysis_report_markdown(
             f"z={format_report_number(analysis.voxel_size.z_um)} um"
         ),
         "",
-        "## Frame Summary",
-        "",
-        f"- Frames: {summary['frame_count']}",
-        f"- Valid frames: {summary['valid_frame_count']}",
-        f"- Valid fraction: {format_report_number(summary['valid_fraction'])}",
-        "",
     ]
+    if object_seed is not None:
+        seed_payload = object_seed_payload(object_seed)
+        lines.extend(
+            [
+                "## Object Selection",
+                "",
+                f"- Seed frame: `{seed_payload['frame_index']}`",
+                f"- Seed center: `({format_report_number(seed_payload['x'])}, {format_report_number(seed_payload['y'])})`",
+                f"- Seed radius: `{format_report_number(seed_payload['radius'])}` px",
+                f"- Seed type: `{seed_payload['type']}`",
+                "",
+            ]
+        )
+    if analysis.tracking is not None:
+        lines.extend(
+            [
+                "## Tracking Diagnostics",
+                "",
+                f"- Tracked frames: {analysis.tracking.lost_frame_count} lost of {len(analysis.tracking.records)} total",
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            "## Frame Summary",
+            "",
+            f"- Frames: {summary['frame_count']}",
+            f"- Valid frames: {summary['valid_frame_count']}",
+            f"- Valid fraction: {format_report_number(summary['valid_fraction'])}",
+            "",
+        ]
+    )
 
     if warnings:
         lines.extend(["## Warnings", ""])

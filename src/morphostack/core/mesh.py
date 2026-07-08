@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import pi
+from pathlib import Path
 
 import numpy as np
 
@@ -219,6 +220,90 @@ def mask_centroid(mask: np.ndarray) -> tuple[float, float]:
     if moments["m00"] == 0:
         return (0.0, 0.0)
     return (float(moments["m10"] / moments["m00"]), float(moments["m01"] / moments["m00"]))
+
+
+def write_mesh_obj(geometry: MeshGeometry, destination: str | Path) -> None:
+    """Write mesh vertices and faces to Wavefront OBJ."""
+
+    path = Path(destination)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    vertices = np.asarray(geometry.vertices_xyz, dtype=np.float64)
+    faces = np.asarray(geometry.faces, dtype=np.int64)
+    lines = ["# MorphoStack mesh export"]
+    for vertex in vertices:
+        lines.append(f"v {vertex[0]:.6g} {vertex[1]:.6g} {vertex[2]:.6g}")
+    for face in faces:
+        # OBJ indices are 1-based.
+        lines.append(f"f {face[0] + 1} {face[1] + 1} {face[2] + 1}")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def write_mesh_stl(geometry: MeshGeometry, destination: str | Path) -> None:
+    """Write mesh triangles to ASCII STL."""
+
+    path = Path(destination)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    vertices = np.asarray(geometry.vertices_xyz, dtype=np.float64)
+    faces = np.asarray(geometry.faces, dtype=np.int64)
+    lines = ["solid morphostack"]
+    for face in faces:
+        triangle = vertices[face]
+        edge_a = triangle[1] - triangle[0]
+        edge_b = triangle[2] - triangle[0]
+        normal = np.cross(edge_a, edge_b)
+        norm = float(np.linalg.norm(normal))
+        if norm > 0:
+            normal = normal / norm
+        else:
+            normal = np.array([0.0, 0.0, 0.0])
+        lines.append(f"  facet normal {normal[0]:.6g} {normal[1]:.6g} {normal[2]:.6g}")
+        lines.append("    outer loop")
+        for vertex in triangle:
+            lines.append(f"      vertex {vertex[0]:.6g} {vertex[1]:.6g} {vertex[2]:.6g}")
+        lines.append("    endloop")
+        lines.append("  endfacet")
+    lines.append("endsolid morphostack")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def write_mesh_ply(geometry: MeshGeometry, destination: str | Path) -> None:
+    """Write mesh vertices and faces to ASCII PLY."""
+
+    path = Path(destination)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    vertices = np.asarray(geometry.vertices_xyz, dtype=np.float64)
+    faces = np.asarray(geometry.faces, dtype=np.int64)
+    header = [
+        "ply",
+        "format ascii 1.0",
+        f"element vertex {len(vertices)}",
+        "property float x",
+        "property float y",
+        "property float z",
+        f"element face {len(faces)}",
+        "property list uchar int vertex_indices",
+        "end_header",
+    ]
+    body = [f"{vertex[0]:.6g} {vertex[1]:.6g} {vertex[2]:.6g}" for vertex in vertices]
+    body.extend(f"3 {int(face[0])} {int(face[1])} {int(face[2])}" for face in faces)
+    path.write_text("\n".join(header + body) + "\n", encoding="utf-8")
+
+
+def write_mesh_file(geometry: MeshGeometry, destination: str | Path) -> str:
+    """Write mesh geometry using the destination file extension."""
+
+    path = Path(destination)
+    suffix = path.suffix.lower()
+    if suffix == ".obj":
+        write_mesh_obj(geometry, path)
+        return "obj"
+    if suffix == ".stl":
+        write_mesh_stl(geometry, path)
+        return "stl"
+    if suffix == ".ply":
+        write_mesh_ply(geometry, path)
+        return "ply"
+    raise ValueError("Mesh export supports .obj, .stl, and .ply destinations")
 
 
 def _filter_outlier_contours(

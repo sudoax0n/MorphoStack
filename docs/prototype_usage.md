@@ -27,34 +27,40 @@ If the default ports are busy:
 ## Normal Demo Workflow
 
 1. In **Stack**, choose a `.tif`, `.tiff`, `.lsm`, or `.czi` file.
-2. Enter voxel calibration in micrometers.
-   - Use metadata values if known.
-   - If unsure, leave `1`, but say that physical units are uncalibrated.
+2. Choose calibration mode:
+   - **Auto** reads metadata from TIFF/LSM/CZI when available.
+   - **Manual override** when you know the microscope spacing.
+   - Default `1×1×1 µm` is highlighted in red — say clearly that physical units are uncalibrated.
 3. Click **Inspect**.
-   - Confirm the stack shape and voxel source.
+   - Confirm stack shape and voxel source badge (metadata, override, or default).
    - This sets the preview frame slider range.
 4. In **Preview & Analyze**, choose profile:
-   - `RBC` for tomorrow's RBC prototype.
-   - `Vesicle` for the older vesicle-style workflow.
-5. Optional: set **Frame range for analysis/3D**.
+   - `Vesicle` for GUV / vesicle threshold contours.
+   - `RBC` for red blood cell stacks.
+   - `LimeSeg` (experimental) when threshold contours leak — requires object seed.
+5. Optional **Object selection** for crowded images:
+   - Click **Select Object**, then circle-drag or polygon on the preview.
+   - Set seed radius and max track distance if needed.
+   - After **Analyze**, enable **Show tracked-object debug overlay** to review centroids.
+6. Optional: set **Frame range for analysis/3D**.
    - `start=5`, `stop=30` means frames 5 through 29.
    - Leave blank to use the full stack.
    - Use this to skip weak top/bottom slices before analysis or 3D mesh preview.
-6. Optional: set **XY ROI**.
+7. Optional: set **XY ROI**.
    - Leave blank unless you need to isolate one object.
    - You can type `xmin`, `xmax`, `ymin`, and `ymax`, or click **Preview** and
      drag a rectangle directly on the preview image.
    - The ROI fields apply globally to preview, analyze, batch, and sweep.
-7. Use the preview frame slider to scrub through the stack.
-8. Click **Suggest Threshold**.
-9. Click **Preview** and inspect the segmentation overlay.
-10. Adjust threshold, preview frame, ROI, or frame range if needed.
-11. Click **Analyze**.
-12. Optional: enable **Include 3D mesh**, then click **View 3D Mesh**.
+8. Use the preview frame slider to scrub through the stack.
+9. Click **Suggest Threshold**.
+10. Click **Preview** and inspect the segmentation overlay.
+11. Adjust threshold, preview frame, ROI, or frame range if needed.
+12. Click **Analyze** — read warnings for `default_voxel_size`, tracking loss, or neighbor merge.
+13. Optional: enable **Include 3D mesh**, then click **View 3D Mesh**.
     - The browser renders an interactive Plotly mesh.
     - The displayed mesh is decimated for speed; use the reported metrics for
       numbers and the viewer for visual inspection.
-13. Download:
+14. Download:
    - **CSV** for frame metrics.
    - **Manifest** for run settings/provenance.
    - **Report** for lab notes or presentation backup.

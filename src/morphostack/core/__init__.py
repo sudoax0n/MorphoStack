@@ -27,20 +27,34 @@ from morphostack.core.export import (
 )
 from morphostack.core.images import as_color_stack, as_grayscale_stack, stretch_to_uint8
 from morphostack.core.io import file_sha256, load_image_stack, inspect_image_stack
-from morphostack.core.mesh import MeshMeasurement, surface_area_volume
-from morphostack.core.mesh import contour_to_mask, contours_to_mask_stack, measure_contour_stack
+from morphostack.core.mesh import (
+    MeshMeasurement,
+    contour_to_mask,
+    contour_stack_mesh_geometry,
+    contours_to_mask_stack,
+    measure_contour_stack,
+    surface_area_volume,
+    write_mesh_file,
+    write_mesh_obj,
+    write_mesh_ply,
+    write_mesh_stl,
+)
 from morphostack.core.metrics import ContourMetrics, contour_metrics
 from morphostack.core.models import ImageStack, VoxelSize
 from morphostack.core.pipeline import (
     FrameAnalysis,
+    FrameTrackingRecord,
     ObjectSeed,
     SeedPoint,
     RectROI,
     StackAnalysis,
     StackViewTransform,
+    TrackingDiagnostics,
     ZRange,
     analyze_frame,
     analyze_stack,
+    object_seed_payload,
+    tracking_diagnostics_payload,
 )
 from morphostack.core.project import (
     PROJECT_SETTINGS_VERSION,
@@ -74,6 +88,7 @@ __all__ = [
     "CSV_COLUMNS",
     "DEFAULT_PROFILE",
     "FrameAnalysis",
+    "FrameTrackingRecord",
     "ImageStack",
     "MeshMeasurement",
     "ObjectSeed",
@@ -85,6 +100,7 @@ __all__ = [
     "SegmentationPreview",
     "StackAnalysis",
     "StackViewTransform",
+    "TrackingDiagnostics",
     "SWEEP_COLUMNS",
     "SweepSettings",
     "ThresholdSweepResult",
@@ -121,11 +137,18 @@ __all__ = [
     "inspect_image_stack",
     "load_image_stack",
     "measure_contour_stack",
+    "contour_stack_mesh_geometry",
     "normalize_profile",
+    "object_seed_payload",
+    "tracking_diagnostics_payload",
     "segmentation_preview",
     "smooth_contour_guarded",
     "stretch_to_uint8",
     "surface_area_volume",
+    "write_mesh_file",
+    "write_mesh_obj",
+    "write_mesh_ply",
+    "write_mesh_stl",
     "suggest_threshold",
     "threshold_sweep",
     "threshold_sweep_rows",

@@ -58,6 +58,16 @@ type AnalysisRow = {
   mesh_sphericity: number;
 };
 
+type TrackingRecord = {
+  frame_index: number;
+  tracked: boolean;
+  centroid_x: number | null;
+  centroid_y: number | null;
+  area_px: number;
+  touches_roi_boundary: boolean;
+  likely_neighbor_merge: boolean;
+};
+
 type AnalyzeResponse = {
   source_path: string;
   profile: AnalysisProfile;
@@ -65,6 +75,8 @@ type AnalyzeResponse = {
   valid_frame_count: number;
   voxel_size: VoxelOverride;
   voxel_source: string;
+  object_seed: ObjectSeed | null;
+  tracking: TrackingRecord[] | null;
   mesh: null | {
     surface_area_um2: number;
     volume_um3: number;
@@ -336,6 +348,9 @@ app.innerHTML = `
           <input id="voxel-z" type="number" min="0" step="0.0001" value="1" disabled />
         </label>
       </div>
+      <p id="calibration-help" class="calibration-help muted">
+        Auto mode reads voxel spacing from TIFF/LSM/CZI metadata when available. Default 1×1×1 µm is a placeholder — do not trust surface area or volume until calibration is verified.
+      </p>
       <div id="inspect-output" class="output muted">No stack inspected yet.</div>
     </section>
 
@@ -405,6 +420,10 @@ app.innerHTML = `
             <input id="object-seed-max-dist" type="number" min="0.1" step="0.1" placeholder="Auto" />
           </label>
         </div>
+        <label class="checkbox-row" style="margin-top: 0.75rem;">
+          <input id="show-tracking-debug" type="checkbox" />
+          Show tracked-object debug overlay (centroids after Analyze)
+        </label>
       </fieldset>
       <fieldset>
         <legend>XY ROI optional</legend>
@@ -662,6 +681,7 @@ const zStopSlider = mustElement<HTMLInputElement>("z-stop-slider");
 const roiStatus = mustElement<HTMLSpanElement>("roi-status");
 const zRangeStatus = mustElement<HTMLSpanElement>("z-range-status");
 let latestAnalysis: AnalyzeResponse | null = null;
+let latestTracking: TrackingRecord[] | null = null;
 let latestBatch: BatchAnalyzeResponse | null = null;
 let latestSweep: SweepResponse | null = null;
 let inspectedFrameCount: number | null = null;
@@ -718,6 +738,10 @@ mustElement<HTMLButtonElement>("select-object-btn").addEventListener("click", ()
     }
   }
   updateObjectSeedStatus();
+});
+
+mustElement<HTMLInputElement>("show-tracking-debug").addEventListener("change", () => {
+  updateTrackingDebugOverlay(readInteger("frame-input"), readRoi());
 });
 
 mustElement<HTMLSelectElement>("object-seed-tool").addEventListener("change", () => {
@@ -916,8 +940,9 @@ async function inspectStack(): Promise<void> {
       Voxel: x=${formatNumber(payload.voxel_size.x_um)} um,
       y=${formatNumber(payload.voxel_size.y_um)} um,
       z=${formatNumber(payload.voxel_size.z_um)} um<br />
-      Voxel source: ${escapeHtml(payload.voxel_source)}
+      ${voxelSourceMarkup(payload.voxel_source)}
     `;
+    applyVoxelDefaultStyling(payload.voxel_source);
     
     // Auto-populate the visible voxel input fields if in Auto calibration mode
     const mode = mustElement<HTMLSelectElement>("calibration-mode").value;
@@ -1179,6 +1204,7 @@ function renderPreview(payload: PreviewResponse, renderedRoi: RectRoi | null): v
       <div id="roi-selection" class="roi-selection" hidden></div>
       <div id="seed-selection" class="seed-selection" hidden></div>
       <svg id="polygon-overlay" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none;" hidden></svg>
+      <svg id="tracking-debug-overlay" class="tracking-debug-overlay" hidden></svg>
     </div>
     <div>
       <strong>${escapeHtml(payload.source_path)}</strong><br />
@@ -1190,6 +1216,57 @@ function renderPreview(payload: PreviewResponse, renderedRoi: RectRoi | null): v
     </div>
   `;
   attachPreviewRoiSelector(payload, renderedRoi);
+  updateTrackingDebugOverlay(payload.frame_index, renderedRoi);
+}
+
+function voxelSourceMarkup(source: string): string {
+  if (source === "default") {
+    return `<span class="voxel-source voxel-source-default">Voxel source: default (uncalibrated 1×1×1 µm)</span>`;
+  }
+  if (source === "override") {
+    return `<span class="voxel-source voxel-source-override">Voxel source: manual override</span>`;
+  }
+  return `<span class="voxel-source voxel-source-metadata">Voxel source: ${escapeHtml(source)}</span>`;
+}
+
+function applyVoxelDefaultStyling(source: string): void {
+  const voxelInputs = ["voxel-x", "voxel-y", "voxel-z"].map((id) => mustElement<HTMLInputElement>(id));
+  const scary = source === "default";
+  for (const input of voxelInputs) {
+    input.classList.toggle("voxel-default-warning", scary);
+  }
+}
+
+function updateTrackingDebugOverlay(frameIndex: number, renderedRoi: RectRoi | null): void {
+  const overlay = document.getElementById("tracking-debug-overlay") as SVGSVGElement | null;
+  const image = document.getElementById("preview-image") as HTMLImageElement | null;
+  const enabled = mustElement<HTMLInputElement>("show-tracking-debug").checked;
+  if (!overlay || !image || !enabled || !latestTracking) {
+    if (overlay) {
+      overlay.setAttribute("hidden", "true");
+      overlay.innerHTML = "";
+    }
+    return;
+  }
+  const record = latestTracking.find((entry) => entry.frame_index === frameIndex);
+  if (!record || !record.tracked || record.centroid_x === null || record.centroid_y === null) {
+    overlay.setAttribute("hidden", "true");
+    overlay.innerHTML = "";
+    return;
+  }
+  const roiOffsetX = renderedRoi ? renderedRoi.xmin : 0;
+  const roiOffsetY = renderedRoi ? renderedRoi.ymin : 0;
+  const client = imageToClientPoint(record.centroid_x - roiOffsetX, record.centroid_y - roiOffsetY, image);
+  const rect = image.getBoundingClientRect();
+  const canvas = image.parentElement?.getBoundingClientRect();
+  const offsetX = canvas ? rect.left - canvas.left : 0;
+  const offsetY = canvas ? rect.top - canvas.top : 0;
+  overlay.removeAttribute("hidden");
+  overlay.setAttribute("viewBox", `0 0 ${rect.width} ${rect.height}`);
+  overlay.innerHTML = `
+    <circle cx="${client.x - offsetX}" cy="${client.y - offsetY}" r="5" class="tracking-centroid" />
+    <text x="${client.x - offsetX + 8}" y="${client.y - offsetY - 8}" class="tracking-centroid-label">tracked</text>
+  `;
 }
 
 function attachPreviewRoiSelector(payload: PreviewResponse, renderedRoi: RectRoi | null): void {
@@ -1826,6 +1903,7 @@ function meshBounds(vertices: number[][]): {
 
 function renderAnalysis(payload: AnalyzeResponse): void {
   latestAnalysis = payload;
+  latestTracking = payload.tracking;
   downloadCsvButton.disabled = payload.rows.length === 0;
   downloadReportButton.disabled = false;
   downloadManifestButton.disabled = false;
@@ -1841,9 +1919,12 @@ function renderAnalysis(payload: AnalyzeResponse): void {
     <strong>${escapeHtml(payload.source_path)}</strong><br />
     Profile: ${escapeHtml(payload.profile)}<br />
     Frames: ${payload.frame_count}, valid: ${payload.valid_frame_count}<br />
-    Voxel source: ${escapeHtml(payload.voxel_source)}${summaryText}${meshText}
+    ${voxelSourceMarkup(payload.voxel_source)}${summaryText}${meshText}
     ${warningText}
   `;
+  applyVoxelDefaultStyling(payload.voxel_source);
+  const currentFrame = readInteger("frame-input");
+  updateTrackingDebugOverlay(currentFrame, readRoi());
 
   if (payload.rows.length === 0) {
     resultsBody.innerHTML = `<tr><td colspan="11" class="muted">No rows returned.</td></tr>`;

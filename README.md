@@ -1,12 +1,16 @@
 # MorphoStack
 
-MorphoStack is a planned local morphometry toolkit for microscopy Z-stacks, starting with vesicle analysis and expanding to red blood cell analysis.
+MorphoStack is a local morphometry toolkit for microscopy Z-stacks: vesicle/GUV
+analysis, RBC shape analysis, and an experimental LimeSeg active-surfaces profile.
 
-The first milestone is intentionally small: prove the project structure, command ownership, and diagnostics before migrating scientific code from the older Shape-Analysis prototype.
-See [improvements.md](improvements.md) for the current technical roadmap, known
-gaps, and distribution plan.
-See [docs/prototype_usage.md](docs/prototype_usage.md) for a practical
-presentation/demo workflow.
+It loads TIFF/TIF, LSM, and CZI stacks, supports object seed selection for crowded
+fields, emits calibration warnings, exports meshes (OBJ/STL/PLY), and ships
+validation runs under `validation/runs/`.
+
+See [docs/prototype_usage.md](docs/prototype_usage.md) for the demo workflow,
+[docs/validation.md](docs/validation.md) for regression runs,
+[docs/limitations.md](docs/limitations.md) for scientific caveats, and
+[docs/troubleshooting.md](docs/troubleshooting.md) for common failures.
 
 ## Current Commands
 
@@ -22,6 +26,7 @@ morphostack analyze path\to\stack.tif --threshold 100 --out metrics.csv
 morphostack analyze path\to\stack.tif --threshold 100 --out metrics.csv --report
 morphostack analyze path\to\stack.tif --threshold 100 --bundle-dir runs
 morphostack analyze path\to\stack.tif --threshold 100 --profile rbc --z-range 5 30 --out metrics.csv
+morphostack analyze crowded.czi --threshold 190 --seed-x 360 --seed-y 517 --seed-frame 105 --mesh --mesh-export mesh.obj --bundle-dir runs
 morphostack batch path\to\stacks --threshold 100 --out batch_summary.csv
 morphostack batch path\to\stacks --threshold 100 --out batch_summary.csv --bundle-dir runs
 morphostack validate reference_metrics.csv new_metrics.csv
@@ -172,6 +177,8 @@ Current API endpoints:
 - `POST /analyze`
 - `POST /threshold`
 - `POST /preview`
+- `POST /mesh-preview`
+- `POST /mesh-export`
 - `POST /sweep`
 - `POST /upload/inspect`
 - `POST /upload/analyze`

@@ -1,0 +1,409 @@
+{
+  "columns": [
+    "frame_index",
+    "threshold",
+    "profile",
+    "method",
+    "has_contour",
+    "area_px2",
+    "perimeter_px",
+    "area_um2",
+    "perimeter_um",
+    "circularity",
+    "bbox_width_um",
+    "bbox_height_um",
+    "aspect_ratio",
+    "elongation",
+    "deformation_index",
+    "extent",
+    "equivalent_diameter_um",
+    "solidity",
+    "mesh_surface_area_um2",
+    "mesh_volume_um3",
+    "mesh_equivalent_sphere_diameter_um",
+    "mesh_sphericity"
+  ],
+  "created_at_utc": "2026-07-08T14:36:01.351333+00:00",
+  "frame_count": 28,
+  "include_mesh": true,
+  "mesh": {
+    "equivalent_sphere_diameter_um": 35.59349564729963,
+    "sphericity": 0.49889590994440375,
+    "surface_area_um2": 7977.764532303003,
+    "volume_um3": 23610.791666666668
+  },
+  "morphostack_version": "0.1.0",
+  "object_seed": {
+    "frame_index": 10,
+    "max_tracking_dist_um": null,
+    "radius": 12.0,
+    "type": "circle",
+    "x": 290.61,
+    "y": 731.79
+  },
+  "prefer_opencv": true,
+  "profile": "rbc",
+  "roi": null,
+  "source_path": "D:\\rbc data pranay\\Image 46.lsm",
+  "source_sha256": "097dcaa956d0aebece8c594307ed5fb7c53a1573d7cbca5416f5519835e77523",
+  "summary": {
+    "frame_count": 28,
+    "metrics": {
+      "area_um2": {
+        "max": 3133.5,
+        "mean": 2274.55,
+        "min": 295.5,
+        "std": 1060.5722618002037
+      },
+      "aspect_ratio": {
+        "max": 1.7272727272727273,
+        "mean": 1.21287141157033,
+        "min": 1.0327868852459017,
+        "std": 0.20835469749406652
+      },
+      "bbox_height_um": {
+        "max": 69.0,
+        "mean": 62.4,
+        "min": 36.0,
+        "std": 9.520504188329525
+      },
+      "bbox_width_um": {
+        "max": 63.0,
+        "mean": 53.3,
+        "min": 27.0,
+        "std": 12.853404218338424
+      },
+      "circularity": {
+        "max": 0.8243901243030396,
+        "mean": 0.5694101031725258,
+        "min": 0.171620374237172,
+        "std": 0.2533377466625243
+      },
+      "deformation_index": {
+        "max": 0.26666666666666666,
+        "mean": 0.08902028797430217,
+        "min": 0.016129032258064516,
+        "std": 0.07649873002853669
+      },
+      "elongation": {
+        "max": 0.42105263157894735,
+        "mean": 0.15504150425358404,
+        "min": 0.031746031746031744,
+        "std": 0.12046352256668491
+      },
+      "equivalent_diameter_um": {
+        "max": 63.16404130062953,
+        "mean": 51.546332970709386,
+        "min": 19.39696588307668,
+        "std": 15.460354580349119
+      },
+      "extent": {
+        "max": 0.7615384615384615,
+        "mean": 0.6110180715334013,
+        "min": 0.30401234567901236,
+        "std": 0.16900004084847944
+      },
+      "perimeter_um": {
+        "max": 268.0487732352791,
+        "mean": 218.1377992573413,
+        "min": 147.09545442950503,
+        "std": 29.674240723115197
+      },
+      "solidity": {
+        "max": 0.9795248515160988,
+        "mean": 0.8637558981609137,
+        "min": 0.6224577484961329,
+        "std": 0.149468677206382
+      }
+    },
+    "valid_fraction": 0.35714285714285715,
+    "valid_frame_count": 10
+  },
+  "threshold": 43.0,
+  "tracking": [
+    {
+      "area_px": 0,
+      "centroid_x": null,
+      "centroid_y": null,
+      "frame_index": 0,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": false
+    },
+    {
+      "area_px": 0,
+      "centroid_x": null,
+      "centroid_y": null,
+      "frame_index": 1,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": false
+    },
+    {
+      "area_px": 0,
+      "centroid_x": null,
+      "centroid_y": null,
+      "frame_index": 2,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": false
+    },
+    {
+      "area_px": 0,
+      "centroid_x": null,
+      "centroid_y": null,
+      "frame_index": 3,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": false
+    },
+    {
+      "area_px": 0,
+      "centroid_x": null,
+      "centroid_y": null,
+      "frame_index": 4,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": false
+    },
+    {
+      "area_px": 0,
+      "centroid_x": null,
+      "centroid_y": null,
+      "frame_index": 5,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": false
+    },
+    {
+      "area_px": 1704,
+      "centroid_x": 291.27992957746477,
+      "centroid_y": 734.293427230047,
+      "frame_index": 6,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 2906,
+      "centroid_x": 289.3799036476256,
+      "centroid_y": 732.1111493461804,
+      "frame_index": 7,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 3144,
+      "centroid_x": 288.90330788804073,
+      "centroid_y": 731.6838422391858,
+      "frame_index": 8,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 2915,
+      "centroid_x": 289.22675814751284,
+      "centroid_y": 731.7893653516295,
+      "frame_index": 9,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 2786,
+      "centroid_x": 290.56317300789664,
+      "centroid_y": 731.7634601579325,
+      "frame_index": 10,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 2755,
+      "centroid_x": 290.1480943738657,
+      "centroid_y": 731.6123411978222,
+      "frame_index": 11,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 2158,
+      "centroid_x": 287.50185356811863,
+      "centroid_y": 730.1436515291937,
+      "frame_index": 12,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 1153,
+      "centroid_x": 274.88725065047703,
+      "centroid_y": 725.9757155247181,
+      "frame_index": 13,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 783,
+      "centroid_x": 273.0051085568327,
+      "centroid_y": 723.919540229885,
+      "frame_index": 14,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 334,
+      "centroid_x": 271.377245508982,
+      "centroid_y": 724.8712574850299,
+      "frame_index": 15,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": true
+    },
+    {
+      "area_px": 0,
+      "centroid_x": null,
+      "centroid_y": null,
+      "frame_index": 16,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": false
+    },
+    {
+      "area_px": 0,
+      "centroid_x": null,
+      "centroid_y": null,
+      "frame_index": 17,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": false
+    },
+    {
+      "area_px": 0,
+      "centroid_x": null,
+      "centroid_y": null,
+      "frame_index": 18,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": false
+    },
+    {
+      "area_px": 0,
+      "centroid_x": null,
+      "centroid_y": null,
+      "frame_index": 19,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": false
+    },
+    {
+      "area_px": 0,
+      "centroid_x": null,
+      "centroid_y": null,
+      "frame_index": 20,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": false
+    },
+    {
+      "area_px": 0,
+      "centroid_x": null,
+      "centroid_y": null,
+      "frame_index": 21,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": false
+    },
+    {
+      "area_px": 0,
+      "centroid_x": null,
+      "centroid_y": null,
+      "frame_index": 22,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": false
+    },
+    {
+      "area_px": 0,
+      "centroid_x": null,
+      "centroid_y": null,
+      "frame_index": 23,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": false
+    },
+    {
+      "area_px": 0,
+      "centroid_x": null,
+      "centroid_y": null,
+      "frame_index": 24,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": false
+    },
+    {
+      "area_px": 0,
+      "centroid_x": null,
+      "centroid_y": null,
+      "frame_index": 25,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": false
+    },
+    {
+      "area_px": 0,
+      "centroid_x": null,
+      "centroid_y": null,
+      "frame_index": 26,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": false
+    },
+    {
+      "area_px": 0,
+      "centroid_x": null,
+      "centroid_y": null,
+      "frame_index": 27,
+      "likely_neighbor_merge": false,
+      "touches_roi_boundary": false,
+      "tracked": false
+    }
+  ],
+  "valid_frame_count": 10,
+  "voxel_size": {
+    "x_um": 1.0,
+    "y_um": 1.0,
+    "z_um": 1.0
+  },
+  "voxel_source": "default",
+  "warnings": [
+    {
+      "code": "partial_contours",
+      "frame_count": 28,
+      "invalid_frame_count": 18,
+      "message": "18 of 28 frames did not produce a valid contour.",
+      "severity": "warning"
+    },
+    {
+      "code": "tracking_lost_many_frames",
+      "frame_count": 28,
+      "lost_frame_count": 18,
+      "message": "Object tracking was lost on 18 of 28 frames (64%). Metrics may mix frames or omit slices.",
+      "severity": "warning"
+    },
+    {
+      "code": "default_voxel_size",
+      "message": "Voxel spacing came from MorphoStack defaults. Physical units should be treated as uncalibrated.",
+      "severity": "warning"
+    }
+  ],
+  "z_range": {
+    "zmax": 28,
+    "zmin": 0
+  }
+}

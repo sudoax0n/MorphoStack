@@ -22,6 +22,7 @@ from morphostack.core import (
     SweepSettings,
     VoxelSize,
     ZRange,
+    ObjectSeed,
     analyze_stack,
     analysis_manifest,
     analysis_run_warnings,
@@ -30,6 +31,7 @@ from morphostack.core import (
     apply_rect_roi,
     apply_z_range,
     best_sweep_result,
+    contour_stack_mesh_geometry,
     failed_analysis_summary_row,
     file_sha256,
     compare_metric_csv,
@@ -43,6 +45,7 @@ from morphostack.core import (
     write_analysis_manifest_json,
     write_analysis_report_markdown,
     write_batch_summary_csv,
+    write_mesh_file,
     write_project_settings,
     write_threshold_sweep_csv,
 )
@@ -242,6 +245,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Use dependency-light rectangular fallback contours instead of OpenCV contours.",
     )
     analyze.add_argument("--opencv-contours", dest="fallback_contours", action="store_false", help="Use OpenCV contours when available.")
+    analyze.add_argument("--seed-x", type=float, help="Object seed X coordinate in full-image pixels.")
+    analyze.add_argument("--seed-y", type=float, help="Object seed Y coordinate in full-image pixels.")
+    analyze.add_argument("--seed-frame", type=int, help="Object seed frame / Z index.")
+    analyze.add_argument("--seed-radius", type=float, default=10.0, help="Object seed radius in pixels. Default: 10.")
+    analyze.add_argument("--seed-max-dist-um", type=float, help="Maximum centroid jump between frames in micrometers.")
+    analyze.add_argument(
+        "--mesh-export",
+        help="Write a 3D mesh file (.obj, .stl, or .ply) alongside analysis outputs.",
+    )
     batch = subparsers.add_parser(
         "batch",
         help="Analyze every supported stack in a directory and write one summary CSV.",
@@ -394,6 +406,14 @@ def main(argv: list[str] | None = None) -> int:
             prefer_opencv=prefer_opencv_from_flag(args.fallback_contours),
             include_mesh=args.include_mesh,
             project=args.project,
+            object_seed=object_seed_from_cli(
+                seed_x=args.seed_x,
+                seed_y=args.seed_y,
+                seed_frame=args.seed_frame,
+                seed_radius=args.seed_radius,
+                seed_max_dist_um=args.seed_max_dist_um,
+            ),
+            mesh_export=args.mesh_export,
         )
 
     if args.command == "sweep":
@@ -617,6 +637,29 @@ def run_project_init(
     return 0
 
 
+def object_seed_from_cli(
+    *,
+    seed_x: float | None,
+    seed_y: float | None,
+    seed_frame: int | None,
+    seed_radius: float = 10.0,
+    seed_max_dist_um: float | None = None,
+) -> ObjectSeed | None:
+    values = (seed_x, seed_y, seed_frame)
+    if all(value is None for value in values):
+        return None
+    if any(value is None for value in values):
+        print("Object seed requires --seed-x, --seed-y, and --seed-frame together.")
+        raise SystemExit(2)
+    return ObjectSeed(
+        x=seed_x,
+        y=seed_y,
+        frame_index=seed_frame,
+        radius=seed_radius,
+        max_tracking_dist_um=seed_max_dist_um,
+    )
+
+
 def run_analyze(
     *,
     path: str,
@@ -635,6 +678,8 @@ def run_analyze(
     prefer_opencv: bool | None = None,
     include_mesh: bool | None = None,
     project: str | None = None,
+    object_seed: ObjectSeed | None = None,
+    mesh_export: str | None = None,
 ) -> int:
     project_settings = load_project_for_command(project)
     if isinstance(project_settings, int):
@@ -658,6 +703,7 @@ def run_analyze(
     rect_roi = resolve_roi(project_settings, roi)
     resolved_z_range = resolve_z_range(project_settings, z_range)
     run_bundle_dir = None
+    mesh_export_path = None
 
     try:
         stack = load_image_stack(path, voxel_override=voxel_override)
@@ -671,6 +717,7 @@ def run_analyze(
             profile=resolved_profile,
             prefer_opencv=resolved_prefer_opencv,
             include_mesh=resolved_mesh,
+            object_seed=object_seed,
         )
         warnings = analysis_run_warnings(analysis, voxel_source=stack.voxel_source)
         summary = analysis_summary(analysis)
@@ -698,9 +745,36 @@ def run_analyze(
                     include_mesh=resolved_mesh,
                     prefer_opencv=resolved_prefer_opencv,
                     voxel_source=stack.voxel_source,
+                    object_seed=object_seed,
                 ),
                 manifest_path,
             )
+        if mesh_export:
+            mesh_export_path = Path(mesh_export)
+            if run_bundle_dir is not None and not mesh_export_path.is_absolute():
+                mesh_export_path = run_bundle_dir / mesh_export_path
+            mesh_stack = stack.grayscale
+            if resolved_z_range is not None:
+                mesh_stack = apply_z_range(mesh_stack, zmin=resolved_z_range.zmin, zmax=resolved_z_range.zmax)
+            if rect_roi is not None:
+                mesh_stack = apply_rect_roi(
+                    mesh_stack,
+                    xmin=rect_roi.xmin,
+                    xmax=rect_roi.xmax,
+                    ymin=rect_roi.ymin,
+                    ymax=rect_roi.ymax,
+                )
+            geometry = contour_stack_mesh_geometry(
+                tuple(frame.contour for frame in analysis.frames),
+                shape=mesh_stack.shape,
+                voxel=stack.voxel_size,
+            )
+            if geometry is None:
+                print("Mesh export skipped: no geometry was produced.")
+            else:
+                mesh_export_path.parent.mkdir(parents=True, exist_ok=True)
+                export_format = write_mesh_file(geometry, mesh_export_path)
+                print(f"Mesh export ({export_format}): {mesh_export_path}")
         report_path = None
         if report is not None or run_bundle_dir is not None:
             if report:
@@ -720,6 +794,7 @@ def run_analyze(
                 include_mesh=resolved_mesh,
                 prefer_opencv=resolved_prefer_opencv,
                 voxel_source=stack.voxel_source,
+                object_seed=object_seed,
             )
     except Exception as exc:
         print(f"Failed to analyze image stack: {exc}")
@@ -754,6 +829,8 @@ def run_analyze(
         print(f"Manifest: {manifest_path}")
     if report_path:
         print(f"Report: {report_path}")
+    if mesh_export_path and mesh_export_path.exists():
+        print(f"Mesh export: {mesh_export_path}")
     return 0
 
 
