@@ -1,62 +1,119 @@
 # MorphoStack Improvements
 
-This file is the living technical roadmap for turning MorphoStack from a working
-research prototype into a dependable local morphometry tool for biophysics lab
-use. It should stay evidence-based: add items when they come from current code,
-real datasets, test failures, reviewer feedback, or lab workflow needs.
+This file is the living log for turning MorphoStack from a working research
+prototype into a dependable local morphometry tool for biophysics lab use. Add
+items when they come from current code, real datasets, test failures, reviewer
+feedback, or lab workflow needs.
+
+_Last consolidated from the old goal checklist: 2026-07-08._
+
+## Progress Snapshot
+
+| Milestone | Estimate |
+| --- | ---: |
+| Working demo / prototype | 99% |
+| Internship / lab-usable internal tool | 99% |
+| Paper-supporting, biologically validated tool | 84% |
+| Publicly distributable open-source app | 84% |
+
+**Bottom line:** MorphoStack is a credible internal lab tool. Remaining gap is
+science sign-off, crowded-data Active Surfaces trust, and publishing the first
+release — not basic functionality.
 
 ## Current Status
 
-MorphoStack now has a local Python CLI, FastAPI backend, and browser UI. The
+MorphoStack has a local Python CLI, FastAPI backend, and browser UI. The
 canonical command is `morphostack`; the short alias is `mst`.
 
 Supported workflow pieces include:
 
-- stack inspection for TIFF/CZI inputs
+- stack inspection for TIFF/TIF, LSM, and CZI inputs
+- metadata-aware voxel inspection with manual override and UI warnings
 - threshold suggestion and threshold sweeps
-- Z-range trimming for top/bottom stack slices
-- frame preview scrubbing in the web UI
-- global XY ROI controls, including drag-to-select ROI from the preview image
-- per-frame shape analysis
-- vesicle, RBC, and active-surfaces active-surfaces profile selection
-- optional 3D mesh measurements for surface area, volume, equivalent sphere
-  diameter, and sphericity
-- interactive Plotly-based 3D mesh preview in the web UI
-- project settings JSON import/export
-- batch analysis
-- CSV validation against reference outputs
-- JSON manifests, Markdown reports, source SHA-256 provenance, and quality
-  warnings
-- `morphostack init`, `doctor`, and `dev --check` for setup diagnostics
+- Z-range trimming, frame preview scrubbing, frame exclusion
+- global XY ROI and object seed (circle, polygon), tracking diagnostics
+- vesicle, RBC, and **active_surfaces** profile selection
+- 3D mesh preview (Plotly), mesh export (OBJ/STL/PLY/GLB), mask export (TIFF)
+- standalone mesh HTML export with camera presets and PNG screenshot
+- upload progress for inspect / analyze / mesh-preview uploads
+- project settings JSON import/export, batch analysis
+- CSV validation, JSON manifests, Markdown reports, SHA-256 provenance
+- real-data validation runs (DOPC, crowded CZI/RBC), synthetic sphere/ellipsoid
+  regression, synthetic touching-failure negative reference
+- Active Surfaces vs threshold comparison reports
+- wheel packaging, GitHub Release workflow, `morphostack app` launcher
+- `morphostack init`, `doctor`, `dev --check` for setup diagnostics
+- 195+ tests; web build passes
 
-The RBC profile currently records RBC intent and creates a clean branch point,
-but still uses the same threshold-contour measurement engine as vesicles.
+The RBC profile records RBC intent but still uses the same threshold-contour
+engine as vesicles until lab-defined metrics land.
+
+## Remaining Work
+
+### Blocked on lab input
+
+- [ ] **RBC-specific science** — decide which RBC outputs matter for the first
+  paper/demo version before adding more metrics.
+- [ ] **Final author/repo citation line** — add once publication venue is chosen.
+
+### Release and packaging
+
+- [ ] **Publish `v0.1.0` GitHub Release** — tag, push, confirm workflow uploads wheel.
+- [ ] **Verify pipx install** from release asset (`scripts/verify_release_wheel.ps1`
+  for local smoke test first).
+- [ ] **winget / Scoop manifests** (optional).
+
+### Active Surfaces and segmentation
+
+- [ ] **Crowded real-data Active Surfaces sign-off** — synthetic defaults are
+  tuned (~10% sphere delta); crowded CZI/RBC previews still diverge; compare
+  side-by-side before paper use.
+- [ ] **Side-by-side preview comparison UI** — circle seed, polygon seed, ROI
+  crop, threshold, and Active Surfaces on the same frame.
+- [ ] **IoU / overlap tracking** between adjacent slices.
+- [ ] **Watershed splitting** when cells touch (partial via Active Surfaces
+  pre-split today).
+
+### Manual review and UI ergonomics
+
+- [ ] **Accept/reject contour marking** beyond frame exclude.
+- [ ] **Polygon / freehand contour correction** after preview.
+- [ ] **Workflow redesign** — run/session sidebar, less duplicated controls,
+  clearer run state for researchers.
+
+### Mesh, loading, and polish
+
+- [ ] **Server-side progress** for local-path reads of very large CZI/LSM files
+  (upload progress already done).
+- [ ] **Fiji export bridge** (optional; deferred unless strongly needed).
+
+### Suggested order
+
+1. RBC science after lab feedback.
+2. Crowded real-data Active Surfaces preview sign-off.
+3. Publish `v0.1.0` and test pipx install.
+4. Side-by-side preview UI and workflow redesign (optional polish).
+
+### Do not do yet unless there is a strong reason
+
+- Do not add Cellpose/StarDist as a required dependency.
+- Do not rewrite the frontend from scratch.
+- Do not replace the Python core with Java/Fiji integration.
+- Do not chase perfect RBC science before the lab defines required outputs.
+- Do not present default-voxel surface/volume as biological measurements.
 
 ## Known Gaps And Bugs To Watch
 
 - RBC-specific science is not complete yet. The profile exists, but RBC-specific
-  metrics, validation datasets, and domain warnings still need to be designed
-  with lab feedback.
-- The web UI is functional, but it is still a developer-style interface. It
-  needs stronger researcher ergonomics: clearer run state, better file/session
-  organization, less dense controls, and friendlier error recovery.
-- Manual ROI selection now exists in the web preview, but it is still a simple
-  rectangular selector. It does not yet support ImageJ/Fiji-style polygon/freehand
-  ROIs, multiple ROIs, saved ROI presets, or manual contour correction.
-- The web UI now includes a fast Plotly 3D mesh preview. It is still a minimal
-  visual QC viewer: export controls, camera presets, color controls, and
-  Fiji bridges are future work.
-- Mesh measurements should be treated as optional and carefully documented.
-  Surface area and volume depend on segmentation quality, voxel calibration, and
-  stack sampling; reports should make those assumptions obvious.
-- Threshold-based analysis can fail silently in bad images unless warnings are
-  prominent. Existing warnings cover missing/partial contours and default voxel
-  sizes, but more domain-specific warnings are needed.
-- Validation currently compares CSV outputs, which is useful for regression
-  testing. It does not prove biological correctness without curated reference
-  datasets and manual review.
-- Packaging is still source-checkout oriented. End users should eventually get a
-  simpler install path that does not require understanding Python, Node, or Git.
+  metrics, validation datasets, and domain warnings still need lab feedback.
+- The web UI is functional, but still developer-style in places — see Remaining
+  Work above.
+- Manual ROI is rectangular only; polygon seeds exist for object selection but
+  not full ImageJ-style ROI presets or manual contour editing.
+- Mesh measurements depend on segmentation quality, voxel calibration, and stack
+  sampling; reports must keep assumptions obvious.
+- CSV validation proves regression stability, not biological truth, without
+  curated references and manual review.
 
 ## Command Ownership
 
@@ -116,13 +173,14 @@ Recommended distribution stages:
    morphostack dev
    ```
 
-2. Python user install through pip or pipx after packaging metadata is ready:
+2. Python user install through pip or pipx (wheel exists; first tagged release
+   still pending — see Remaining Work):
 
    ```bash
    pipx install morphostack
    ```
 
-3. GitHub Releases with signed or checksummed Windows artifacts.
+3. GitHub Releases with wheel artifacts (workflow exists; `v0.1.0` not tagged yet).
 
 4. Windows package managers such as winget, Scoop, or Chocolatey.
 
