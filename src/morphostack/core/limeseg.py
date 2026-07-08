@@ -2,10 +2,359 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from typing import Any
+
 import numpy as np
-from scipy.spatial import KDTree
 from PIL import Image, ImageDraw
+from scipy.spatial import KDTree
+
+
+def build_seed_mask_2d(
+    width: int,
+    height: int,
+    seed_x: float,
+    seed_y: float,
+    seed_radius: float,
+    polygon_points: list[tuple[float, float]] | None = None,
+) -> np.ndarray:
+    """Build a 2D boolean mask for the user seed region (circle or polygon)."""
+    img = Image.new("1", (width, height), 0)
+    draw = ImageDraw.Draw(img)
+    if polygon_points is not None and len(polygon_points) >= 3:
+        draw.polygon([(float(x), float(y)) for x, y in polygon_points], fill=1)
+    else:
+        cx = float(seed_x)
+        cy = float(seed_y)
+        r = float(seed_radius)
+        draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=1)
+    return np.asarray(img, dtype=bool)
+
+
+def _xy_inside_seed_mask(x: float, y: float, seed_mask: np.ndarray) -> bool:
+    ny, nx = seed_mask.shape
+    xi = int(round(x))
+    yi = int(round(y))
+    if 0 <= xi < nx and 0 <= yi < ny:
+        return bool(seed_mask[yi, xi])
+    return False
+
+
+def constrain_xy_to_seed(
+    pos: np.ndarray,
+    seed_mask: np.ndarray,
+    anchor_x: float,
+    anchor_y: float,
+) -> None:
+    """Pull an (x, y) surfel position back inside the hard seed mask."""
+    if _xy_inside_seed_mask(float(pos[0]), float(pos[1]), seed_mask):
+        return
+
+    x = float(pos[0])
+    y = float(pos[1])
+    for _ in range(200):
+        if _xy_inside_seed_mask(x, y, seed_mask):
+            break
+        x += (anchor_x - x) * 0.25
+        y += (anchor_y - y) * 0.25
+    else:
+        x = anchor_x
+        y = anchor_y
+
+    ny, nx = seed_mask.shape
+    pos[0] = np.clip(x, 0.0, float(nx - 1))
+    pos[1] = np.clip(y, 0.0, float(ny - 1))
+
+
+def _rasterize_surfel_ring(
+    pts: list[np.ndarray],
+    width: int,
+    height: int,
+    brush_radius: int,
+) -> np.ndarray:
+    """Rasterize surfel XY positions into a closed ring-like binary image."""
+    ring = np.zeros((height, width), dtype=np.uint8)
+    try:
+        import cv2
+    except Exception:
+        for p in pts:
+            xi = int(round(float(p[0])))
+            yi = int(round(float(p[1])))
+            if 0 <= xi < width and 0 <= yi < height:
+                ring[yi, xi] = 255
+        return ring
+
+    for p in pts:
+        xi = int(round(float(p[0])))
+        yi = int(round(float(p[1])))
+        if 0 <= xi < width and 0 <= yi < height:
+            cv2.circle(ring, (xi, yi), brush_radius, 255, thickness=-1)
+
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    ring = cv2.morphologyEx(ring, cv2.MORPH_CLOSE, kernel, iterations=2)
+    ring = cv2.dilate(ring, kernel, iterations=1)
+    return ring
+
+
+def _fill_slice_from_ring(
+    ring: np.ndarray,
+    seed_mask: np.ndarray,
+    seed_x: float,
+    seed_y: float,
+) -> np.ndarray:
+    """Fill the interior bounded by a surfel ring, then clip to the seed mask."""
+    height, width = ring.shape
+    sx = int(round(seed_x))
+    sy = int(round(seed_y))
+    sx = int(np.clip(sx, 0, width - 1))
+    sy = int(np.clip(sy, 0, height - 1))
+
+    interior = np.zeros((height, width), dtype=bool)
+    if np.any(ring):
+        try:
+            from scipy.ndimage import binary_fill_holes
+        except Exception:
+            binary_fill_holes = None
+
+        try:
+            import cv2
+        except Exception:
+            cv2 = None
+
+        if binary_fill_holes is not None:
+            filled = binary_fill_holes(ring > 0)
+        else:
+            filled = ring > 0
+
+        if cv2 is not None:
+            filled_u8 = filled.astype(np.uint8)
+            n_labels, labels = cv2.connectedComponents(filled_u8, connectivity=8)
+            seed_label = int(labels[sy, sx])
+            if seed_label > 0:
+                interior = labels == seed_label
+            else:
+                contours, _ = cv2.findContours(filled_u8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                for contour in contours:
+                    if cv2.pointPolygonTest(contour, (float(sx), float(sy)), measureDist=False) >= 0:
+                        cv2.fillPoly(filled_u8, [contour], 1)
+                        interior = filled_u8.astype(bool)
+                        break
+        else:
+            interior = filled
+
+    if not np.any(interior):
+        interior[sy, sx] = True
+
+    return interior & seed_mask
+
+
+def _connected_component_at_seed(binary: np.ndarray, seed_x: float, seed_y: float) -> np.ndarray:
+    """Return the 8-connected component containing the seed pixel."""
+    ny, nx = binary.shape
+    sx = int(np.clip(round(seed_x), 0, nx - 1))
+    sy = int(np.clip(round(seed_y), 0, ny - 1))
+
+    try:
+        import cv2
+        n_labels, labels = cv2.connectedComponents(binary.astype(np.uint8), connectivity=8)
+        seed_label = int(labels[sy, sx])
+        if seed_label > 0:
+            return labels == seed_label
+    except Exception:
+        pass
+
+    try:
+        from scipy.ndimage import label as nd_label
+        labeled, _ = nd_label(binary)
+        seed_label = int(labeled[sy, sx])
+        if seed_label > 0:
+            return labeled == seed_label
+    except Exception:
+        pass
+
+    fallback = np.zeros_like(binary, dtype=bool)
+    fallback[sy, sx] = True
+    return fallback
+
+
+def watershed_foreground_from_seed(
+    frame: np.ndarray,
+    threshold: float,
+    seed_x: float,
+    seed_y: float,
+    seed_mask: np.ndarray,
+) -> np.ndarray:
+    """Watershed-split a thresholded slice and keep the component seeded by the ROI."""
+    binary = np.asarray(frame) >= threshold
+    if not np.any(binary):
+        return np.zeros_like(binary, dtype=bool)
+
+    sx = int(np.clip(round(seed_x), 0, binary.shape[1] - 1))
+    sy = int(np.clip(round(seed_y), 0, binary.shape[0] - 1))
+
+    try:
+        from scipy import ndimage
+        from skimage.feature import peak_local_max
+        from skimage.segmentation import watershed
+    except Exception:
+        return _connected_component_at_seed(binary, seed_x, seed_y) & seed_mask
+
+    distance = ndimage.distance_transform_edt(binary)
+    seed_distance = float(distance[sy, sx])
+    min_distance = max(3, int(round(max(1.0, seed_distance) * 0.75)))
+
+    coords = peak_local_max(
+        distance,
+        min_distance=min_distance,
+        labels=binary.astype(np.int32),
+        exclude_border=False,
+    )
+    markers = np.zeros(binary.shape, dtype=np.int32)
+    markers[~binary] = 1
+
+    if coords.size == 0:
+        markers[sy, sx] = 2
+        seed_label = 2
+    else:
+        seed_label = None
+        best_dist = float("inf")
+        for idx, (py, px) in enumerate(coords):
+            label_id = idx + 2
+            markers[py, px] = label_id
+            dist = (float(px) - seed_x) ** 2 + (float(py) - seed_y) ** 2
+            if dist < best_dist:
+                best_dist = dist
+                seed_label = label_id
+        if seed_label is None:
+            markers[sy, sx] = 2
+            seed_label = 2
+
+    labels = watershed(-distance, markers, mask=binary)
+    component = labels == seed_label
+    if not np.any(component):
+        component = _connected_component_at_seed(binary, seed_x, seed_y)
+    return component & seed_mask
+
+
+def watershed_split_stack(
+    arr: np.ndarray,
+    thresholds: tuple[float, ...] | list[float],
+    seed_x: float,
+    seed_y: float,
+    seed_radius: float,
+    polygon_points: list[tuple[float, float]] | None = None,
+) -> np.ndarray:
+    """Build a per-slice watershed foreground mask for the seeded vesicle."""
+    nz, ny, nx = arr.shape
+    seed_mask = build_seed_mask_2d(nx, ny, seed_x, seed_y, seed_radius, polygon_points)
+    splits = np.zeros((nz, ny, nx), dtype=bool)
+    threshold_list = list(thresholds)
+    for z in range(nz):
+        thresh = threshold_list[z] if z < len(threshold_list) else threshold_list[-1]
+        splits[z] = watershed_foreground_from_seed(arr[z], thresh, seed_x, seed_y, seed_mask)
+    return splits
+
+
+def apply_watershed_pre_split_stack(
+    arr: np.ndarray,
+    thresholds: tuple[float, ...] | list[float],
+    seed_x: float,
+    seed_y: float,
+    seed_radius: float,
+    polygon_points: list[tuple[float, float]] | None = None,
+    *,
+    enabled: bool = True,
+    splits: np.ndarray | None = None,
+) -> np.ndarray:
+    """Mask stack intensities to watershed-split foreground for the seeded vesicle."""
+    if not enabled:
+        return np.array(arr, copy=True)
+
+    if splits is None:
+        splits = watershed_split_stack(
+            arr,
+            thresholds,
+            seed_x,
+            seed_y,
+            seed_radius,
+            polygon_points,
+        )
+    return np.where(splits, arr, 0)
+
+
+def _surfel_in_contact_zone(
+    surfel: dict[str, Any],
+    arr: np.ndarray,
+    seed_x: float,
+    seed_y: float,
+    seed_radius: float,
+    ZScale: float,
+    seed_z_scaled: float,
+) -> bool:
+    """True when a surfel sits near the seed rim and faces a darker outward gap."""
+    pos = surfel["pos"]
+    normal = surfel["normal"]
+    dx = float(pos[0]) - seed_x
+    dy = float(pos[1]) - seed_y
+    dz = float(pos[2]) - seed_z_scaled
+    radial_xy = float(np.hypot(dx, dy))
+    if radial_xy < seed_radius * 0.55 or radial_xy > seed_radius * 1.05:
+        return False
+
+    radial_3d = float(np.sqrt(dx * dx + dy * dy + dz * dz))
+    outward = (
+        dx * float(normal[0]) + dy * float(normal[1]) + dz * float(normal[2])
+    ) / max(radial_3d, 1e-6)
+    outward_xy = (
+        dx * float(normal[0]) + dy * float(normal[1])
+    ) / max(radial_xy, 1e-6)
+    if outward < 0.35 and outward_xy < 0.35 and abs(float(normal[2])) < 0.5:
+        return False
+
+    probe = 2.5
+    here = get_pixel_value(arr, float(pos[0]), float(pos[1]), float(pos[2]) / ZScale)
+    ahead = get_pixel_value(
+        arr,
+        float(pos[0]) + float(normal[0]) * probe,
+        float(pos[1]) + float(normal[1]) * probe,
+        (float(pos[2]) + float(normal[2]) * probe) / ZScale,
+    )
+    return ahead < here * 0.75
+
+
+def concavity_contact_bend_scale(
+    s1: dict[str, Any],
+    s2: dict[str, Any],
+    ux: float,
+    uy: float,
+    uz: float,
+    *,
+    arr: np.ndarray,
+    seed_x: float,
+    seed_y: float,
+    seed_radius: float,
+    ZScale: float,
+    seed_z_scaled: float,
+) -> float:
+    """Boost local bending stiffness at concave hinges and outward contact zones."""
+    n1 = s1["normal"]
+    n2 = s2["normal"]
+    link = np.array([ux, uy, uz], dtype=np.float32)
+    normal_alignment = float(np.dot(n1, n2))
+    hinge = float(np.dot(n1 + n2, link))
+
+    scale = 1.0
+    if normal_alignment < 0.25:
+        scale += 2.5 * (1.0 - max(normal_alignment, -1.0))
+    if hinge < 0.0:
+        scale += 2.0 * min(1.0, -hinge)
+
+    if _surfel_in_contact_zone(s1, arr, seed_x, seed_y, seed_radius, ZScale, seed_z_scaled):
+        scale += 1.5
+    elif _surfel_in_contact_zone(s2, arr, seed_x, seed_y, seed_radius, ZScale, seed_z_scaled):
+        scale += 1.5
+
+    return scale
 
 
 def make_sphere(d_0: float, px: float, py: float, pz: float, radius: float) -> list[dict[str, Any]]:
@@ -201,6 +550,143 @@ def get_pixel_value(arr: np.ndarray, x: float, y: float, z: float) -> float:
     return 0.0
 
 
+def _sample_intensity_profile(
+    arr: np.ndarray,
+    pos: np.ndarray,
+    normal: np.ndarray,
+    *,
+    radius_search: float,
+    radius_res: float,
+    radius_delta: float,
+    ZScale: float,
+) -> list[tuple[float, float]]:
+    """Sample image intensity along the surfel normal centered on pos."""
+    n_steps = max(1, int(round(radius_search / radius_res)))
+    origin = np.asarray(pos, dtype=np.float64)
+    normal_vec = np.asarray(normal, dtype=np.float64)
+    delta = float(radius_delta)
+    samples: list[tuple[float, float]] = []
+    for i in range(-n_steps, n_steps + 1):
+        s = float(i) * radius_res
+        x = origin[0] + (delta + s) * normal_vec[0]
+        y = origin[1] + (delta + s) * normal_vec[1]
+        z = origin[2] + (delta + s) * normal_vec[2]
+        samples.append((s, get_pixel_value(arr, x, y, z / ZScale)))
+    return samples
+
+
+def _edge_peaks_from_profile(samples: list[tuple[float, float]]) -> list[tuple[float, float, float]]:
+    """Return local maxima of |dI/ds| along a 1D intensity profile."""
+    if len(samples) < 2:
+        return []
+
+    edges: list[tuple[float, float, float]] = []
+    for i in range(1, len(samples)):
+        s0, v0 = samples[i - 1]
+        s1, v1 = samples[i]
+        ds = s1 - s0
+        if ds <= 0.0:
+            continue
+        grad = (v1 - v0) / ds
+        s_mid = 0.5 * (s0 + s1)
+        edges.append((s_mid, grad, abs(grad)))
+
+    if not edges:
+        return []
+
+    peaks: list[tuple[float, float, float]] = []
+    for j, edge in enumerate(edges):
+        s_mid, grad, abs_grad = edge
+        left = edges[j - 1][2] if j > 0 else 0.0
+        right = edges[j + 1][2] if j < len(edges) - 1 else 0.0
+        if abs_grad >= left and abs_grad >= right:
+            peaks.append((s_mid, grad, abs_grad))
+    return peaks
+
+
+def find_nearest_edge_offset(
+    samples: list[tuple[float, float]],
+    *,
+    radius_res: float,
+    radius_relaxed: float,
+) -> tuple[float | None, float]:
+    """Pick the nearest significant membrane edge along a normal profile.
+
+    Prefers the first outward edge so a nearby vesicle membrane wins over a
+    brighter neighbor further along the same ray.
+    """
+    peaks = _edge_peaks_from_profile(samples)
+    if not peaks:
+        values = [value for _, value in samples]
+        if not values or (max(values) - min(values)) < 1.0:
+            return None, 0.0
+        edges = []
+        for i in range(1, len(samples)):
+            s0, v0 = samples[i - 1]
+            s1, v1 = samples[i]
+            ds = s1 - s0
+            if ds <= 0.0:
+                continue
+            grad = (v1 - v0) / ds
+            edges.append((0.5 * (s0 + s1), grad, abs((v1 - v0) / ds)))
+        if not edges:
+            return None, 0.0
+        peaks = [max(edges, key=lambda item: item[2])]
+
+    max_strength = max(peak[2] for peak in peaks)
+    threshold = max(1.0, 0.2 * max_strength)
+    strong = [peak for peak in peaks if peak[2] >= threshold] or peaks
+
+    outward = [peak for peak in strong if peak[0] > radius_res * 0.25]
+    if outward:
+        s_edge, _, _ = min(outward, key=lambda item: item[0])
+    else:
+        s_edge, _, _ = min(strong, key=lambda item: abs(item[0]))
+
+    relaxed = 1.0 if abs(s_edge) <= radius_relaxed else 0.0
+    return s_edge, relaxed
+
+
+def compute_grad_force_nearest_edge(
+    arr: np.ndarray,
+    pos: np.ndarray,
+    normal: np.ndarray,
+    k_grad: float,
+    radius_relaxed: float,
+    radius_res: float,
+    radius_delta: float,
+    radius_search: float,
+    ZScale: float,
+) -> tuple[np.ndarray, float]:
+    """Lock surfels to the nearest membrane edge along their normal."""
+    samples = _sample_intensity_profile(
+        arr,
+        pos,
+        normal,
+        radius_search=radius_search,
+        radius_res=radius_res,
+        radius_delta=radius_delta,
+        ZScale=ZScale,
+    )
+    s_edge, relaxed = find_nearest_edge_offset(
+        samples,
+        radius_res=radius_res,
+        radius_relaxed=radius_relaxed,
+    )
+    if s_edge is None:
+        return np.zeros(3, dtype=np.float32), 0.0
+
+    peaks = _edge_peaks_from_profile(samples)
+    max_strength = max((peak[2] for peak in peaks), default=1.0)
+    chosen = next((peak for peak in peaks if abs(peak[0] - s_edge) < radius_res * 0.75), None)
+    edge_strength = chosen[2] if chosen is not None else max_strength
+    direction_sign = 1.0 if s_edge >= 0.0 else -1.0
+    strength = min(1.0, edge_strength / max(max_strength, 1e-6))
+
+    grad_force = k_grad * direction_sign * strength * np.asarray(normal, dtype=np.float32)
+    return grad_force, relaxed
+
+
 def compute_grad_force_max(
     arr: np.ndarray,
     pos: np.ndarray,
@@ -212,7 +698,7 @@ def compute_grad_force_max(
     radius_search: float,
     ZScale: float,
 ) -> tuple[np.ndarray, float]:
-    """Search along normal vector for local intensity maximum to compute gradient force."""
+    """Legacy brightest-pixel gradient search kept for regression comparisons."""
     fx_ = 0.0
     fy_ = 0.0
     fz_ = 0.0
@@ -227,14 +713,13 @@ def compute_grad_force_max(
 
     val_max = get_pixel_value(arr, xp, yp, zp / ZScale)
 
-    NSteps = int((radius_search / 2.0) / radius_res)
+    n_steps = int((radius_search / 2.0) / radius_res)
     relaxed = 1.0
     all_equal = True
 
-    # Search forward
     x_curr, y_curr, z_curr = xp, yp, zp
     r = 0.0
-    for _ in range(NSteps):
+    for _ in range(n_steps):
         x_curr += dx
         y_curr += dy
         z_curr += dz
@@ -248,10 +733,9 @@ def compute_grad_force_max(
             relaxed = 1.0 if r < radius_relaxed else 0.0
             fx_, fy_, fz_ = 1.0, 1.0, 1.0
 
-    # Search backward
     x_curr, y_curr, z_curr = xp, yp, zp
     r = 0.0
-    for _ in range(NSteps):
+    for _ in range(n_steps):
         x_curr -= dx
         y_curr -= dy
         z_curr -= dz
@@ -306,8 +790,10 @@ def run_limeseg_optimization(
     N_step_per_R0 = 5000
     max_displacement_per_step = 0.3
     age_min_generate = 10
+    # Tighter seeds pack surfels together; allow higher neighbor counts so the
+    # cloud is not deleted when constrained to the user ROI.
     rm_if_neighbor_below = 5
-    rm_if_neighbor_above = 11
+    rm_if_neighbor_above = 24
     generate_dot_if_neighbor_equals = 6
     radius_relaxed = 1.0
     radius_res = 0.5
@@ -332,11 +818,20 @@ def run_limeseg_optimization(
     min_x, max_x = 0.0, float(nx - 1)
     min_y, max_y = 0.0, float(ny - 1)
     min_z, max_z = 0.0, float(nz - 1)
+    seed_mask_2d = build_seed_mask_2d(
+        nx,
+        ny,
+        seed_x=px,
+        seed_y=py,
+        seed_radius=seed_radius,
+        polygon_points=polygon_points,
+    )
 
     def clamp_pos(pos: np.ndarray) -> None:
         pos[0] = np.clip(pos[0], min_x, max_x)
         pos[1] = np.clip(pos[1], min_y, max_y)
         pos[2] = np.clip(pos[2], min_z * ZScale, max_z * ZScale)
+        constrain_xy_to_seed(pos, seed_mask_2d, anchor_x=px, anchor_y=py)
 
     for step in range(relaxation_steps + optimization_steps):
         is_relaxation = (step < relaxation_steps)
@@ -353,7 +848,7 @@ def run_limeseg_optimization(
         # 1. Image gradient force
         if not is_relaxation and curr_k_grad > 0.0:
             for s in surfels:
-                gf, rel = compute_grad_force_max(
+                gf, rel = compute_grad_force_nearest_edge(
                     arr=arr,
                     pos=s["pos"],
                     normal=s["normal"],
@@ -408,9 +903,23 @@ def run_limeseg_optimization(
                         s1["force"] += i_flatten * s1["normal"]
                         s2["force"] -= i_flatten * s2["normal"]
 
-                        i_perpend1 = -k_bend * np.dot(s1["normal"], [ux, uy, uz])
+                        bend_scale = concavity_contact_bend_scale(
+                            s1,
+                            s2,
+                            ux,
+                            uy,
+                            uz,
+                            arr=arr,
+                            seed_x=px,
+                            seed_y=py,
+                            seed_radius=seed_radius,
+                            ZScale=ZScale,
+                            seed_z_scaled=pz,
+                        )
+                        k_local = k_bend * bend_scale
+                        i_perpend1 = -k_local * np.dot(s1["normal"], [ux, uy, uz])
                         s1["moment"] += i_perpend1 * np.array([ux, uy, uz])
-                        i_perpend2 = -k_bend * np.dot(s2["normal"], [ux, uy, uz])
+                        i_perpend2 = -k_local * np.dot(s2["normal"], [ux, uy, uz])
                         s2["moment"] += i_perpend2 * np.array([ux, uy, uz])
 
         # 3. Update positions & normals
@@ -435,7 +944,8 @@ def run_limeseg_optimization(
         # 4. Outlier removal
         surfels = [
             s for s in surfels
-            if s["N_Neighbor"] >= rm_if_neighbor_below and s["N_Neighbor"] <= rm_if_neighbor_above
+            if s["N_Neighbor"] >= rm_if_neighbor_below
+            and s["N_Neighbor"] <= rm_if_neighbor_above
         ]
 
         # 5. Hole filling
@@ -474,34 +984,48 @@ def run_limeseg_optimization(
     return surfels
 
 
-def surfels_to_mask_stack(surfels: list[dict[str, Any]], shape: tuple[int, int, int], ZScale: float) -> np.ndarray:
-    """Convert a cloud of surfels to a 3D binary mask stack."""
+def surfels_to_mask_stack(
+    surfels: list[dict[str, Any]],
+    shape: tuple[int, int, int],
+    ZScale: float,
+    *,
+    seed_x: float,
+    seed_y: float,
+    seed_radius: float,
+    polygon_points: list[tuple[float, float]] | None = None,
+    d_0: float = 2.0,
+    slice_fallback: np.ndarray | None = None,
+) -> np.ndarray:
+    """Convert a surfel cloud to a 3D binary mask, clipped to the user seed region."""
     mask = np.zeros(shape, dtype=bool)
     nz, ny, nx = shape
+    seed_mask_2d = build_seed_mask_2d(
+        nx,
+        ny,
+        seed_x=seed_x,
+        seed_y=seed_y,
+        seed_radius=seed_radius,
+        polygon_points=polygon_points,
+    )
+    brush_radius = max(1, int(round(d_0 * 0.75)))
 
-    from collections import defaultdict
-    z_groups = defaultdict(list)
+    z_groups: dict[int, list[np.ndarray]] = defaultdict(list)
     for s in surfels:
         z_idx = int(round(s["pos"][2] / ZScale))
-        if 0 <= z_idx < nz:
+        if 0 <= z_idx < nz and _xy_inside_seed_mask(float(s["pos"][0]), float(s["pos"][1]), seed_mask_2d):
             z_groups[z_idx].append(s["pos"][:2])
 
-    for z_idx, pts in z_groups.items():
+    for z_idx in range(nz):
+        pts = z_groups.get(z_idx, [])
         if len(pts) < 3:
+            if (
+                slice_fallback is not None
+                and 0 <= z_idx < slice_fallback.shape[0]
+                and np.any(slice_fallback[z_idx])
+            ):
+                mask[z_idx] = slice_fallback[z_idx] & seed_mask_2d
             continue
-        pts_arr = np.array(pts)
-        cx = np.mean(pts_arr[:, 0])
-        cy = np.mean(pts_arr[:, 1])
-
-        angles = np.arctan2(pts_arr[:, 1] - cy, pts_arr[:, 0] - cx)
-        sorted_indices = np.argsort(angles)
-        sorted_pts = pts_arr[sorted_indices]
-
-        # Draw using PIL
-        img = Image.new("1", (nx, ny), 0)
-        draw = ImageDraw.Draw(img)
-        poly_pts = [(float(p[0]), float(p[1])) for p in sorted_pts]
-        draw.polygon(poly_pts, outline=1, fill=1)
-        mask[z_idx] = np.array(img, dtype=bool)
+        ring = _rasterize_surfel_ring(pts, nx, ny, brush_radius)
+        mask[z_idx] = _fill_slice_from_ring(ring, seed_mask_2d, seed_x, seed_y)
 
     return mask

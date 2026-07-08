@@ -238,6 +238,7 @@ def analyze_stack(
     prefer_opencv: bool = True,
     include_mesh: bool = False,
     object_seed: ObjectSeed | None = None,
+    limeseg_watershed_pre_split: bool = True,
 ) -> StackAnalysis:
     analysis_profile = normalize_profile(profile)
     arr = np.asarray(stack)
@@ -269,7 +270,12 @@ def analyze_stack(
         if local_seed is None:
             raise ValueError("LimeSeg active surfaces profile requires an object seed")
 
-        from morphostack.core.limeseg import run_limeseg_optimization, surfels_to_mask_stack
+        from morphostack.core.limeseg import (
+            apply_watershed_pre_split_stack,
+            run_limeseg_optimization,
+            surfels_to_mask_stack,
+            watershed_split_stack,
+        )
         voxel_x = voxel_size.x_um if voxel_size is not None else 1.0
         voxel_z = voxel_size.z_um if voxel_size is not None else 1.0
 
@@ -277,9 +283,32 @@ def analyze_stack(
         if local_seed.type == "polygon" and local_seed.points is not None:
             poly_points = [(pt.x, pt.y) for pt in local_seed.points]
 
+        watershed_splits = (
+            watershed_split_stack(
+                arr,
+                per_frame_thresholds,
+                seed_x=local_seed.x,
+                seed_y=local_seed.y,
+                seed_radius=local_seed.radius,
+                polygon_points=poly_points,
+            )
+            if limeseg_watershed_pre_split
+            else None
+        )
+        arr_for_limeseg = apply_watershed_pre_split_stack(
+            arr,
+            per_frame_thresholds,
+            seed_x=local_seed.x,
+            seed_y=local_seed.y,
+            seed_radius=local_seed.radius,
+            polygon_points=poly_points,
+            enabled=limeseg_watershed_pre_split,
+            splits=watershed_splits,
+        )
+
         # Run LimeSeg active surfaces optimization
         surfels = run_limeseg_optimization(
-            arr=arr,
+            arr=arr_for_limeseg,
             seed_x=local_seed.x,
             seed_y=local_seed.y,
             seed_z=local_seed.frame_index,
@@ -295,7 +324,17 @@ def analyze_stack(
         )
 
         ZScale = voxel_z / voxel_x if voxel_x > 0.0 else 1.0
-        limeseg_mask = surfels_to_mask_stack(surfels, arr.shape, ZScale)
+        limeseg_mask = surfels_to_mask_stack(
+            surfels,
+            arr.shape,
+            ZScale,
+            seed_x=local_seed.x,
+            seed_y=local_seed.y,
+            seed_radius=local_seed.radius,
+            polygon_points=poly_points,
+            d_0=2.0,
+            slice_fallback=watershed_splits,
+        )
 
         from morphostack.core.contours import SegmentationPreview, contour_circularity
         from morphostack.core.metrics import contour_metrics
