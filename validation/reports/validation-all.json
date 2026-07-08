@@ -1,0 +1,76 @@
+{
+  "generated_at_utc": "2026-07-08T17:13:02.555750+00:00",
+  "synthetic_ok": true,
+  "runs": [
+    {
+      "manifest": "czi-1650-crowded-two-objects\\object_a_left\\1650_z_stack\\manifest.json",
+      "source_path": "C:\\Users\\systemm\\Downloads\\1650_z stack.czi",
+      "profile": "vesicle",
+      "threshold": 190.0,
+      "valid_frame_count": 30,
+      "valid_fraction": 1.0,
+      "preview_png": "czi-1650-crowded-two-objects\\object_a_left\\1650_z_stack\\preview-seed-frame.png",
+      "status": "ok"
+    },
+    {
+      "manifest": "czi-1650-crowded-two-objects\\object_b_right\\1650_z_stack\\manifest.json",
+      "source_path": "C:\\Users\\systemm\\Downloads\\1650_z stack.czi",
+      "profile": "vesicle",
+      "threshold": 190.0,
+      "valid_frame_count": 30,
+      "valid_fraction": 1.0,
+      "preview_png": "czi-1650-crowded-two-objects\\object_b_right\\1650_z_stack\\preview-seed-frame.png",
+      "status": "ok"
+    },
+    {
+      "manifest": "dopc-smoke-test\\syst202400052-sup-0001-movie1-dopc\\manifest.json",
+      "source_path": "D:\\lab-data\\paper-data\\syst202400052-sup-0001-movie1-dopc.tif",
+      "profile": "vesicle",
+      "threshold": 127.002,
+      "valid_frame_count": 26,
+      "valid_fraction": 1.0,
+      "preview_png": "dopc-smoke-test\\syst202400052-sup-0001-movie1-dopc\\preview-seed-frame.png",
+      "status": "ok"
+    },
+    {
+      "manifest": "rbc-image46-crowded-two-objects\\object_a_lower\\Image_46\\manifest.json",
+      "source_path": "D:\\rbc data pranay\\Image 46.lsm",
+      "profile": "rbc",
+      "threshold": 43.0,
+      "valid_frame_count": 10,
+      "valid_fraction": 0.35714285714285715,
+      "preview_png": "rbc-image46-crowded-two-objects\\object_a_lower\\Image_46\\preview-seed-frame.png",
+      "status": "ok"
+    },
+    {
+      "manifest": "rbc-image46-crowded-two-objects\\object_b_upper\\Image_46\\manifest.json",
+      "source_path": "D:\\rbc data pranay\\Image 46.lsm",
+      "profile": "rbc",
+      "threshold": 43.0,
+      "valid_frame_count": 13,
+      "valid_fraction": 0.4642857142857143,
+      "preview_png": "rbc-image46-crowded-two-objects\\object_b_upper\\Image_46\\preview-seed-frame.png",
+      "status": "ok"
+    },
+    {
+      "manifest": "rbc-image46-smoke-test\\Image_46\\manifest.json",
+      "source_path": "D:\\rbc data pranay\\Image 46.lsm",
+      "profile": "rbc",
+      "threshold": 37.0,
+      "valid_frame_count": 25,
+      "valid_fraction": 0.8928571428571429,
+      "preview_png": "rbc-image46-smoke-test\\Image_46\\preview-seed-frame.png",
+      "status": "ok"
+    },
+    {
+      "manifest": "synthetic-sphere\\manifest.json",
+      "source_path": "synthetic-sphere",
+      "profile": "vesicle",
+      "threshold": 100,
+      "valid_frame_count": 0,
+      "valid_fraction": 0.0,
+      "preview_png": null,
+      "status": "ok"
+    }
+  ]
+}

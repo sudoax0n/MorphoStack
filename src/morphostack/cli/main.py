@@ -70,6 +70,27 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 WEB_APP_DIR = PROJECT_ROOT / "apps" / "web"
 
 
+def resolve_web_dist_dir(*, allow_build: bool) -> Path | None:
+    """Prefer dev checkout dist, then wheel-bundled static assets."""
+
+    dev_dist = WEB_APP_DIR / "dist"
+    if dev_dist.exists():
+        return dev_dist
+
+    try:
+        import morphostack
+
+        bundled = Path(morphostack.__file__).resolve().parent / "_web_static"
+        if bundled.exists():
+            return bundled
+    except Exception:
+        pass
+
+    if allow_build:
+        return dev_dist
+    return None
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="morphostack",
@@ -1238,10 +1259,10 @@ def run_app(
         print(f"Failed to start MorphoStack app: uvicorn is required ({exc})")
         return 1
 
-    dist_dir = WEB_APP_DIR / "dist"
-    if not dist_dir.exists():
+    dist_dir = resolve_web_dist_dir(allow_build=allow_build)
+    if dist_dir is None or not dist_dir.exists():
         if not allow_build:
-            print(f"Built web UI was not found at {dist_dir}. Run npm run build in apps/web first.")
+            print("Built web UI was not found. Run npm run build in apps/web first.")
             return 1
         npm_command = shutil.which("npm")
         if npm_command is None:
@@ -1253,7 +1274,8 @@ def run_app(
             cwd=WEB_APP_DIR,
             check=False,
         )
-        if build.returncode != 0 or not dist_dir.exists():
+        dist_dir = resolve_web_dist_dir(allow_build=False)
+        if build.returncode != 0 or dist_dir is None or not dist_dir.exists():
             print("Web UI build failed. Fix apps/web build errors, then retry morphostack app.")
             return build.returncode or 1
 

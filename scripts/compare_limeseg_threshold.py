@@ -247,6 +247,63 @@ def run_crowded_rbc(reports_dir: Path, source: Path) -> Path | None:
     )
 
 
+def auto_seed_from_largest_component(
+    frame,
+    *,
+    threshold: float,
+    frame_index: int,
+    radius: float = 12.0,
+) -> ObjectSeed:
+    mask = frame >= threshold
+    from morphostack.core.pipeline import get_connected_components
+
+    components = get_connected_components(mask)
+    if not components:
+        height, width = frame.shape
+        return ObjectSeed(x=width / 2.0, y=height / 2.0, frame_index=frame_index, radius=radius)
+    largest = max(components, key=lambda item: int(item["area"]))
+    ymin, ymax, xmin, xmax = largest["bbox"]
+    cy, cx = np.argwhere(largest["sub_mask"])[0]
+    return ObjectSeed(
+        x=float(cx + xmin),
+        y=float(cy + ymin),
+        frame_index=frame_index,
+        radius=radius,
+    )
+
+
+def run_dopc(reports_dir: Path, source: Path) -> Path | None:
+    if not source.exists():
+        print(f"Skipping DOPC case; source missing: {source}")
+        return None
+
+    stack = load_image_stack(source)
+    frame_index = stack.grayscale.shape[0] // 2
+    seed = auto_seed_from_largest_component(
+        stack.grayscale[frame_index],
+        threshold=127.0,
+        frame_index=frame_index,
+    )
+    vesicle, limeseg = compare_on_array(
+        stack.grayscale,
+        threshold=127.0,
+        voxel=stack.voxel_size,
+        seed=seed,
+        prefer_opencv=True,
+        voxel_source=stack.voxel_source,
+    )
+    return write_case(
+        slug="dopc-movie1",
+        title="LimeSeg vs Threshold — DOPC Movie 1",
+        source_label=str(source),
+        threshold=127.0,
+        seed=seed,
+        vesicle=vesicle,
+        limeseg=limeseg,
+        reports_dir=reports_dir,
+    )
+
+
 def run_crowded_vesicle(reports_dir: Path, source: Path) -> Path | None:
     if not source.exists():
         print(f"Skipping crowded vesicle case; source missing: {source}")
@@ -285,6 +342,7 @@ def main() -> int:
         help="Directory for markdown/json comparison reports.",
     )
     parser.add_argument("--skip-crowded", action="store_true", help="Only run synthetic comparison.")
+    parser.add_argument("--skip-dopc", action="store_true", help="Skip DOPC movie comparison.")
     args = parser.parse_args()
     reports_dir = Path(args.reports_dir)
 
@@ -297,6 +355,13 @@ def main() -> int:
             report = runner(reports_dir, source)
             if report is not None:
                 paths.append(report)
+    if not args.skip_dopc:
+        report = run_dopc(
+            reports_dir,
+            Path(r"D:\lab-data\paper-data\syst202400052-sup-0001-movie1-dopc.tif"),
+        )
+        if report is not None:
+            paths.append(report)
 
     print("LimeSeg vs threshold comparison complete:")
     for path in paths:

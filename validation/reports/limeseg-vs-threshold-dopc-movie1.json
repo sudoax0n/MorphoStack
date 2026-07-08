@@ -1,0 +1,35 @@
+{
+  "title": "LimeSeg vs Threshold \u2014 DOPC Movie 1",
+  "source": "D:\\lab-data\\paper-data\\syst202400052-sup-0001-movie1-dopc.tif",
+  "threshold": 127.0,
+  "seed": {
+    "x": 209.0,
+    "y": 419.0,
+    "frame_index": 13,
+    "radius": 12.0
+  },
+  "vesicle": {
+    "profile": "vesicle",
+    "valid_frame_count": 26,
+    "valid_fraction": 1.0,
+    "mean_area_um2": 303.0,
+    "mesh_volume_um3": 6791.666666666667,
+    "mesh_surface_area_um2": 5270.710678118656,
+    "mesh_sphericity": 0.32905300067526777,
+    "warning_codes": [
+      "default_voxel_size"
+    ]
+  },
+  "limeseg": {
+    "profile": "limeseg",
+    "valid_frame_count": 26,
+    "valid_fraction": 1.0,
+    "mean_area_um2": 164.01923076923077,
+    "mesh_volume_um3": 4120.666666666667,
+    "mesh_surface_area_um2": 6770.633027935773,
+    "mesh_sphericity": 0.18358329992797406,
+    "warning_codes": [
+      "default_voxel_size"
+    ]
+  }
+}

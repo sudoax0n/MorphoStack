@@ -689,6 +689,7 @@ let latestAnalysis: AnalyzeResponse | null = null;
 let latestTracking: TrackingRecord[] | null = null;
 let latestBatch: BatchAnalyzeResponse | null = null;
 let latestSweep: SweepResponse | null = null;
+let latestMeshPreview: MeshPreviewResponse | null = null;
 let inspectedFrameCount: number | null = null;
 let previewDebounce: number | null = null;
 let selectedObjectSeed: ObjectSeed | null = null;
@@ -1839,11 +1840,13 @@ function updateRoiStatus(): void {
 
 function renderMeshPreview(payload: MeshPreviewResponse): void {
   if (!payload.has_mesh || payload.vertices.length === 0 || payload.faces.length === 0) {
+    latestMeshPreview = null;
     meshOutput.textContent = "No 3D mesh could be created from the current threshold/ROI/Z range.";
     meshOutput.className = "mesh-output muted";
     return;
   }
 
+  latestMeshPreview = payload;
   meshOutput.className = "mesh-output";
   meshOutput.innerHTML = `
     <div>
@@ -1854,9 +1857,16 @@ function renderMeshPreview(payload: MeshPreviewResponse): void {
       volume ${formatNumber(payload.volume_um3)} um3,
       sphericity ${formatNumber(payload.sphericity)}
     </div>
+    <div class="button-row mesh-export-row">
+      <button id="download-mesh-html-btn" class="secondary" type="button">Download Standalone HTML</button>
+      <span class="inline-status muted">Use the viewer toolbar inside the mesh frame for camera presets, opacity, and PNG export.</span>
+    </div>
     <iframe id="mesh-frame" title="3D mesh preview"></iframe>
   `;
   mustElement<HTMLIFrameElement>("mesh-frame").srcdoc = meshPreviewHtml(payload);
+  mustElement<HTMLButtonElement>("download-mesh-html-btn").addEventListener("click", () => {
+    downloadLatestMeshHtml();
+  });
 }
 
 function meshPreviewHtml(payload: MeshPreviewResponse): string {
@@ -1867,16 +1877,34 @@ function meshPreviewHtml(payload: MeshPreviewResponse): string {
   const i = payload.faces.map((face) => face[0]);
   const j = payload.faces.map((face) => face[1]);
   const k = payload.faces.map((face) => face[2]);
+  const title = payload.source_path.split(/[\\/]/).pop() ?? "MorphoStack mesh";
   return `<!doctype html>
 <html>
 <head>
   <meta charset="utf-8" />
+  <title>${escapeHtml(title)} — MorphoStack mesh</title>
   <style>
-    html, body, #plot { width: 100%; height: 100%; margin: 0; background: #0f172a; }
+    html, body { width: 100%; height: 100%; margin: 0; background: #0f172a; color: #e5e7eb; font-family: system-ui, sans-serif; }
+    #toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 10px; background: #111827; border-bottom: 1px solid rgba(255,255,255,0.08); }
+    #toolbar button, #toolbar label { font-size: 12px; }
+    #toolbar button { background: #1f2937; color: #e5e7eb; border: 1px solid rgba(255,255,255,0.12); border-radius: 6px; padding: 4px 8px; cursor: pointer; }
+    #toolbar button:hover { background: #374151; }
+    #toolbar input[type="range"] { width: 120px; vertical-align: middle; }
+    #plot { width: 100%; height: calc(100% - 44px); }
+    .meta { font-size: 11px; color: #9ca3af; margin-left: auto; }
   </style>
   <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 </head>
 <body>
+  <div id="toolbar">
+    <button type="button" data-camera="iso">Iso</button>
+    <button type="button" data-camera="front">Front</button>
+    <button type="button" data-camera="side">Side</button>
+    <button type="button" data-camera="top">Top</button>
+    <label>Opacity <input id="opacity-range" type="range" min="0.2" max="1" step="0.05" value="0.88" /></label>
+    <button id="download-png-btn" type="button">Download PNG</button>
+    <span class="meta">Surface ${formatNumber(payload.surface_area_um2)} um2 · Volume ${formatNumber(payload.volume_um3)} um3</span>
+  </div>
   <div id="plot"></div>
   <script>
     const trace = {
@@ -1903,7 +1931,33 @@ function meshPreviewHtml(payload: MeshPreviewResponse): string {
         zaxis: { title: "Z (um)", nticks: 4, color: "#e5e7eb", gridcolor: "rgba(255,255,255,0.18)", backgroundcolor: "#111827" }
       }
     };
+    const cameras = {
+      iso: { eye: { x: 1.6, y: 1.6, z: 1.2 } },
+      front: { eye: { x: 0, y: 2.2, z: 0 } },
+      side: { eye: { x: 2.2, y: 0, z: 0 } },
+      top: { eye: { x: 0, y: 0, z: 2.2 } }
+    };
     Plotly.newPlot("plot", [trace], layout, { responsive: true, displaylogo: false });
+    document.querySelectorAll("[data-camera]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const key = button.getAttribute("data-camera");
+        if (!key || !cameras[key]) return;
+        Plotly.relayout("plot", { "scene.camera": cameras[key] });
+      });
+    });
+    document.getElementById("opacity-range").addEventListener("input", (event) => {
+      const value = Number(event.target.value);
+      Plotly.restyle("plot", { opacity: value });
+    });
+    document.getElementById("download-png-btn").addEventListener("click", async () => {
+      const dataUrl = await Plotly.toImage("plot", { format: "png", width: 1400, height: 900, scale: 2 });
+      const anchor = document.createElement("a");
+      anchor.href = dataUrl;
+      anchor.download = "morphostack-mesh.png";
+      document.body.append(anchor);
+      anchor.click();
+      anchor.remove();
+    });
   </script>
 </body>
 </html>`;
@@ -2201,6 +2255,25 @@ function downloadLatestManifest(): void {
   anchor.remove();
   URL.revokeObjectURL(url);
   logAction("Export File", `Downloaded analysis JSON manifest: "${filename}"`);
+}
+
+function downloadLatestMeshHtml(): void {
+  if (!latestMeshPreview) {
+    return;
+  }
+
+  const html = meshPreviewHtml(latestMeshPreview);
+  const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  const filename = meshHtmlFilename(latestMeshPreview.source_path);
+  anchor.download = filename;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+  logAction("Export File", `Downloaded standalone mesh HTML: "${filename}"`);
 }
 
 function analysisReportMarkdown(payload: AnalyzeResponse): string {
@@ -2571,6 +2644,13 @@ function reportFilename(sourcePath: string): string {
   const baseName = rawName.replace(/\.[^.]+$/, "") || "morphostack-analysis";
   const safeName = baseName.replace(/[^a-z0-9._-]+/gi, "_");
   return `${safeName}_report.md`;
+}
+
+function meshHtmlFilename(sourcePath: string): string {
+  const rawName = sourcePath.split(/[\\/]/).pop() || "morphostack-mesh";
+  const baseName = rawName.replace(/\.[^.]+$/, "") || "morphostack-mesh";
+  const safeName = baseName.replace(/[^a-z0-9._-]+/gi, "_");
+  return `${safeName}_mesh.html`;
 }
 
 function sweepFilename(sourcePath: string): string {

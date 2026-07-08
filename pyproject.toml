@@ -39,10 +39,33 @@ analysis = [
   "networkx",
   "pillow",
 ]
+all = [
+  "fastapi",
+  "httpx",
+  "python-multipart",
+  "uvicorn",
+  "opencv-python",
+  "scikit-image",
+  "scipy",
+  "pandas",
+  "tifffile",
+  "czifile",
+  "shapely",
+  "plotly",
+  "networkx",
+  "pillow",
+  "pytest",
+]
 
 [project.scripts]
 morphostack = "morphostack.cli:main"
 mst = "morphostack.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/morphostack"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"apps/web/dist" = "morphostack/_web_static"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

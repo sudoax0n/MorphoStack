@@ -1,0 +1,11 @@
+{
+  "count": 6,
+  "previews": [
+    "czi-1650-crowded-two-objects\\object_a_left\\1650_z_stack\\preview-seed-frame.png",
+    "czi-1650-crowded-two-objects\\object_b_right\\1650_z_stack\\preview-seed-frame.png",
+    "dopc-smoke-test\\syst202400052-sup-0001-movie1-dopc\\preview-seed-frame.png",
+    "rbc-image46-crowded-two-objects\\object_a_lower\\Image_46\\preview-seed-frame.png",
+    "rbc-image46-crowded-two-objects\\object_b_upper\\Image_46\\preview-seed-frame.png",
+    "rbc-image46-smoke-test\\Image_46\\preview-seed-frame.png"
+  ]
+}

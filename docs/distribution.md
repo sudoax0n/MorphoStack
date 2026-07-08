@@ -26,3 +26,28 @@ for hot-reload during UI work.
 
 Remote script installation such as `irm ... | iex` can be convenient, but should
 be optional because institutional systems may block or distrust it.
+
+## Wheel packaging
+
+To build a wheel that bundles the compiled browser UI:
+
+```powershell
+.\scripts\build_wheel.ps1
+```
+
+The script runs `npm run build` in `apps/web`, then `python -m build --wheel`.
+Installed wheels expose the UI through `morphostack/_web_static`, which `morphostack app`
+uses automatically when a source checkout is not present.
+
+Install the wheel in an isolated environment:
+
+```powershell
+pipx install dist\morphostack-0.1.0-py3-none-any.whl
+morphostack app
+```
+
+For a full analysis stack, install optional dependencies as well:
+
+```powershell
+pip install "morphostack[all] @ file:///D:/MorphoStack/dist/morphostack-0.1.0-py3-none-any.whl"
+```
