@@ -45,6 +45,26 @@ def test_load_image_stack_uses_override_before_detected_metadata(monkeypatch):
     assert loaded.color.shape == (1, 4, 4, 3)
 
 
+def test_load_image_stack_skips_full_color_by_default(monkeypatch):
+    """Default include_color=False avoids tripling RAM; shape still reports RGB."""
+    # Use width != 3/4 so grayscale loader does not treat last axis as RGB/RGBA.
+    raw = np.arange(2 * 8 * 8, dtype=np.uint8).reshape(2, 8, 8)
+    monkeypatch.setattr(io, "read_tiff", lambda _: (raw, None))
+
+    loaded = load_image_stack("sample.tif")
+    assert loaded.grayscale.shape == (2, 8, 8)
+    assert loaded.color.shape == (2, 8, 8, 3)
+    # Broadcast stub reuses a scalar base (no owned multi-channel pixel buffer).
+    assert not loaded.color.flags["OWNDATA"]
+    assert 0 in loaded.color.strides
+
+    full = load_image_stack("sample.tif", include_color=True)
+    assert full.color.shape == (2, 8, 8, 3)
+    # Real grayscale→RGB expansion materializes channel data.
+    assert full.color.strides[-1] == full.color.dtype.itemsize
+    assert full.color.flags["C_CONTIGUOUS"]
+
+
 def test_load_image_stack_uses_default_voxel_when_metadata_missing(monkeypatch):
     raw = np.arange(16, dtype=np.uint8).reshape(1, 4, 4)
     monkeypatch.setattr(io, "read_tiff", lambda _: (raw, None))

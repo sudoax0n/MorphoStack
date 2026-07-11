@@ -1334,6 +1334,7 @@ def run_dev(
                 host,
                 "--port",
                 str(api_port),
+                "--reload",
             ]
         )
         processes.append(backend)

@@ -316,6 +316,7 @@ def test_analyze_stack_active_surfaces_watershed_pre_split_opt_out():
         profile="active_surfaces",
         object_seed=seed,
         active_surfaces_watershed_pre_split=False,
+        active_surfaces_fast=True,
     )
     frame = analysis.frames[2]
     assert frame.contour is not None
@@ -345,6 +346,7 @@ def test_active_surfaces_touching_vesicles_stays_inside_seed():
         voxel_size=voxel,
         profile="active_surfaces",
         object_seed=circle_seed,
+        active_surfaces_fast=True,
     )
 
     frame = analysis.frames[2]
@@ -372,14 +374,15 @@ def test_active_surfaces_segmentation_active_surfaces():
     voxel = VoxelSize(1.0, 1.0, 1.0)
     circle_seed = ObjectSeed(x=20, y=20, frame_index=5, radius=5.0, type="circle")
 
-    # Run Active surfaces-lite profile
+    # Run Active surfaces-lite profile (fast steps — mesh preview path)
     analysis = analyze_stack(
         stack,
         thresholds=100,
         voxel_size=voxel,
         profile="active_surfaces",
         include_mesh=True,
-        object_seed=circle_seed
+        object_seed=circle_seed,
+        active_surfaces_fast=True,
     )
 
     # Verify that we generated results for slices near center
@@ -387,7 +390,97 @@ def test_active_surfaces_segmentation_active_surfaces():
     # Check that frame 5 (the center slice) has a valid contour
     assert analysis.frames[5].contour is not None
     assert len(analysis.frames[5].contour) >= 3
+    # Contours are in full-image coordinates after isolation crop
+    assert float(np.mean(analysis.frames[5].contour[:, 0])) == pytest.approx(20.0, abs=4.0)
     # Check that we built a mesh
     assert analysis.mesh is not None
     assert analysis.mesh.surface_area_um2 > 0
     assert analysis.mesh.volume_um3 > 0
+
+
+def test_seed_isolation_roi_circle_and_polygon():
+    from morphostack.core.pipeline import seed_isolation_roi
+
+    circle = ObjectSeed(x=100.0, y=50.0, frame_index=0, radius=10.0)
+    roi = seed_isolation_roi(circle, width=200, height=120)
+    # half = max(32, 2*10) = 32
+    assert roi.xmin == 68
+    assert roi.xmax == 132
+    assert roi.ymin == 18
+    assert roi.ymax == 82
+
+    poly = ObjectSeed(
+        x=0,
+        y=0,
+        frame_index=0,
+        radius=5.0,
+        type="polygon",
+        points=[SeedPoint(40.0, 40.0), SeedPoint(50.0, 40.0), SeedPoint(50.0, 50.0), SeedPoint(40.0, 50.0)],
+    )
+    poly_roi = seed_isolation_roi(poly, width=100, height=100)
+    assert poly_roi.xmin < 40
+    assert poly_roi.xmax > 50
+    assert poly_roi.ymin < 40
+    assert poly_roi.ymax > 50
+
+
+def test_active_surfaces_seed_isolation_excludes_distant_neighbor():
+    """Crowded field: seed without ROI must not measure a distant neighbor."""
+    shape = (4, 80, 120)
+    stack = np.zeros(shape, dtype=np.uint8)
+    # Target blob (left) and distant neighbor (right)
+    for z in range(shape[0]):
+        for y in range(shape[1]):
+            for x in range(shape[2]):
+                if np.hypot(x - 25.0, y - 40.0) < 10.0:
+                    stack[z, y, x] = 220
+                if np.hypot(x - 95.0, y - 40.0) < 10.0:
+                    stack[z, y, x] = 220
+
+    seed = ObjectSeed(x=25.0, y=40.0, frame_index=1, radius=8.0, type="circle")
+    analysis = analyze_stack(
+        stack,
+        thresholds=100,
+        voxel_size=VoxelSize(1.0, 1.0, 1.0),
+        profile="active_surfaces",
+        object_seed=seed,
+        active_surfaces_fast=True,
+        include_mesh=True,
+    )
+
+    # Isolation crop half=max(32,16)=32 → x in [0, 57]; neighbor at 95 is outside crop.
+    for frame in analysis.frames:
+        if frame.contour is None:
+            continue
+        assert float(np.max(frame.contour[:, 0])) < 60.0
+        assert float(np.mean(frame.contour[:, 0])) < 40.0
+    assert analysis.mesh is not None
+    assert analysis.mesh.volume_um3 > 0
+
+
+def test_active_surfaces_fast_completes_with_reduced_steps():
+    from morphostack.core.active_surfaces import ACTIVE_SURFACES_FAST_DEFAULTS
+
+    shape = (6, 36, 36)
+    stack = np.zeros(shape, dtype=np.uint8)
+    for z in range(shape[0]):
+        for y in range(shape[1]):
+            for x in range(shape[2]):
+                if np.hypot(x - 18.0, y - 18.0) + abs(z - 2.5) < 7.0:
+                    stack[z, y, x] = 255
+
+    seed = ObjectSeed(x=18.0, y=18.0, frame_index=3, radius=6.0)
+    analysis = analyze_stack(
+        stack,
+        thresholds=100,
+        voxel_size=VoxelSize(1.0, 1.0, 1.0),
+        profile="active_surfaces",
+        object_seed=seed,
+        active_surfaces_fast=True,
+        active_surfaces_relaxation_steps=int(ACTIVE_SURFACES_FAST_DEFAULTS["relaxation_steps"]),
+        active_surfaces_optimization_steps=int(ACTIVE_SURFACES_FAST_DEFAULTS["optimization_steps"]),
+    )
+    assert any(f.contour is not None for f in analysis.frames)
+    center = analysis.frames[3]
+    assert center.contour is not None
+    assert float(np.mean(center.contour[:, 0])) == pytest.approx(18.0, abs=4.0)

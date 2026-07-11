@@ -1,4 +1,25 @@
 import "./styles.css";
+import {
+  ProvisionalPreviewScheduler,
+  shouldApplyPreview as shouldApplyPreviewGate,
+  claimBusyOwner,
+  releaseBusyOwner,
+  busyAfterProvisional,
+  busyVisibleForLatest,
+  type BusyOwner,
+  type PreviewQuality as QueuePreviewQuality
+} from "./previewQueue";
+
+/** Shown as path-input placeholder; never treat as a real stack path. */
+const PATH_PLACEHOLDER = "D:\\lab-data\\sample.tif";
+/** Warn when multipart-uploading stacks at or above this size. */
+const LARGE_UPLOAD_WARN_BYTES = 50 * 1024 * 1024;
+/** Debounce for provisional (fast) auto-preview after frame/threshold/ROI changes. */
+const PREVIEW_DEBOUNCE_MS = 150;
+/** Extra settle time before launching authoritative seeded tracking preview. */
+const EXACT_PREVIEW_DEBOUNCE_MS = 280;
+/** Min client-space drag (px) to accept a Fiji-style circle ROI. Click-only is rejected. */
+const MIN_CIRCLE_DRAG_CLIENT_PX = 14;
 
 type VoxelOverride = {
   x_um: number;
@@ -31,6 +52,17 @@ type InspectResponse = {
   color_shape: number[];
   voxel_size: VoxelOverride;
   voxel_source: string;
+  /** Present after file-mode inspect/session open (server-side upload cache). */
+  stack_id?: string;
+};
+
+type SessionOpenResponse = {
+  stack_id: string;
+  source_path: string;
+  grayscale_shape: number[];
+  color_shape: number[];
+  voxel_size: VoxelOverride;
+  voxel_source: string;
 };
 
 type AnalysisRow = {
@@ -57,6 +89,8 @@ type AnalysisRow = {
   mesh_volume_um3: number;
   mesh_equivalent_sphere_diameter_um: number;
   mesh_sphericity: number;
+  skel_perimeter_um?: number;
+  skel_perimeter_px?: number;
 };
 
 type TrackingRecord = {
@@ -67,6 +101,12 @@ type TrackingRecord = {
   area_px: number;
   touches_roi_boundary: boolean;
   likely_neighbor_merge: boolean;
+  /** Additive reason fields (optional for older API payloads). */
+  loss_reason?: string | null;
+  merge_suspect?: boolean;
+  merge_rejected?: boolean;
+  touches_seed_disk?: boolean;
+  method?: string | null;
 };
 
 type AnalyzeResponse = {
@@ -84,6 +124,20 @@ type AnalyzeResponse = {
     volume_um3: number;
     equivalent_sphere_diameter_um: number;
     sphericity: number;
+  };
+  slice_volume: null | {
+    method: string;
+    volume_um3: number | null;
+    partial_volume_um3: number;
+    relative_difference_from_mesh: number | null;
+    sampled_slice_count: number;
+    internal_missing_slice_indices: number[];
+    coverage_fraction: number;
+    z_step_um: number;
+    has_internal_gaps: boolean;
+    has_observed_start_cap: boolean;
+    has_observed_end_cap: boolean;
+    touches_stack_boundary: boolean;
   };
   summary: AnalysisSummary;
   warnings: AnalysisWarning[];
@@ -111,6 +165,8 @@ type AnalysisWarning = {
   message: string;
 };
 
+type PreviewQuality = QueuePreviewQuality;
+
 type PreviewResponse = {
   source_path: string;
   frame_index: number;
@@ -121,7 +177,20 @@ type PreviewResponse = {
   area_px2: number;
   perimeter_px: number;
   circularity: number;
-  image_png_base64: string;
+  image_url?: string;
+  image_png_base64?: string;
+  skel_perimeter_um?: number;
+  skel_perimeter_px?: number;
+  /** provisional = fast one-plane overlay; exact = tracked / authoritative. */
+  preview_quality?: PreviewQuality;
+  cache_hit?: boolean;
+  /**
+   * Exact seeded track center in preview-image coordinates (post ROI/Z crop),
+   * same frame as the contour. Null when provisional, lost, or untracked.
+   * Never substitute the immutable user seed here.
+   */
+  tracked_center_x?: number | null;
+  tracked_center_y?: number | null;
 };
 
 type MeshPreviewResponse = {
@@ -177,6 +246,8 @@ type ProjectSettings = {
     zmax: number;
   };
   include_mesh?: boolean;
+  enable_skeleton?: boolean;
+  skeleton_prune_pix?: number;
   prefer_opencv?: boolean;
   sweep?: {
     start?: number;
@@ -328,9 +399,18 @@ app.innerHTML = `
         <input id="file-input" type="file" accept=".tif,.tiff,.lsm,.czi,image/tiff" />
       </label>
       <label>
-        Stack path (optional)
-        <input id="path-input" type="text" placeholder="D:\\\\lab-data\\\\sample.tif" />
+        Stack path (preferred for large stacks — no browser upload)
+        <input id="path-input" type="text" placeholder="${PATH_PLACEHOLDER}" />
       </label>
+      <p class="muted" style="margin: 0.35rem 0 0.6rem; font-size: 0.9rem;">
+        If both a file and a path are set, the local path is used (no upload). Paste the full path for large CZI/LSM stacks when the API can read the disk.
+      </p>
+      <div id="session-banner" class="session-banner" hidden>
+        <strong>File mode:</strong> first Inspect loads the stack once into server memory.
+        Later Preview / Mesh / Analyze use that session and should <em>not</em> re-upload.
+        Path mode is still faster for huge CZIs (server reads the file directly).
+      </div>
+      <p id="session-status" class="session-status muted" hidden></p>
       <h3>Calibration</h3>
       <label style="margin-bottom: 0.5rem; display: block;">
         Calibration Mode
@@ -368,41 +448,85 @@ app.innerHTML = `
           <button id="analyze-btn" type="button">Analyze</button>
         </div>
       </div>
+      <div class="workflow-card">
+        <strong>Simple workflow</strong>
+        <ol class="workflow-steps">
+          <li><b>Inspect</b> the stack (use Stack path for big CZIs)</li>
+          <li><b>Pick your object</b> (Select Object on the preview)</li>
+          <li>Set <b>threshold</b> until the membrane looks right → Preview</li>
+          <li><b>Analyze</b> for CSV metrics · <b>View 3D Mesh</b> for shape</li>
+        </ol>
+        <p class="fieldset-hint muted" style="margin: 0;">
+          Leave mode on <b>Standard</b> for threshold segmentation, single-object tracking, and mesh export.
+        </p>
+      </div>
       <div class="grid">
-        <label>
-          Profile
+        <label class="wide">
+          Mode
           <select id="profile-input">
-            <option value="vesicle" selected>Vesicle</option>
-            <option value="rbc">RBC</option>
-            <option value="active_surfaces">Active Surfaces</option>
+            <option value="vesicle" selected>Standard — GUVs / vesicles (recommended)</option>
+            <option value="rbc">Red blood cells (RBC)</option>
+            <option value="active_surfaces">Experimental — slow 3D refine (only if Standard fails)</option>
           </select>
-        </label>
-        <label class="wide frame-control">
-          Preview frame
-          <div class="frame-control-row">
-            <input id="frame-slider" type="range" min="0" max="0" step="1" value="0" />
-            <input id="frame-input" type="number" min="0" step="1" value="0" />
-          </div>
+          <span id="profile-help" class="inline-status profile-help">
+            Standard: select one object, set threshold, then Analyze or View 3D Mesh.
+          </span>
         </label>
         <label>
           Threshold
           <input id="threshold-input" type="number" step="1" value="100" />
         </label>
         <label class="button-label">
-          Threshold
+          Auto threshold
           <button id="suggest-threshold-btn" class="secondary" type="button">Suggest Threshold</button>
+          <span id="suggest-status" class="inline-status"></span>
         </label>
         <label class="checkbox-row">
-          <input id="mesh-input" type="checkbox" />
-          Include 3D mesh
+          <input id="mesh-input" type="checkbox" checked />
+          Compute 3D surface area + volume in Analyze
         </label>
-        <label class="checkbox-row">
-          <input id="fallback-input" type="checkbox" />
-          Use fallback contours
-        </label>
+        <div class="skeleton-controls">
+          <label class="checkbox-row">
+            <input id="skeleton-input" type="checkbox" />
+            Enable skeleton (better perimeter)
+          </label>
+          <label class="skeleton-prune-wrap" for="skeleton-prune-input">
+            prune
+            <input
+              id="skeleton-prune-input"
+              type="number"
+              min="0"
+              step="1"
+              value="1"
+              inputmode="numeric"
+              title="Skeleton spur prune length (px)"
+            />
+            px
+          </label>
+        </div>
+        <details class="advanced-details">
+          <summary>Advanced options</summary>
+          <label class="checkbox-row" style="margin-top: 0.5rem;">
+            <input id="fallback-input" type="checkbox" />
+            Use fallback contours (no OpenCV)
+          </label>
+          <label class="checkbox-row" style="margin-top: 0.5rem;">
+            <input id="show-tracking-debug" type="checkbox" />
+            Show tracked centroid after Analyze
+          </label>
+        </details>
+      </div>
+      <div id="profile-warning" class="profile-warning" hidden>
+        Experimental mode is much slower (minutes on big stacks). You must Select Object first.
+        Prefer Standard unless the membrane is too broken for threshold.
       </div>
       <fieldset>
-        <legend>Object selection (optional)</legend>
+        <legend>Pick this vesicle (recommended)</legend>
+        <p class="fieldset-hint muted">
+          Click <b>Select Object</b>, then <b>drag a circle</b> that encloses the vesicle (Fiji-style).
+          Click-only is not enough — drag from center out to set the real radius.
+          MorphoStack tracks that object through Z. Without this, it may grab the largest blob in view.
+        </p>
         <div class="button-row fieldset-actions">
           <button id="select-object-btn" class="secondary" type="button">Select Object</button>
           <button id="clear-object-btn" class="secondary" type="button">Clear Object</button>
@@ -412,8 +536,8 @@ app.innerHTML = `
           <label>
             Seed Tool
             <select id="object-seed-tool">
-              <option value="circle">Circle / Drag-radius</option>
-              <option value="polygon">Freehand / Polygon</option>
+              <option value="circle" selected>Circle ROI (drag radius like Fiji)</option>
+              <option value="polygon">Polygon (advanced)</option>
             </select>
           </label>
           <label id="seed-radius-container">
@@ -425,13 +549,27 @@ app.innerHTML = `
             <input id="object-seed-max-dist" type="number" min="0.1" step="0.1" placeholder="Auto" />
           </label>
         </div>
-        <label class="checkbox-row" style="margin-top: 0.75rem;">
-          <input id="show-tracking-debug" type="checkbox" />
-          Show tracked-object debug overlay (centroids after Analyze)
-        </label>
+        <div class="overlay-toggles" style="margin-top: 10px; display: flex; flex-wrap: wrap; gap: 12px 16px;">
+          <label class="checkbox-row">
+            <input id="show-circle-roi-overlay" type="checkbox" checked />
+            Show circle ROI
+          </label>
+          <label class="checkbox-row">
+            <input id="show-xy-roi-overlay" type="checkbox" checked />
+            Show XY crop box
+          </label>
+          <label class="checkbox-row">
+            <input id="show-selection-overlay" type="checkbox" checked />
+            Show selection (green contour / tint)
+          </label>
+        </div>
+        <p class="fieldset-hint muted" style="margin-top: 6px;">
+          Uncheck overlays to see the raw membrane; re-check to verify what is selected.
+        </p>
       </fieldset>
       <fieldset>
-        <legend>XY ROI optional</legend>
+        <legend>Optional: crop box (if field is crowded)</legend>
+        <p class="fieldset-hint muted">Drag a box on the preview (when not selecting an object) to crop neighbors away. Optional if you already selected the object.</p>
         <div class="grid four">
           <input id="roi-xmin" type="number" placeholder="xmin" />
           <input id="roi-xmax" type="number" placeholder="xmax" />
@@ -440,18 +578,28 @@ app.innerHTML = `
         </div>
         <div class="button-row fieldset-actions">
           <button id="clear-roi-btn" class="secondary" type="button">Clear ROI</button>
-          <span id="roi-status" class="inline-status">Full XY frame</span>
+          <span id="roi-status" class="inline-status">Full field — largest object auto-selected</span>
         </div>
       </fieldset>
+      <div class="frame-control-wrap" style="margin: 1.5rem 0; padding: 0.5rem 0.25rem;">
+        <label class="frame-control" style="margin-bottom: 0;">
+          Preview slice
+          <div class="frame-control-row">
+            <input id="frame-slider" type="range" min="0" max="0" step="1" value="0" />
+            <input id="frame-input" type="number" min="0" step="1" value="0" />
+          </div>
+          <span id="frame-slice-label" class="inline-status frame-slice-label">Slice 1 of 1</span>
+        </label>
+      </div>
       <fieldset>
-        <legend>Frame range for analysis/3D</legend>
+        <legend>Slice range for analysis/3D</legend>
         <div class="range-pair">
           <label>
-            Start frame
+            Start slice
             <input id="z-start-slider" type="range" min="0" max="1" step="1" value="0" />
           </label>
           <label>
-            Stop frame
+            Stop slice
             <input id="z-stop-slider" type="range" min="1" max="1" step="1" value="1" />
           </label>
         </div>
@@ -461,7 +609,7 @@ app.innerHTML = `
         </div>
         <div class="button-row fieldset-actions">
           <button id="use-full-range-btn" class="secondary" type="button">Use Full Stack</button>
-          <span id="z-range-status" class="inline-status">Full stack</span>
+          <span id="z-range-status" class="inline-status">Full stack (all slices)</span>
         </div>
       </fieldset>
       <div id="preview-output" class="preview-output muted">No preview rendered yet.</div>
@@ -617,8 +765,8 @@ app.innerHTML = `
             <th>Frame</th>
             <th>Method</th>
             <th>Contour</th>
-            <th>Area (um2)</th>
-            <th>Perimeter (um)</th>
+            <th>Slice area (um2)</th>
+            <th>Slice perimeter (um)</th>
             <th>Eq. diameter (um)</th>
             <th>Aspect</th>
             <th>Elongation</th>
@@ -695,11 +843,72 @@ let latestSweep: SweepResponse | null = null;
 let latestMeshPreview: MeshPreviewResponse | null = null;
 let inspectedFrameCount: number | null = null;
 let previewDebounce: number | null = null;
+let exactPreviewDebounce: number | null = null;
+/** Monotonic token: only the latest scheduled preview generation may update the overlay. */
+let previewRequestGen = 0;
+/** Server upload-session id for Choose File mode (avoids re-uploading large CZIs). */
+let sessionStackId: string | null = null;
+/** Identity of the File bound to ``sessionStackId`` (name|size|lastModified). */
+let sessionFileKey: string | null = null;
+/** In-flight session open so concurrent preview/mesh share one upload. */
+let sessionOpenPromise: Promise<string> | null = null;
+let exactAbort: AbortController | null = null;
+/** Last applied overlay for this generation — prevents provisional overwriting exact. */
+let lastAppliedPreview: {
+  gen: number;
+  frameIndex: number;
+  quality: PreviewQuality;
+} | null = null;
+/**
+ * Generation that owns the "Tracking object…" busy indicator.
+ * Only that generation may claim or release the DOM overlay.
+ */
+let busyOwner: BusyOwner | null = null;
+/** Exact request still pending for this generation (seeded path). */
+let exactPendingGen: number | null = null;
+/** Last applied exact tracked center (preview coords); ignored if gen is stale. */
+let lastTrackedCenter: {
+  gen: number;
+  frameIndex: number;
+  x: number;
+  y: number;
+} | null = null;
+/** Non-busy exact error status (settled failure); not busy-overlay ownership. */
+let lastExactPreviewError: { gen: number; message: string } | null = null;
 let selectedObjectSeed: ObjectSeed | null = null;
 let excludedFrameIndices = new Set<number>();
 let selectObjectMode = false;
 let polygonPoints: { imgX: number; imgY: number }[] = [];
 let polygonClosed = false;
+
+mustElement<HTMLSelectElement>("profile-input").addEventListener("change", () => {
+  updateProfileHelp();
+  updateObjectSeedStatus();
+});
+
+mustElement<HTMLInputElement>("file-input").addEventListener("change", () => {
+  clearUploadSession();
+  updateSessionBanner();
+});
+
+mustElement<HTMLInputElement>("path-input").addEventListener("input", () => {
+  updateSessionBanner();
+});
+
+mustElement<HTMLSelectElement>("calibration-mode").addEventListener("change", () => {
+  // Session was decoded with prior voxel override; force re-open on next file op.
+  if (sessionStackId) {
+    clearUploadSession();
+  }
+});
+
+for (const id of ["voxel-x", "voxel-y", "voxel-z"] as const) {
+  mustElement<HTMLInputElement>(id).addEventListener("change", () => {
+    if (sessionStackId) {
+      clearUploadSession();
+    }
+  });
+}
 
 mustElement<HTMLButtonElement>("inspect-btn").addEventListener("click", () => {
   void inspectStack();
@@ -722,7 +931,7 @@ mustElement<HTMLButtonElement>("reanalyze-excluded-btn").addEventListener("click
 });
 
 mustElement<HTMLButtonElement>("preview-btn").addEventListener("click", () => {
-  void previewStack();
+  void requestAuthoritativePreview();
 });
 
 mustElement<HTMLButtonElement>("mesh-preview-btn").addEventListener("click", () => {
@@ -733,8 +942,20 @@ mustElement<HTMLButtonElement>("suggest-threshold-btn").addEventListener("click"
   void suggestThreshold();
 });
 
+mustElement<HTMLInputElement>("skeleton-input").addEventListener("change", () => {
+  updateSkeletonPruneVisibility();
+  schedulePreview();
+});
+
+mustElement<HTMLInputElement>("skeleton-prune-input").addEventListener("change", () => {
+  if (mustElement<HTMLInputElement>("skeleton-input").checked) {
+    schedulePreview();
+  }
+});
+
 mustElement<HTMLButtonElement>("clear-roi-btn").addEventListener("click", () => {
   clearRoiFields();
+  schedulePreview();
 });
 
 mustElement<HTMLButtonElement>("select-object-btn").addEventListener("click", () => {
@@ -750,8 +971,18 @@ mustElement<HTMLButtonElement>("select-object-btn").addEventListener("click", ()
       overlay.innerHTML = "";
       overlay.setAttribute("hidden", "true");
     }
+    // Leaving selection mode: hide transient drag circle unless a seed remains (redraw below).
+    const seedEl = document.getElementById("seed-selection") as HTMLDivElement | null;
+    if (seedEl && !selectedObjectSeed) {
+      seedEl.hidden = true;
+    }
   }
   updateObjectSeedStatus();
+  // Keep/restore persistent circle ROI overlay when canceling with an existing seed.
+  const image = document.getElementById("preview-image") as HTMLImageElement | null;
+  if (image && selectedObjectSeed) {
+    drawPersistentCircleSeedOverlay(image, selectedObjectSeed, readRoi());
+  }
 });
 
 mustElement<HTMLInputElement>("show-tracking-debug").addEventListener("change", () => {
@@ -782,11 +1013,13 @@ mustElement<HTMLButtonElement>("use-full-range-btn").addEventListener("click", (
 
 frameSlider.addEventListener("input", () => {
   frameInput.value = frameSlider.value;
+  updateFrameSliceLabel();
   schedulePreview();
 });
 
 frameInput.addEventListener("input", () => {
   syncFrameSliderToInput();
+  updateFrameSliceLabel();
   schedulePreview();
 });
 
@@ -885,6 +1118,12 @@ mustElement<HTMLButtonElement>("download-logs-btn").addEventListener("click", ()
 });
 
 void refreshHealth();
+updateSkeletonPruneVisibility();
+updateFrameSliceLabel();
+updateSessionBanner();
+updateProfileHelp();
+wireOverlayToggles();
+updateObjectSeedStatus();
 
 async function refreshHealth(): Promise<void> {
   try {
@@ -892,8 +1131,25 @@ async function refreshHealth(): Promise<void> {
     apiStatus.textContent = payload.ok ? `API ${payload.version}` : "API unavailable";
     apiStatus.className = payload.ok ? "status ok" : "status warn";
   } catch {
-    apiStatus.textContent = "API offline";
+    apiStatus.textContent = "API offline — run morphostack dev or morphostack app";
     apiStatus.className = "status warn";
+  }
+}
+
+async function ensureApiOnline(): Promise<void> {
+  try {
+    const payload = await apiGet<{ ok: boolean; version: string }>("/api/health");
+    if (!payload.ok) {
+      throw new Error("API reported not ok");
+    }
+    apiStatus.textContent = `API ${payload.version}`;
+    apiStatus.className = "status ok";
+  } catch {
+    apiStatus.textContent = "API offline — run morphostack dev or morphostack app";
+    apiStatus.className = "status warn";
+    throw new Error(
+      "MorphoStack API is offline. Start it with `morphostack dev` (recommended) or `morphostack app`, then retry Inspect."
+    );
   }
 }
 
@@ -945,18 +1201,50 @@ function uploadStatusMarkup(label: string, percent: number | null): string {
 }
 
 async function inspectStack(): Promise<void> {
-  const file = selectedFile();
-  inspectOutput.innerHTML = uploadStatusMarkup(file ? `Uploading ${file.name}` : "Inspecting stack", file ? 0 : null);
-  logAction("Inspect Stack Started", file ? `Uploading "${file.name}"` : `Local path "${readPath()}"`);
+  let usedUpload = false;
   try {
-    const payload = file
-      ? await apiUploadPost<InspectResponse>("/api/upload/inspect", inspectUploadForm(file), (percent) => {
-          inspectOutput.innerHTML = uploadStatusMarkup(`Uploading ${file.name}`, percent);
-        })
-      : await apiPost<InspectResponse>("/api/inspect", {
-          path: readPath(),
-          voxel: readVoxel()
-        });
+    const source = resolveStackSource();
+    usedUpload = source.kind === "file";
+    await ensureApiOnline();
+    let payload: InspectResponse;
+    if (source.kind === "path") {
+      clearUploadSession();
+      inspectOutput.innerHTML = uploadStatusMarkup("Inspecting stack (local path)", null);
+      logAction("Inspect Stack Started", `Local path "${source.path}"`);
+      payload = await apiPost<InspectResponse>("/api/inspect", {
+        path: source.path,
+        voxel: readVoxel()
+      });
+    } else {
+      const file = source.file;
+      const sizeMb = file.size / (1024 * 1024);
+      const large = file.size >= LARGE_UPLOAD_WARN_BYTES;
+      const label = large
+        ? `Loading large file ${file.name} (${sizeMb.toFixed(0)} MB) into server memory (once)`
+        : `Loading ${file.name} into server memory`;
+      inspectOutput.innerHTML = uploadStatusMarkup(label, 0);
+      logAction(
+        "Inspect Stack Started",
+        large
+          ? `Upload-once session for large file "${file.name}" (${sizeMb.toFixed(1)} MB)`
+          : `Upload-once session for "${file.name}"`
+      );
+      // /upload/inspect opens a server session (stack_id) so later ops skip re-upload.
+      payload = await apiUploadPost<InspectResponse>(
+        "/api/upload/inspect",
+        inspectUploadForm(file),
+        (percent) => {
+          inspectOutput.innerHTML = uploadStatusMarkup(label, percent);
+        }
+      );
+      if (payload.stack_id) {
+        rememberUploadSession(payload.stack_id, file);
+      }
+    }
+    const sessionNote =
+      payload.stack_id != null
+        ? `<br /><span class="session-ok">Server session ready — previews will not re-upload.</span>`
+        : "";
     inspectOutput.innerHTML = `
       <strong>${escapeHtml(payload.source_path)}</strong><br />
       Grayscale: ${payload.grayscale_shape.join(" x ")}<br />
@@ -964,10 +1252,11 @@ async function inspectStack(): Promise<void> {
       Voxel: x=${formatNumber(payload.voxel_size.x_um)} um,
       y=${formatNumber(payload.voxel_size.y_um)} um,
       z=${formatNumber(payload.voxel_size.z_um)} um<br />
-      ${voxelSourceMarkup(payload.voxel_source)}
+      ${voxelSourceMarkup(payload.voxel_source)}${sessionNote}
     `;
     applyVoxelDefaultStyling(payload.voxel_source);
-    
+    updateSessionBanner();
+
     // Auto-populate the visible voxel input fields if in Auto calibration mode
     const mode = mustElement<HTMLSelectElement>("calibration-mode").value;
     if (mode === "auto") {
@@ -975,39 +1264,381 @@ async function inspectStack(): Promise<void> {
       mustElement<HTMLInputElement>("voxel-y").value = formatInputNumber(payload.voxel_size.y_um);
       mustElement<HTMLInputElement>("voxel-z").value = formatInputNumber(payload.voxel_size.z_um);
     }
-    
+
     inspectedFrameCount = payload.grayscale_shape[0] ?? null;
     syncZRangeControls({ initializeFullRange: true });
-    logAction("Inspect Stack Succeeded", `Source: "${payload.source_path}", Shape: [${payload.grayscale_shape.join(", ")}], Voxel source: ${payload.voxel_source}`);
+    logAction(
+      "Inspect Stack Succeeded",
+      `Source: "${payload.source_path}", Shape: [${payload.grayscale_shape.join(", ")}], Voxel source: ${payload.voxel_source}${
+        payload.stack_id ? `, stack_id: ${payload.stack_id}` : ""
+      }`
+    );
   } catch (error) {
-    inspectOutput.textContent = errorMessage(error);
-    logAction("Inspect Stack Failed", `Error: ${errorMessage(error)}`);
+    const msg = errorMessage(error, usedUpload ? "upload" : "general");
+    inspectOutput.textContent = msg;
+    logAction("Inspect Stack Failed", `Error: ${msg}`);
   }
 }
 
-async function previewStack(): Promise<void> {
-  previewOutput.textContent = "Rendering preview...";
+function readShowCircleRoiOverlay(): boolean {
+  const el = document.getElementById("show-circle-roi-overlay");
+  return el instanceof HTMLInputElement ? el.checked : true;
+}
+
+function readShowXyRoiOverlay(): boolean {
+  const el = document.getElementById("show-xy-roi-overlay");
+  return el instanceof HTMLInputElement ? el.checked : true;
+}
+
+function readShowSelectionOverlay(): boolean {
+  const el = document.getElementById("show-selection-overlay");
+  return el instanceof HTMLInputElement ? el.checked : true;
+}
+
+function previewJsonBody(stackRef: { path?: string; stack_id?: string }): Record<string, unknown> {
+  return {
+    ...stackRef,
+    threshold: readNumber("threshold-input"),
+    frame_index: globalPreviewFrameIndex(readLocalPreviewFrameIndex()),
+    voxel: readVoxel(),
+    roi: readRoi(),
+    z_range: readZRange(),
+    prefer_opencv: !mustElement<HTMLInputElement>("fallback-input").checked,
+    object_seed: selectedObjectSeed,
+    enable_skeleton: readEnableSkeleton(),
+    skeleton_prune_pix: readSkeletonPrunePix(),
+    show_selection: readShowSelectionOverlay(),
+    image_transport: "url"
+  };
+}
+
+function shouldApplyPreview(
+  gen: number,
+  frameIndex: number,
+  quality: PreviewQuality
+): boolean {
+  return shouldApplyPreviewGate(gen, previewRequestGen, frameIndex, quality, lastAppliedPreview);
+}
+
+function bumpPreviewGeneration(): number {
+  const prevGen = previewRequestGen;
+  previewRequestGen += 1;
+  lastAppliedPreview = null;
+  // Old generation loses busy ownership; do not leave its text visible.
+  if (busyOwner !== null && busyOwner.gen === prevGen) {
+    busyOwner = null;
+    hidePreviewBusyOverlayDom();
+  }
+  if (exactPendingGen === prevGen) {
+    exactPendingGen = null;
+  }
+  if (lastTrackedCenter !== null && lastTrackedCenter.gen === prevGen) {
+    // Stale tracked marker is dropped until the new gen applies exact.
+    lastTrackedCenter = null;
+  }
+  if (lastExactPreviewError !== null && lastExactPreviewError.gen === prevGen) {
+    lastExactPreviewError = null;
+    paintExactPreviewErrorDom();
+  }
+  return previewRequestGen;
+}
+
+function syncBusyOverlayDom(): void {
+  if (busyVisibleForLatest(busyOwner, previewRequestGen) && busyOwner) {
+    showPreviewBusyOverlayDom(busyOwner.message);
+  } else {
+    hidePreviewBusyOverlayDom();
+  }
+}
+
+function claimTrackingBusy(gen: number, message: string): void {
+  busyOwner = claimBusyOwner(busyOwner, gen, previewRequestGen, message);
+  syncBusyOverlayDom();
+}
+
+function releaseTrackingBusy(gen: number): void {
+  busyOwner = releaseBusyOwner(busyOwner, gen);
+  syncBusyOverlayDom();
+}
+
+/** Settled exact error is not busy ownership — separate non-blocking caption. */
+function setExactPreviewError(gen: number, message: string): void {
+  if (gen !== previewRequestGen) {
+    return;
+  }
+  lastExactPreviewError = { gen, message };
+  paintExactPreviewErrorDom();
+}
+
+function clearExactPreviewErrorForGen(gen: number): void {
+  if (lastExactPreviewError !== null && lastExactPreviewError.gen === gen) {
+    lastExactPreviewError = null;
+  }
+  paintExactPreviewErrorDom();
+}
+
+function paintExactPreviewErrorDom(): void {
+  const canvas = document.querySelector(".preview-canvas");
+  let banner = document.getElementById("exact-preview-error");
+  const show =
+    lastExactPreviewError !== null && lastExactPreviewError.gen === previewRequestGen;
+  if (!show) {
+    if (banner) {
+      banner.hidden = true;
+      banner.textContent = "";
+    }
+    return;
+  }
+  if (!(canvas instanceof HTMLElement)) {
+    return;
+  }
+  if (!(banner instanceof HTMLElement)) {
+    banner = document.createElement("div");
+    banner.id = "exact-preview-error";
+    banner.className = "exact-preview-error";
+    canvas.append(banner);
+  }
+  banner.textContent = lastExactPreviewError!.message;
+  banner.hidden = false;
+}
+
+function cancelPendingPreviewTimers(): void {
+  if (previewDebounce !== null) {
+    window.clearTimeout(previewDebounce);
+    previewDebounce = null;
+  }
+  if (exactPreviewDebounce !== null) {
+    window.clearTimeout(exactPreviewDebounce);
+    exactPreviewDebounce = null;
+  }
+}
+
+async function fetchPreviewPayload(
+  fastPreview: boolean,
+  signal: AbortSignal
+): Promise<PreviewResponse> {
+  const source = resolveStackSource();
+  if (source.kind === "path") {
+    return apiPost<PreviewResponse>(
+      "/api/preview",
+      { ...previewJsonBody({ path: source.path }), fast_preview: fastPreview },
+      signal
+    );
+  }
+  const stackId = await ensureUploadSession(source.file, {
+    onProgress: (percent) => {
+      if (!signal.aborted && !document.getElementById("preview-image")) {
+        previewOutput.innerHTML = uploadStatusMarkup(
+          `Loading ${source.file.name} into server memory (once)`,
+          percent
+        );
+      }
+    }
+  });
+  if (signal.aborted) {
+    throw new DOMException("Aborted", "AbortError");
+  }
+  return apiPost<PreviewResponse>(
+    "/api/preview",
+    { ...previewJsonBody({ stack_id: stackId }), fast_preview: fastPreview },
+    signal
+  );
+}
+
+function previewQualityOf(payload: PreviewResponse, fallback: PreviewQuality): PreviewQuality {
+  return payload.preview_quality === "provisional" || payload.preview_quality === "exact"
+    ? payload.preview_quality
+    : fallback;
+}
+
+/**
+ * Single provisional runner used by the generation-aware scheduler.
+ * Throws AbortError when the signal aborts so the scheduler can hand off.
+ */
+async function executeProvisionalFetch(gen: number, signal: AbortSignal): Promise<void> {
+  if (gen !== previewRequestGen) {
+    return;
+  }
+  const roi = readRoi();
+  let usedUpload = false;
   try {
-    const file = selectedFile();
-    const roi = readRoi();
-    const zRange = readZRange();
-    const payload = file
-      ? await apiUploadPost<PreviewResponse>("/api/upload/preview", previewUploadForm(file))
-      : await apiPost<PreviewResponse>("/api/preview", {
-          path: readPath(),
-          threshold: readNumber("threshold-input"),
-          frame_index: globalPreviewFrameIndex(readLocalPreviewFrameIndex()),
-          voxel: readVoxel(),
-          roi,
-          z_range: zRange,
-          prefer_opencv: !mustElement<HTMLInputElement>("fallback-input").checked,
-          object_seed: selectedObjectSeed
-        });
+    usedUpload = resolveStackSource().kind === "file";
+    if (!document.getElementById("preview-image")) {
+      previewOutput.textContent = "Rendering preview…";
+    } else if (!selectedObjectSeed) {
+      claimTrackingBusy(gen, "Rendering preview…");
+    } else {
+      claimTrackingBusy(gen, "Provisional preview…");
+    }
+    const payload = await fetchPreviewPayload(true, signal);
+    if (signal.aborted || gen !== previewRequestGen) {
+      // Stale/aborted: do not release a newer generation's busy ownership.
+      return;
+    }
+    const quality = previewQualityOf(payload, selectedObjectSeed ? "provisional" : "exact");
+    if (!shouldApplyPreview(gen, payload.frame_index, quality)) {
+      return;
+    }
     renderPreview(payload, roi);
-    logAction("Preview Stack Frame Succeeded", `Frame: ${payload.frame_index}, Threshold: ${payload.threshold}, Method: ${payload.method}`);
+    lastAppliedPreview = { gen, frameIndex: payload.frame_index, quality };
+    // Tracking text only while matching exact request is still pending.
+    busyOwner = busyAfterProvisional(
+      busyOwner,
+      gen,
+      previewRequestGen,
+      exactPendingGen,
+      Boolean(selectedObjectSeed) && quality === "provisional"
+    );
+    syncBusyOverlayDom();
+    logAction(
+      "Preview Stack Frame Succeeded",
+      `Frame: ${payload.frame_index}, quality=${quality}, Method: ${payload.method}`
+    );
   } catch (error) {
-    previewOutput.textContent = errorMessage(error);
-    logAction("Preview Stack Frame Failed", `Error: ${errorMessage(error)}`);
+    if (isAbortError(error)) {
+      throw error;
+    }
+    if (gen !== previewRequestGen) {
+      return;
+    }
+    const msg = errorMessage(error, usedUpload ? "upload" : "general");
+    if (!document.getElementById("preview-image")) {
+      previewOutput.textContent = msg;
+    }
+    releaseTrackingBusy(gen);
+    logAction("Preview Stack Frame Failed", `Error: ${msg}`);
+  }
+}
+
+const provisionalScheduler = new ProvisionalPreviewScheduler(
+  () => previewRequestGen,
+  executeProvisionalFetch
+);
+
+function runProvisionalPreview(gen: number): void {
+  provisionalScheduler.request(gen);
+}
+
+/** Manual Preview button / seed pick: authoritative path (exact when seed present). */
+async function requestAuthoritativePreview(): Promise<void> {
+  if (!hasStackInput()) {
+    return;
+  }
+  cancelPendingPreviewTimers();
+  const gen = bumpPreviewGeneration();
+  provisionalScheduler.cancel();
+  exactAbort?.abort();
+  exactPendingGen = selectedObjectSeed ? gen : null;
+  if (selectedObjectSeed) {
+    claimTrackingBusy(gen, "Tracking object…");
+    // Optional immediate provisional for responsiveness, then exact.
+    runProvisionalPreview(gen);
+  } else {
+    releaseTrackingBusy(gen);
+  }
+  await runExactPreview(gen);
+}
+
+/** Legacy entry used by seed apply/clear: authoritative refresh. */
+async function previewStack(_fastPreview = false): Promise<void> {
+  await requestAuthoritativePreview();
+}
+
+async function runExactPreview(gen: number): Promise<void> {
+  if (gen !== previewRequestGen) {
+    return;
+  }
+  // Without a seed there is no Z tracker — one-plane path is enough (await it).
+  if (!selectedObjectSeed) {
+    provisionalScheduler.cancel();
+    exactPendingGen = null;
+    const ac = new AbortController();
+    try {
+      await executeProvisionalFetch(gen, ac.signal);
+    } catch (error) {
+      if (!isAbortError(error)) {
+        throw error;
+      }
+    }
+    releaseTrackingBusy(gen);
+    return;
+  }
+  exactAbort?.abort();
+  exactAbort = new AbortController();
+  const signal = exactAbort.signal;
+  exactPendingGen = gen;
+  claimTrackingBusy(gen, "Tracking object…");
+  const roi = readRoi();
+  let usedUpload = false;
+  try {
+    usedUpload = resolveStackSource().kind === "file";
+    if (!document.getElementById("preview-image")) {
+      previewOutput.textContent = "Tracking object…";
+    }
+    const payload = await fetchPreviewPayload(false, signal);
+    if (signal.aborted || gen !== previewRequestGen) {
+      // Superseded: leave busy ownership to the newer generation.
+      if (exactPendingGen === gen) {
+        exactPendingGen = null;
+      }
+      releaseTrackingBusy(gen);
+      return;
+    }
+    const quality = previewQualityOf(payload, "exact");
+    if (!shouldApplyPreview(gen, payload.frame_index, quality)) {
+      if (exactPendingGen === gen) {
+        exactPendingGen = null;
+      }
+      releaseTrackingBusy(gen);
+      return;
+    }
+    renderPreview(payload, roi);
+    lastAppliedPreview = { gen, frameIndex: payload.frame_index, quality: "exact" };
+    applyTrackedCenterFromPayload(gen, payload);
+    if (exactPendingGen === gen) {
+      exactPendingGen = null;
+    }
+    clearExactPreviewErrorForGen(gen);
+    releaseTrackingBusy(gen);
+    const trackLost =
+      !payload.method ||
+      payload.method.includes("lost") ||
+      payload.method.includes("fail") ||
+      (payload.area_px2 === 0 && !payload.method.includes("hidden"));
+    logAction(
+      "Exact Preview Succeeded",
+      `Frame: ${payload.frame_index}, cache_hit=${Boolean(payload.cache_hit)}, method=${payload.method}${
+        trackLost ? " (track unavailable)" : ""
+      }`
+    );
+  } catch (error) {
+    if (isAbortError(error)) {
+      if (exactPendingGen === gen) {
+        exactPendingGen = null;
+      }
+      // Only release if we still own this gen's busy (newer exact may have claimed).
+      releaseTrackingBusy(gen);
+      return;
+    }
+    if (gen !== previewRequestGen) {
+      if (exactPendingGen === gen) {
+        exactPendingGen = null;
+      }
+      releaseTrackingBusy(gen);
+      return;
+    }
+    const msg = errorMessage(error, usedUpload ? "upload" : "general");
+    if (exactPendingGen === gen) {
+      exactPendingGen = null;
+    }
+    // Exact settled with error: busy is pending-work only — always release.
+    releaseTrackingBusy(gen);
+    setExactPreviewError(gen, `Tracked contour unavailable: ${msg}`);
+    const canvas = document.querySelector(".preview-canvas");
+    if (!canvas) {
+      previewOutput.textContent = msg;
+    }
+    logAction("Exact Preview Failed", `Error: ${msg}`);
   }
 }
 
@@ -1015,71 +1646,242 @@ function schedulePreview(): void {
   if (!hasStackInput()) {
     return;
   }
+  const gen = bumpPreviewGeneration();
+  // Supersede in-flight exact work; provisional uses generation-aware queue.
+  exactAbort?.abort();
+  // Mark exact as pending for this gen when a seed is set (before debounce fires).
+  exactPendingGen = selectedObjectSeed ? gen : null;
+  if (selectedObjectSeed) {
+    claimTrackingBusy(gen, "Tracking object…");
+  } else {
+    releaseTrackingBusy(gen);
+  }
+  // Queue provisional for this gen immediately as pending if in flight, else
+  // debounce so rapid scrubbing coalesces.
   if (previewDebounce !== null) {
     window.clearTimeout(previewDebounce);
   }
   previewDebounce = window.setTimeout(() => {
     previewDebounce = null;
-    void previewStack();
-  }, 220);
+    if (gen === previewRequestGen) {
+      runProvisionalPreview(gen);
+    }
+  }, PREVIEW_DEBOUNCE_MS);
+
+  if (exactPreviewDebounce !== null) {
+    window.clearTimeout(exactPreviewDebounce);
+    exactPreviewDebounce = null;
+  }
+  if (selectedObjectSeed) {
+    exactPreviewDebounce = window.setTimeout(() => {
+      exactPreviewDebounce = null;
+      if (gen === previewRequestGen) {
+        void runExactPreview(gen);
+      }
+    }, EXACT_PREVIEW_DEBOUNCE_MS);
+  }
 }
 
 function hasStackInput(): boolean {
-  return selectedFile() !== null || mustElement<HTMLInputElement>("path-input").value.trim() !== "";
+  return stackPathOrNull() !== null || selectedFile() !== null;
 }
 
 async function previewMesh(): Promise<void> {
-  const file = selectedFile();
-  meshOutput.innerHTML = uploadStatusMarkup(file ? `Uploading ${file.name}` : "Rendering 3D mesh", file ? 0 : null);
-  logAction("Render 3D Mesh Started");
+  const meshBtn = mustElement<HTMLButtonElement>("mesh-preview-btn");
+  let usedUpload = false;
+  let elapsedTimer: number | null = null;
+  let statusPhase: "loading" | "computing" = "computing";
+  let loadingLabel = "Loading stack into server memory";
+  const startedAt = Date.now();
+  const setMeshStatus = (label: string, percent: number | null = null): void => {
+    const elapsed = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
+    const withTime = percent === null ? `${label} (${elapsed}s)` : label;
+    meshOutput.innerHTML = uploadStatusMarkup(withTime, percent);
+  };
+  meshBtn.disabled = true;
   try {
-    const payload = file
-      ? await apiUploadPost<MeshPreviewResponse>("/api/upload/mesh-preview", meshPreviewUploadForm(file), (percent) => {
-          meshOutput.innerHTML = uploadStatusMarkup(`Uploading ${file.name}`, percent);
-        })
-      : await apiPost<MeshPreviewResponse>("/api/mesh-preview", {
-          path: readPath(),
-          threshold: readNumber("threshold-input"),
-          profile: readProfile(),
-          voxel: readVoxel(),
-          roi: readRoi(),
-          z_range: readZRange(),
-          prefer_opencv: !mustElement<HTMLInputElement>("fallback-input").checked,
-          downsample: 2,
-          max_faces: 12000,
-          object_seed: selectedObjectSeed
-        });
+    const profile = readProfile();
+    if (profile === "active_surfaces" && selectedObjectSeed === null) {
+      const msg =
+        "Experimental mode requires Select Object first (pick the vesicle on the preview). Or switch Mode to Standard.";
+      meshOutput.textContent = msg;
+      meshOutput.className = "mesh-output muted";
+      logAction("Render 3D Mesh Blocked", msg);
+      return;
+    }
+    if (profile !== "active_surfaces" && selectedObjectSeed === null) {
+      // Proceed, but surface the recommendation immediately so users know.
+      meshOutput.className = "mesh-output muted";
+    }
+
+    const source = resolveStackSource();
+    usedUpload = source.kind === "file";
+    const needsSessionOpen = source.kind === "file" && !hasActiveUploadSession(source.file);
+    statusPhase = needsSessionOpen ? "loading" : "computing";
+    loadingLabel = needsSessionOpen
+      ? `Loading ${source.file.name} into server memory`
+      : "Computing mesh…";
+    setMeshStatus(statusPhase === "loading" ? loadingLabel : "Computing mesh…", null);
+    elapsedTimer = window.setInterval(() => {
+      // Never leave session-active mesh stuck on "Uploading…"; only show loading while opening session.
+      if (statusPhase === "loading") {
+        setMeshStatus(loadingLabel, null);
+      } else {
+        setMeshStatus("Computing mesh…", null);
+      }
+    }, 1000);
+    logAction(
+      "Render 3D Mesh Started",
+      selectedObjectSeed
+        ? `profile=${profile}, seed=(${selectedObjectSeed.x},${selectedObjectSeed.y})`
+        : `profile=${profile}, no object seed (Select Object recommended)`
+    );
+    let payload: MeshPreviewResponse;
+    if (source.kind === "path") {
+      statusPhase = "computing";
+      setMeshStatus("Computing mesh…", null);
+      payload = await apiPost<MeshPreviewResponse>("/api/mesh-preview", {
+        path: source.path,
+        threshold: readNumber("threshold-input"),
+        profile,
+        voxel: readVoxel(),
+        roi: readRoi(),
+        z_range: readZRange(),
+        prefer_opencv: !mustElement<HTMLInputElement>("fallback-input").checked,
+        downsample: 1,
+        max_faces: 12000,
+        object_seed: selectedObjectSeed
+      });
+    } else {
+      const stackId = await ensureUploadSession(source.file, {
+        onProgress: (percent) => {
+          statusPhase = "loading";
+          loadingLabel = `Loading ${source.file.name} into server memory`;
+          setMeshStatus(loadingLabel, percent);
+        }
+      });
+      statusPhase = "computing";
+      setMeshStatus("Computing mesh…", null);
+      payload = await apiPost<MeshPreviewResponse>("/api/mesh-preview", {
+        stack_id: stackId,
+        threshold: readNumber("threshold-input"),
+        profile,
+        voxel: readVoxel(),
+        roi: readRoi(),
+        z_range: readZRange(),
+        prefer_opencv: !mustElement<HTMLInputElement>("fallback-input").checked,
+        downsample: 1,
+        max_faces: 12000,
+        object_seed: selectedObjectSeed
+      });
+    }
     renderMeshPreview(payload);
     logAction("Render 3D Mesh Succeeded", `Vertices: ${payload.vertex_count}, Faces: ${payload.face_count}`);
   } catch (error) {
-    meshOutput.textContent = errorMessage(error);
-    logAction("Render 3D Mesh Failed", `Error: ${errorMessage(error)}`);
+    const msg = errorMessage(error, usedUpload ? "upload" : "general");
+    meshOutput.textContent = msg;
+    meshOutput.className = "mesh-output muted";
+    logAction("Render 3D Mesh Failed", `Error: ${msg}`);
+  } finally {
+    if (elapsedTimer !== null) {
+      window.clearInterval(elapsedTimer);
+    }
+    meshBtn.disabled = false;
   }
 }
 
 async function suggestThreshold(): Promise<void> {
-  previewOutput.textContent = "Suggesting threshold...";
+  const status = mustElement<HTMLSpanElement>("suggest-status");
+  status.textContent = "Suggesting...";
+  status.className = "inline-status";
+  showPreviewBusyOverlay("Suggesting threshold...");
   logAction("Suggest Threshold Started");
+  let usedUpload = false;
   try {
-    const file = selectedFile();
-    const payload = file
-      ? await apiUploadPost<ThresholdResponse>("/api/upload/threshold", thresholdUploadForm(file))
-      : await apiPost<ThresholdResponse>("/api/threshold", {
-          path: readPath(),
-          method: "auto",
-          voxel: readVoxel(),
-          roi: readRoi(),
-          z_range: readZRange()
-        });
+    const source = resolveStackSource();
+    usedUpload = source.kind === "file";
+    let payload: ThresholdResponse;
+    if (source.kind === "path") {
+      payload = await apiPost<ThresholdResponse>("/api/threshold", {
+        path: source.path,
+        method: "auto",
+        voxel: readVoxel(),
+        roi: readRoi(),
+        z_range: readZRange()
+      });
+    } else {
+      const stackId = await ensureUploadSession(source.file);
+      payload = await apiPost<ThresholdResponse>("/api/threshold", {
+        stack_id: stackId,
+        method: "auto",
+        voxel: readVoxel(),
+        roi: readRoi(),
+        z_range: readZRange()
+      });
+    }
     mustElement<HTMLInputElement>("threshold-input").value = formatInputNumber(payload.threshold);
-    previewOutput.innerHTML = `
-      <strong>${escapeHtml(payload.source_path)}</strong><br />
-      Suggested threshold: ${formatNumber(payload.threshold)} (${escapeHtml(payload.method)})
-    `;
+    status.textContent = `Suggested ${formatNumber(payload.threshold)} (${payload.method})`;
+    status.className = "inline-status ok";
+    hidePreviewBusyOverlay();
     logAction("Suggest Threshold Succeeded", `Suggested: ${payload.threshold} (${payload.method})`);
+    schedulePreview();
   } catch (error) {
-    previewOutput.textContent = errorMessage(error);
-    logAction("Suggest Threshold Failed", `Error: ${errorMessage(error)}`);
+    const msg = errorMessage(error, usedUpload ? "upload" : "general");
+    status.textContent = msg;
+    status.className = "inline-status warn";
+    hidePreviewBusyOverlay();
+    logAction("Suggest Threshold Failed", `Error: ${msg}`);
+  }
+}
+
+function showPreviewBusyOverlayDom(message: string): void {
+  const canvas = document.querySelector(".preview-canvas");
+  if (!(canvas instanceof HTMLElement)) {
+    return;
+  }
+  let overlay = document.getElementById("preview-busy-overlay");
+  if (!(overlay instanceof HTMLElement)) {
+    overlay = document.createElement("div");
+    overlay.id = "preview-busy-overlay";
+    overlay.className = "preview-busy-overlay";
+    canvas.append(overlay);
+  }
+  overlay.textContent = message;
+  overlay.hidden = false;
+}
+
+function hidePreviewBusyOverlayDom(): void {
+  const overlay = document.getElementById("preview-busy-overlay");
+  if (overlay) {
+    overlay.hidden = true;
+  }
+}
+
+/** @deprecated Prefer claim/release helpers; kept for non-preview call sites. */
+function showPreviewBusyOverlay(message: string): void {
+  showPreviewBusyOverlayDom(message);
+}
+
+function hidePreviewBusyOverlay(): void {
+  hidePreviewBusyOverlayDom();
+}
+
+function applyTrackedCenterFromPayload(gen: number, payload: PreviewResponse): void {
+  if (gen !== previewRequestGen) {
+    return;
+  }
+  const x = payload.tracked_center_x;
+  const y = payload.tracked_center_y;
+  if (
+    payload.preview_quality === "exact" &&
+    typeof x === "number" &&
+    typeof y === "number" &&
+    Number.isFinite(x) &&
+    Number.isFinite(y)
+  ) {
+    lastTrackedCenter = { gen, frameIndex: payload.frame_index, x, y };
+  } else if (gen === previewRequestGen) {
+    lastTrackedCenter = null;
   }
 }
 
@@ -1094,43 +1896,80 @@ async function analyzeStack(options: { keepExclusions?: boolean } = {}): Promise
   downloadReportButton.disabled = true;
   downloadManifestButton.disabled = true;
   reanalyzeExcludedButton.disabled = true;
-  const file = selectedFile();
   const excluded = Array.from(excludedFrameIndices).sort((a, b) => a - b);
-  const analyzeLabel = file
-    ? `Uploading ${file.name}${excluded.length ? ` (excluding ${excluded.length} frames)` : ""}`
-    : "Analyzing stack";
-  analysisSummary.innerHTML = uploadStatusMarkup(analyzeLabel, file ? 0 : null);
-  resultsBody.innerHTML = `<tr><td colspan="12" class="muted">Running analysis...</td></tr>`;
-  logAction(
-    "Analyze Stack Started",
-    file
-      ? `Uploading "${file.name}"${excluded.length ? `, excluding frames: ${excluded.join(", ")}` : ""}`
-      : `Local path "${readPath()}"${excluded.length ? `, excluding frames: ${excluded.join(", ")}` : ""}`
-  );
+  let usedUpload = false;
   try {
-    const payload = file
-      ? await apiUploadPost<AnalyzeResponse>("/api/upload/analyze", analyzeUploadForm(file, excluded), (percent) => {
+    const profile = readProfile();
+    if (profile === "active_surfaces" && selectedObjectSeed === null) {
+      const msg =
+        "Experimental mode requires Select Object first (pick the vesicle on the preview). Or switch Mode to Standard.";
+      analysisSummary.textContent = msg;
+      resultsBody.innerHTML = `<tr><td colspan="12" class="muted">Select Object required for Experimental mode.</td></tr>`;
+      logAction("Analyze Stack Blocked", msg);
+      return;
+    }
+    const source = resolveStackSource();
+    usedUpload = source.kind === "file";
+    const needsSessionOpen = source.kind === "file" && !hasActiveUploadSession(source.file);
+    const analyzeLabel = needsSessionOpen
+      ? `Loading ${source.file.name} into server memory${excluded.length ? ` (excluding ${excluded.length} frames)` : ""}`
+      : `Analyzing stack${excluded.length ? ` (excluding ${excluded.length} frames)` : ""}`;
+    analysisSummary.innerHTML = uploadStatusMarkup(analyzeLabel, needsSessionOpen ? 0 : null);
+    resultsBody.innerHTML = `<tr><td colspan="12" class="muted">Running analysis...</td></tr>`;
+    logAction(
+      "Analyze Stack Started",
+      source.kind === "file"
+        ? `File "${source.file.name}"${excluded.length ? `, excluding frames: ${excluded.join(", ")}` : ""}${
+            needsSessionOpen ? " (opening session)" : " (session)"
+          }`
+        : `Local path "${source.path}"${excluded.length ? `, excluding frames: ${excluded.join(", ")}` : ""}`
+    );
+    let payload: AnalyzeResponse;
+    if (source.kind === "path") {
+      payload = await apiPost<AnalyzeResponse>("/api/analyze", {
+        path: source.path,
+        threshold: readNumber("threshold-input"),
+        profile,
+        voxel: readVoxel(),
+        roi: readRoi(),
+        z_range: readZRange(),
+        include_mesh: mustElement<HTMLInputElement>("mesh-input").checked,
+        enable_skeleton: readEnableSkeleton(),
+        skeleton_prune_pix: readSkeletonPrunePix(),
+        prefer_opencv: !mustElement<HTMLInputElement>("fallback-input").checked,
+        object_seed: selectedObjectSeed,
+        excluded_frames: excluded
+      });
+    } else {
+      const stackId = await ensureUploadSession(source.file, {
+        onProgress: (percent) => {
           analysisSummary.innerHTML = uploadStatusMarkup(analyzeLabel, percent);
-        })
-      : await apiPost<AnalyzeResponse>("/api/analyze", {
-          path: readPath(),
-          threshold: readNumber("threshold-input"),
-          profile: readProfile(),
-          voxel: readVoxel(),
-          roi: readRoi(),
-          z_range: readZRange(),
-          include_mesh: mustElement<HTMLInputElement>("mesh-input").checked,
-          prefer_opencv: !mustElement<HTMLInputElement>("fallback-input").checked,
-          object_seed: selectedObjectSeed,
-          excluded_frames: excluded
-        });
+        }
+      });
+      analysisSummary.innerHTML = uploadStatusMarkup("Analyzing stack", null);
+      payload = await apiPost<AnalyzeResponse>("/api/analyze", {
+        stack_id: stackId,
+        threshold: readNumber("threshold-input"),
+        profile,
+        voxel: readVoxel(),
+        roi: readRoi(),
+        z_range: readZRange(),
+        include_mesh: mustElement<HTMLInputElement>("mesh-input").checked,
+        enable_skeleton: readEnableSkeleton(),
+        skeleton_prune_pix: readSkeletonPrunePix(),
+        prefer_opencv: !mustElement<HTMLInputElement>("fallback-input").checked,
+        object_seed: selectedObjectSeed,
+        excluded_frames: excluded
+      });
+    }
     excludedFrameIndices = new Set(payload.excluded_frames ?? excluded);
     renderAnalysis(payload);
     logAction("Analyze Stack Succeeded", `Source: "${payload.source_path}", Valid frames: ${payload.valid_frame_count}/${payload.frame_count}`);
   } catch (error) {
-    analysisSummary.textContent = errorMessage(error);
+    const msg = errorMessage(error, usedUpload ? "upload" : "general");
+    analysisSummary.textContent = msg;
     resultsBody.innerHTML = `<tr><td colspan="12" class="muted">Analysis failed.</td></tr>`;
-    logAction("Analyze Stack Failed", `Error: ${errorMessage(error)}`);
+    logAction("Analyze Stack Failed", `Error: ${msg}`);
   }
 }
 
@@ -1159,29 +1998,50 @@ async function runSweep(): Promise<void> {
   downloadSweepReportButton.disabled = true;
   sweepSummary.textContent = "Running threshold sweep...";
   sweepResultsBody.innerHTML = `<tr><td colspan="7" class="muted">Running sweep...</td></tr>`;
-  const file = selectedFile();
-  logAction("Threshold Sweep Started", file ? `Uploading "${file.name}"` : `Local path "${readPath()}"`);
+  let usedUpload = false;
   try {
-    const payload = file
-      ? await apiUploadPost<SweepResponse>("/api/upload/sweep", sweepUploadForm(file))
-      : await apiPost<SweepResponse>("/api/sweep", {
-          path: readPath(),
-          start: readNumber("sweep-start"),
-          stop: readNumber("sweep-stop"),
-          step: readNumber("sweep-step"),
-          profile: readProfile(),
-          voxel: readVoxel(),
-          roi: readRoi(),
-          z_range: readZRange(),
-          include_mesh: mustElement<HTMLInputElement>("mesh-input").checked,
-          prefer_opencv: !mustElement<HTMLInputElement>("fallback-input").checked
-        });
+    const source = resolveStackSource();
+    usedUpload = source.kind === "file";
+    logAction(
+      "Threshold Sweep Started",
+      source.kind === "file" ? `File "${source.file.name}"` : `Local path "${source.path}"`
+    );
+    let payload: SweepResponse;
+    if (source.kind === "path") {
+      payload = await apiPost<SweepResponse>("/api/sweep", {
+        path: source.path,
+        start: readNumber("sweep-start"),
+        stop: readNumber("sweep-stop"),
+        step: readNumber("sweep-step"),
+        profile: readProfile(),
+        voxel: readVoxel(),
+        roi: readRoi(),
+        z_range: readZRange(),
+        include_mesh: mustElement<HTMLInputElement>("mesh-input").checked,
+        prefer_opencv: !mustElement<HTMLInputElement>("fallback-input").checked
+      });
+    } else {
+      const stackId = await ensureUploadSession(source.file);
+      payload = await apiPost<SweepResponse>("/api/sweep", {
+        stack_id: stackId,
+        start: readNumber("sweep-start"),
+        stop: readNumber("sweep-stop"),
+        step: readNumber("sweep-step"),
+        profile: readProfile(),
+        voxel: readVoxel(),
+        roi: readRoi(),
+        z_range: readZRange(),
+        include_mesh: mustElement<HTMLInputElement>("mesh-input").checked,
+        prefer_opencv: !mustElement<HTMLInputElement>("fallback-input").checked
+      });
+    }
     renderSweep(payload);
     logAction("Threshold Sweep Succeeded", `Source: "${payload.source_path}", Thresholds tested: ${payload.threshold_count}`);
   } catch (error) {
-    sweepSummary.textContent = errorMessage(error);
+    const msg = errorMessage(error, usedUpload ? "upload" : "general");
+    sweepSummary.textContent = msg;
     sweepResultsBody.innerHTML = `<tr><td colspan="7" class="muted">Sweep failed.</td></tr>`;
-    logAction("Threshold Sweep Failed", `Error: ${errorMessage(error)}`);
+    logAction("Threshold Sweep Failed", `Error: ${msg}`);
   }
 }
 
@@ -1236,32 +2096,207 @@ function renderSweep(payload: SweepResponse): void {
     .join("");
 }
 
+function previewImageSource(payload: PreviewResponse): string {
+  if (payload.image_url?.trim()) {
+    const url = payload.image_url.trim();
+    if (/^https?:\/\//i.test(url) || url.startsWith("/api/")) {
+      return url;
+    }
+    return `/api/${url.replace(/^\/+/, "")}`;
+  }
+  if (payload.image_png_base64) {
+    return `data:image/png;base64,${payload.image_png_base64}`;
+  }
+  throw new Error("Preview response did not contain an image.");
+}
+
+function previewQualityCaption(payload: PreviewResponse): string {
+  const quality = previewQualityOf(payload, selectedObjectSeed ? "provisional" : "exact");
+  if (!selectedObjectSeed) {
+    return "";
+  }
+  if (quality === "provisional") {
+    return `<br /><span class="preview-quality provisional">Provisional overlay — not the tracked contour</span>`;
+  }
+  const trackLost =
+    payload.method.includes("lost") ||
+    payload.method.includes("fail") ||
+    (payload.area_px2 === 0 && !payload.method.includes("hidden"));
+  if (trackLost) {
+    return `<br /><span class="preview-quality unavailable">Tracked contour unavailable on this slice</span>`;
+  }
+  const cacheNote = payload.cache_hit ? " · cache" : "";
+  return `<br /><span class="preview-quality exact">Tracked contour (authoritative)${cacheNote}</span>`;
+}
+
 function renderPreview(payload: PreviewResponse, renderedRoi: RectRoi | null): void {
+  const sliceLabel = payload.frame_index + 1;
+  const skeletonCaption = previewSkeletonCaption(payload);
+  const qualityCaption = previewQualityCaption(payload);
+  const seedCaption = selectedObjectSeed
+    ? `<br /><span class="seed-label">${selectedObjectSeed.type === "polygon" ? "Polygon" : "Circle"} <b>Seed</b> (immutable selection): (${Math.round(selectedObjectSeed.x)}, ${Math.round(selectedObjectSeed.y)}) r=${Math.round(selectedObjectSeed.radius)} px · frame ${selectedObjectSeed.frame_index}</span>`
+    : "";
+  const trackedX = payload.tracked_center_x;
+  const trackedY = payload.tracked_center_y;
+  const hasTracked =
+    payload.preview_quality === "exact" &&
+    typeof trackedX === "number" &&
+    typeof trackedY === "number" &&
+    Number.isFinite(trackedX) &&
+    Number.isFinite(trackedY);
+  const trackedCaption = hasTracked
+    ? `<br /><span class="tracked-center-label"><b>Tracked center</b> (current): (${Math.round(trackedX as number)}, ${Math.round(trackedY as number)}) · preview coords</span>`
+    : selectedObjectSeed && payload.preview_quality === "exact"
+      ? `<br /><span class="tracked-center-unavailable">Tracked center: unavailable on this slice</span>`
+      : "";
+  previewOutput.className = "preview-output";
   previewOutput.innerHTML = `
     <div class="preview-canvas">
       <img
         id="preview-image"
-        src="data:image/png;base64,${payload.image_png_base64}"
-        width="${payload.width}"
-        height="${payload.height}"
-        alt="Segmentation preview for frame ${payload.frame_index}"
+        src="${previewImageSource(payload)}"
+        alt="Segmentation preview for slice ${sliceLabel} (frame index ${payload.frame_index})"
       />
       <div id="roi-selection" class="roi-selection" hidden></div>
       <div id="seed-selection" class="seed-selection" hidden></div>
+      <svg id="tracked-center-overlay" class="tracked-center-overlay" hidden></svg>
       <svg id="polygon-overlay" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none;" hidden></svg>
       <svg id="tracking-debug-overlay" class="tracking-debug-overlay" hidden></svg>
     </div>
     <div>
       <strong>${escapeHtml(payload.source_path)}</strong><br />
-      Frame ${payload.frame_index}, ${escapeHtml(payload.method)} contour<br />
+      Slice ${sliceLabel} (frame ${payload.frame_index}), ${escapeHtml(payload.method)} contour<br />
       Area ${formatNumber(payload.area_px2)} px2,
       perimeter ${formatNumber(payload.perimeter_px)} px,
       circularity ${formatNumber(payload.circularity)}
-      ${selectedObjectSeed ? `<br /><span style="color:#fde047">Object seed: (${selectedObjectSeed.x}, ${selectedObjectSeed.y}) r=${Math.round(selectedObjectSeed.radius)} frame ${selectedObjectSeed.frame_index}</span>` : ""}
+      ${skeletonCaption}
+      ${qualityCaption}
+      ${seedCaption}
+      ${trackedCaption}
     </div>
   `;
+  // Restore busy overlay / error banner if this generation still owns them
+  // (innerHTML wiped DOM).
+  syncBusyOverlayDom();
+  paintExactPreviewErrorDom();
   attachPreviewRoiSelector(payload, renderedRoi);
   updateTrackingDebugOverlay(payload.frame_index, renderedRoi);
+  applyOverlayVisibility(renderedRoi);
+  drawTrackedCenterOverlay(payload, renderedRoi);
+}
+
+/** Show/hide circle ROI, XY crop box, and re-request preview when selection visibility changes. */
+function applyOverlayVisibility(renderedRoi: RectRoi | null = null): void {
+  const image = document.getElementById("preview-image") as HTMLImageElement | null;
+  const seedSelection = document.getElementById("seed-selection") as HTMLDivElement | null;
+  const roiSelection = document.getElementById("roi-selection") as HTMLDivElement | null;
+  const poly = document.getElementById("polygon-overlay");
+
+  if (!readShowCircleRoiOverlay()) {
+    if (seedSelection) {
+      seedSelection.hidden = true;
+    }
+    if (poly) {
+      poly.setAttribute("hidden", "true");
+    }
+  } else if (image && selectedObjectSeed) {
+    const paintCircle = () => {
+      // Immutable user seed ROI — never moved to tracked center.
+      drawPersistentCircleSeedOverlay(image, selectedObjectSeed!, renderedRoi ?? readRoi());
+    };
+    if (image.complete && image.naturalWidth > 0) {
+      requestAnimationFrame(paintCircle);
+    } else {
+      image.addEventListener("load", () => requestAnimationFrame(paintCircle), { once: true });
+    }
+  }
+
+  if (!readShowXyRoiOverlay() && roiSelection) {
+    roiSelection.hidden = true;
+  }
+}
+
+/** Distinct cyan/magenta crosshair for current tracked center (exact only). */
+function drawTrackedCenterOverlay(
+  payload: PreviewResponse,
+  renderedRoi: RectRoi | null
+): void {
+  const overlay = document.getElementById("tracked-center-overlay") as SVGSVGElement | null;
+  const image = document.getElementById("preview-image") as HTMLImageElement | null;
+  if (!overlay || !image) {
+    return;
+  }
+  const x = payload.tracked_center_x;
+  const y = payload.tracked_center_y;
+  const show =
+    payload.preview_quality === "exact" &&
+    typeof x === "number" &&
+    typeof y === "number" &&
+    Number.isFinite(x) &&
+    Number.isFinite(y) &&
+    (lastTrackedCenter === null ||
+      lastTrackedCenter.gen === previewRequestGen);
+  if (!show) {
+    overlay.setAttribute("hidden", "true");
+    overlay.innerHTML = "";
+    return;
+  }
+  const paint = () => {
+    const roiOffsetX = renderedRoi ? renderedRoi.xmin : 0;
+    const roiOffsetY = renderedRoi ? renderedRoi.ymin : 0;
+    // Payload centers are already in the preview-image (post-crop) frame.
+    const clientPt = imageToClientPoint(x as number, y as number, image);
+    void roiOffsetX;
+    void roiOffsetY;
+    overlay.removeAttribute("hidden");
+    overlay.innerHTML = `
+      <circle cx="${clientPt.x}" cy="${clientPt.y}" r="6" class="tracked-center-marker" />
+      <line x1="${clientPt.x - 10}" y1="${clientPt.y}" x2="${clientPt.x + 10}" y2="${clientPt.y}" class="tracked-center-cross" />
+      <line x1="${clientPt.x}" y1="${clientPt.y - 10}" x2="${clientPt.x}" y2="${clientPt.y + 10}" class="tracked-center-cross" />
+      <text x="${clientPt.x + 10}" y="${clientPt.y - 10}" class="tracked-center-text">tracked</text>
+    `;
+  };
+  if (image.complete && image.naturalWidth > 0) {
+    requestAnimationFrame(paint);
+  } else {
+    image.addEventListener("load", () => requestAnimationFrame(paint), { once: true });
+  }
+}
+
+function wireOverlayToggles(): void {
+  for (const id of ["show-circle-roi-overlay", "show-xy-roi-overlay", "show-selection-overlay"] as const) {
+    const el = document.getElementById(id);
+    if (!(el instanceof HTMLInputElement)) {
+      continue;
+    }
+    el.addEventListener("change", () => {
+      if (id === "show-selection-overlay") {
+        // Contour/tint are baked into the PNG — re-render.
+        schedulePreview();
+        return;
+      }
+      applyOverlayVisibility(readRoi());
+    });
+  }
+}
+
+function previewSkeletonCaption(payload: PreviewResponse): string {
+  const hasSkelUm = payload.skel_perimeter_um !== undefined && payload.skel_perimeter_um !== null;
+  const hasSkelPx = payload.skel_perimeter_px !== undefined && payload.skel_perimeter_px !== null;
+  if (hasSkelUm || hasSkelPx) {
+    const parts: string[] = [];
+    if (hasSkelUm) {
+      parts.push(`${formatNumber(payload.skel_perimeter_um as number)} um`);
+    }
+    if (hasSkelPx) {
+      parts.push(`${formatNumber(payload.skel_perimeter_px as number)} px`);
+    }
+    return `<br />Skeleton perimeter: ${parts.join(", ")}`;
+  }
+  if (readEnableSkeleton()) {
+    return `<br /><span class="muted">Skeleton enabled</span>`;
+  }
+  return "";
 }
 
 function voxelSourceMarkup(source: string): string {
@@ -1397,16 +2432,20 @@ function attachPreviewRoiSelector(payload: PreviewResponse, renderedRoi: RectRoi
 
     if (selectObjectMode) {
       const radiusClient = Math.sqrt((end.x - start.x) ** 2 + (end.y - start.y) ** 2);
-      let radiusImg = 10.0;
-      if (radiusClient >= 3) {
-        radiusImg = clientRadiusToImageRadius(radiusClient, image);
-        mustElement<HTMLInputElement>("object-seed-radius").value = String(Math.round(radiusImg));
-      } else {
-        radiusImg = Number(mustElement<HTMLInputElement>("object-seed-radius").value) || 10.0;
+      // Fiji-style circle: require a real drag so tiny clicks don't invent r≈10.
+      if (radiusClient < MIN_CIRCLE_DRAG_CLIENT_PX) {
+        start = null;
+        seedSelection.hidden = true;
+        const status = mustElement<HTMLSpanElement>("object-seed-status");
+        status.textContent = "Drag to set circle radius";
+        status.className = "inline-status warn";
+        return;
       }
+      const radiusImg = Math.max(1, clientRadiusToImageRadius(radiusClient, image));
+      mustElement<HTMLInputElement>("object-seed-radius").value = String(Math.round(radiusImg));
       applyObjectSeedClick(start, image, payload, renderedRoi, radiusImg);
       start = null;
-      seedSelection.hidden = true;
+      // Overlay stays until Clear / next re-render redraws from selectedObjectSeed.
       return;
     }
 
@@ -1584,18 +2623,36 @@ function updatePolygonOverlay(image: HTMLImageElement, currentPointerClient?: { 
 }
 
 function clientRadiusToImageRadius(radiusClient: number, image: HTMLImageElement): number {
-  const rect = image.getBoundingClientRect();
-  const wBox = rect.width;
-  const hBox = rect.height;
-  const wSrc = image.naturalWidth || image.width;
-  const hSrc = image.naturalHeight || image.height;
-
-  if (wBox <= 0 || hBox <= 0 || wSrc <= 0 || hSrc <= 0) {
+  const scale = imageDisplayScale(image);
+  if (scale <= 0) {
     return radiusClient;
   }
-
-  const scale = Math.min(wBox / wSrc, hBox / hSrc);
   return radiusClient / scale;
+}
+
+function imageRadiusToClientRadius(radiusImg: number, image: HTMLImageElement): number {
+  const scale = imageDisplayScale(image);
+  if (scale <= 0) {
+    return radiusImg;
+  }
+  return radiusImg * scale;
+}
+
+/** CSS-pixel scale for object-fit:contain preview (isotropic). */
+function imageDisplayScale(image: HTMLImageElement): number {
+  const style = window.getComputedStyle(image);
+  const paddingLeft = parseFloat(style.paddingLeft) || 0;
+  const paddingTop = parseFloat(style.paddingTop) || 0;
+  const paddingRight = parseFloat(style.paddingRight) || 0;
+  const paddingBottom = parseFloat(style.paddingBottom) || 0;
+  const wBox = image.clientWidth - paddingLeft - paddingRight;
+  const hBox = image.clientHeight - paddingTop - paddingBottom;
+  const wSrc = image.naturalWidth || image.width;
+  const hSrc = image.naturalHeight || image.height;
+  if (wBox <= 0 || hBox <= 0 || wSrc <= 0 || hSrc <= 0) {
+    return 0;
+  }
+  return Math.min(wBox / wSrc, hBox / hSrc);
 }
 
 function drawSelection(selection: HTMLDivElement, startX: number, startY: number, endX: number, endY: number): void {
@@ -1611,11 +2668,56 @@ function drawSelection(selection: HTMLDivElement, startX: number, startY: number
 }
 
 function drawSeedSelection(selection: HTMLDivElement, centerX: number, centerY: number, radius: number): void {
+  const r = Math.max(0, radius);
+  if (r < 1 || !Number.isFinite(centerX) || !Number.isFinite(centerY)) {
+    selection.hidden = true;
+    return;
+  }
   selection.hidden = false;
-  selection.style.left = `${centerX - radius}px`;
-  selection.style.top = `${centerY - radius}px`;
-  selection.style.width = `${2 * radius}px`;
-  selection.style.height = `${2 * radius}px`;
+  selection.style.left = `${centerX - r}px`;
+  selection.style.top = `${centerY - r}px`;
+  selection.style.width = `${2 * r}px`;
+  selection.style.height = `${2 * r}px`;
+}
+
+/** Yellow full-radius circle for a committed circle seed (not polygon). */
+function drawPersistentCircleSeedOverlay(
+  image: HTMLImageElement,
+  seed: ObjectSeed,
+  renderedRoi: RectRoi | null
+): void {
+  const seedSelection = document.getElementById("seed-selection") as HTMLDivElement | null;
+  if (!seedSelection) {
+    return;
+  }
+  if (seed.type === "polygon") {
+    seedSelection.hidden = true;
+    return;
+  }
+  // Image not laid out yet → skip (caller retries on load).
+  if (image.naturalWidth <= 0 || image.clientWidth <= 0) {
+    seedSelection.hidden = true;
+    return;
+  }
+  const scale = imageDisplayScale(image);
+  if (scale <= 0) {
+    seedSelection.hidden = true;
+    return;
+  }
+  const roiOffsetX = renderedRoi?.xmin ?? 0;
+  const roiOffsetY = renderedRoi?.ymin ?? 0;
+  const clientPt = imageToClientPoint(seed.x - roiOffsetX, seed.y - roiOffsetY, image);
+  const radiusClient = imageRadiusToClientRadius(seed.radius, image);
+  // Clamp to image box so a bad seed never paints a page-sized circle.
+  const maxR = Math.max(image.clientWidth, image.clientHeight);
+  drawSeedSelection(seedSelection, clientPt.x, clientPt.y, Math.min(radiusClient, maxR));
+}
+
+function hideCircleSeedOverlay(): void {
+  const seedSelection = document.getElementById("seed-selection") as HTMLDivElement | null;
+  if (seedSelection) {
+    seedSelection.hidden = true;
+  }
 }
 
 function applyDraggedRoi(
@@ -1649,6 +2751,7 @@ function applyDraggedRoi(
     ymin,
     ymax: Math.max(ymax, ymin + 1)
   });
+  schedulePreview();
 }
 
 function applyObjectSeedClick(
@@ -1727,11 +2830,18 @@ function clearObjectSeed(): void {
   selectedObjectSeed = null;
   polygonPoints = [];
   polygonClosed = false;
+  lastTrackedCenter = null;
+  lastExactPreviewError = null;
+  exactPendingGen = null;
+  busyOwner = null;
+  hidePreviewBusyOverlayDom();
+  paintExactPreviewErrorDom();
   const overlay = document.getElementById("polygon-overlay");
   if (overlay) {
     overlay.innerHTML = "";
     overlay.setAttribute("hidden", "true");
   }
+  hideCircleSeedOverlay();
   selectObjectMode = false;
   const btn = mustElement<HTMLButtonElement>("select-object-btn");
   btn.textContent = "Select Object";
@@ -1748,26 +2858,49 @@ function updateObjectSeedStatus(): void {
     if (tool === "polygon") {
       status.textContent = "Click points on preview to draw polygon. Double-click to finish.";
     } else {
-      status.textContent = "Click & drag on the target object to set seed and radius";
+      status.textContent =
+        "Drag a circle that encloses the vesicle (Fiji-style). Click-only is not enough.";
     }
     status.className = "inline-status warn";
   } else if (selectedObjectSeed) {
-    const desc = selectedObjectSeed.type === "polygon" ? "Polygon" : "Circle";
-    status.textContent = `${desc} Seed: (${selectedObjectSeed.x}, ${selectedObjectSeed.y}) r=${Math.round(selectedObjectSeed.radius)} frame ${selectedObjectSeed.frame_index}`;
+    if (selectedObjectSeed.type === "polygon") {
+      status.textContent = `Polygon ROI: center (${Math.round(selectedObjectSeed.x)}, ${Math.round(selectedObjectSeed.y)}) r=${Math.round(selectedObjectSeed.radius)} px · frame ${selectedObjectSeed.frame_index}`;
+    } else {
+      status.textContent = `Circle ROI: center (${Math.round(selectedObjectSeed.x)}, ${Math.round(selectedObjectSeed.y)}) r=${Math.round(selectedObjectSeed.radius)} px · frame ${selectedObjectSeed.frame_index}`;
+    }
     status.className = "inline-status ok";
   } else {
-    status.textContent = "No object selected";
-    status.className = "inline-status";
+    const profile = mustElement<HTMLSelectElement>("profile-input").value;
+    if (profile === "active_surfaces") {
+      status.textContent = "Select Object required for Experimental mode";
+      status.className = "inline-status warn";
+    } else {
+      // Multi-object fields: without a seed Standard/RBC grab largest blob.
+      status.textContent = "Select Object recommended (else largest blob is used)";
+      status.className = "inline-status warn";
+    }
   }
 }
 
 function updateFrameRange(): void {
-  const maxFrame = effectivePreviewFrameCount() - 1;
+  const count = effectivePreviewFrameCount();
+  const maxFrame = count - 1;
   frameSlider.max = String(maxFrame);
   frameInput.max = String(maxFrame);
   const clamped = clamp(Math.trunc(Number(frameInput.value) || 0), 0, maxFrame);
   frameInput.value = String(clamped);
   frameSlider.value = String(clamped);
+  updateFrameSliceLabel();
+}
+
+function updateFrameSliceLabel(): void {
+  const label = document.getElementById("frame-slice-label");
+  if (!label) {
+    return;
+  }
+  const count = Math.max(1, effectivePreviewFrameCount());
+  const n = clamp(Math.trunc(Number(frameInput.value) || 0), 0, count - 1);
+  label.textContent = `Slice ${n + 1} of ${count}`;
 }
 
 function syncZRangeControls(options: { initializeFullRange?: boolean } = {}): void {
@@ -1789,9 +2922,9 @@ function syncZRangeControls(options: { initializeFullRange?: boolean } = {}): vo
       zMaxInput.value = String(stop);
       zStartSlider.value = String(start);
       zStopSlider.value = String(stop);
-      zRangeStatus.textContent = `Using frames ${start} to ${stop - 1} (${stop - start} frames)`;
+      zRangeStatus.textContent = `Using slices ${start + 1}–${stop} of ${count} (API indices ${start}..${stop - 1})`;
       zRangeStatus.className = "inline-status";
-      logAction("Set Z Range", `Using frames ${start} to ${stop - 1} (${stop - start} frames)`);
+      logAction("Set Z Range", `Using slices ${start + 1}–${stop} of ${count} (API indices ${start}..${stop - 1})`);
     }
   } catch (error) {
     zRangeStatus.textContent = errorMessage(error);
@@ -1850,8 +2983,13 @@ function clearRoiFields(): void {
 function updateRoiStatus(): void {
   try {
     const roi = readRoi();
-    roiStatus.textContent = roi ? `ROI ${roi.xmin}:${roi.xmax}, ${roi.ymin}:${roi.ymax}` : "Full XY frame";
-    roiStatus.className = "inline-status";
+    if (roi) {
+      roiStatus.textContent = `ROI active — analysis limited to this box (${roi.xmin}:${roi.xmax}, ${roi.ymin}:${roi.ymax})`;
+      roiStatus.className = "inline-status ok";
+    } else {
+      roiStatus.textContent = "Full field — largest object auto-selected";
+      roiStatus.className = "inline-status";
+    }
   } catch (error) {
     roiStatus.textContent = errorMessage(error);
     roiStatus.className = "inline-status warn";
@@ -1861,7 +2999,9 @@ function updateRoiStatus(): void {
 function renderMeshPreview(payload: MeshPreviewResponse): void {
   if (!payload.has_mesh || payload.vertices.length === 0 || payload.faces.length === 0) {
     latestMeshPreview = null;
-    meshOutput.textContent = "No 3D mesh could be created from the current threshold/ROI/Z range.";
+    meshOutput.textContent = selectedObjectSeed
+      ? "No 3D mesh for the selected object. Check threshold, seed position/radius, and slice range."
+      : "No 3D mesh could be created. Try Select Object, adjust threshold, or tighten ROI/Z range.";
     meshOutput.className = "mesh-output muted";
     return;
   }
@@ -1871,10 +3011,10 @@ function renderMeshPreview(payload: MeshPreviewResponse): void {
   meshOutput.innerHTML = `
     <div>
       <strong>${escapeHtml(payload.source_path)}</strong><br />
-      Display mesh: ${payload.vertex_count} vertices, ${payload.face_count} faces, downsample x${payload.downsample}<br />
-      View: aligned contour stack<br />
-      Surface ${formatNumber(payload.surface_area_um2)} um2,
-      volume ${formatNumber(payload.volume_um3)} um3,
+      Display mesh: ${payload.vertex_count} vertices, ${payload.face_count} faces, sampling x${payload.downsample}<br />
+      View: calibrated, unaligned contour stack<br />
+      3D mesh surface area ${formatNumber(payload.surface_area_um2)} um2,
+      3D mesh volume ${formatNumber(payload.volume_um3)} um3,
       sphericity ${formatNumber(payload.sphericity)}
     </div>
     <div class="button-row mesh-export-row">
@@ -2032,7 +3172,16 @@ function renderAnalysis(payload: AnalyzeResponse): void {
   downloadManifestButton.disabled = false;
   reanalyzeExcludedButton.disabled = payload.rows.length === 0;
   const meshText = payload.mesh
-    ? `<br />3D surface: ${formatNumber(payload.mesh.surface_area_um2)} um2, volume: ${formatNumber(payload.mesh.volume_um3)} um3, sphericity: ${formatNumber(payload.mesh.sphericity)}`
+    ? `<br />3D mesh surface area: ${formatNumber(payload.mesh.surface_area_um2)} um2, mesh volume: ${formatNumber(payload.mesh.volume_um3)} um3, sphericity: ${formatNumber(payload.mesh.sphericity)}`
+    : "";
+  const sliceVolumeText = payload.slice_volume
+    ? payload.slice_volume.volume_um3 === null
+      ? `<br />Slice-integrated volume: withheld because contour coverage is incomplete.`
+      : `<br />Slice-integrated volume (trapezoidal): ${formatNumber(payload.slice_volume.volume_um3)} um3${
+          payload.slice_volume.relative_difference_from_mesh === null
+            ? ""
+            : `, mesh difference ${formatNumber(payload.slice_volume.relative_difference_from_mesh * 100)}%`
+        }`
     : "";
   const warningText =
     payload.warnings.length > 0
@@ -2047,14 +3196,38 @@ function renderAnalysis(payload: AnalyzeResponse): void {
         ? `, excluded: ${payload.excluded_frames.join(", ")}`
         : ""
     }<br />
-    ${voxelSourceMarkup(payload.voxel_source)}${summaryText}${meshText}
+    ${voxelSourceMarkup(payload.voxel_source)}${summaryText}${meshText}${sliceVolumeText}
     ${warningText}
   `;
   applyVoxelDefaultStyling(payload.voxel_source);
   updateTrackingDebugOverlay(globalPreviewFrameIndex(readLocalPreviewFrameIndex()), readRoi());
 
+  const showSkelUm = payload.rows.some((row) => row.skel_perimeter_um !== undefined && row.skel_perimeter_um !== null);
+  const showSkelPx = payload.rows.some((row) => row.skel_perimeter_px !== undefined && row.skel_perimeter_px !== null);
+  const colCount = 12 + (showSkelUm ? 1 : 0) + (showSkelPx ? 1 : 0);
+  const resultsTable = resultsBody.closest("table");
+  const theadRow = resultsTable?.querySelector("thead tr");
+  if (theadRow) {
+    theadRow.innerHTML = `
+      <th>Exclude</th>
+      <th>Frame</th>
+      <th>Method</th>
+      <th>Contour</th>
+      <th>Area (um2)</th>
+      <th>Perimeter (um)</th>
+      <th>Eq. diameter (um)</th>
+      <th>Aspect</th>
+      <th>Elongation</th>
+      <th>Def. index</th>
+      <th>Solidity</th>
+      <th>Circularity</th>
+      ${showSkelUm ? "<th>Skel perimeter (um)</th>" : ""}
+      ${showSkelPx ? "<th>Skel perimeter (px)</th>" : ""}
+    `;
+  }
+
   if (payload.rows.length === 0) {
-    resultsBody.innerHTML = `<tr><td colspan="12" class="muted">No rows returned.</td></tr>`;
+    resultsBody.innerHTML = `<tr><td colspan="${colCount}" class="muted">No rows returned.</td></tr>`;
     return;
   }
 
@@ -2074,6 +3247,8 @@ function renderAnalysis(payload: AnalyzeResponse): void {
           <td>${formatNumber(row.deformation_index)}</td>
           <td>${formatNumber(row.solidity)}</td>
           <td>${formatNumber(row.circularity)}</td>
+          ${showSkelUm ? `<td>${row.skel_perimeter_um !== undefined && row.skel_perimeter_um !== null ? formatNumber(row.skel_perimeter_um) : "—"}</td>` : ""}
+          ${showSkelPx ? `<td>${row.skel_perimeter_px !== undefined && row.skel_perimeter_px !== null ? formatNumber(row.skel_perimeter_px) : "—"}</td>` : ""}
         </tr>
       `
     )
@@ -2500,6 +3675,8 @@ function analysisReportMarkdown(payload: AnalyzeResponse): string {
     `- ROI: \`${manifest.roi === null || manifest.roi === undefined ? "full stack" : JSON.stringify(manifest.roi)}\``,
     `- Z range: \`${manifest.z_range === null || manifest.z_range === undefined ? "full stack" : JSON.stringify(manifest.z_range)}\``,
     `- Include mesh: \`${String(manifest.include_mesh ?? false)}\``,
+    `- Enable skeleton: \`${String(manifest.enable_skeleton ?? false)}\``,
+    `- Skeleton prune (px): \`${String(manifest.skeleton_prune_pix ?? "")}\``,
     `- Prefer OpenCV contours: \`${String(manifest.prefer_opencv ?? true)}\``,
     `- Voxel source: \`${payload.voxel_source}\``,
     `- Voxel size: x=${formatNumber(payload.voxel_size.x_um)} um, y=${formatNumber(payload.voxel_size.y_um)} um, z=${formatNumber(payload.voxel_size.z_um)} um`,
@@ -2544,12 +3721,26 @@ function analysisReportMarkdown(payload: AnalyzeResponse): string {
 
   const rows = payload.rows.slice(0, 10);
   if (rows.length > 0) {
+    const showSkelUm = rows.some((row) => row.skel_perimeter_um !== undefined && row.skel_perimeter_um !== null);
+    const showSkelPx = rows.some((row) => row.skel_perimeter_px !== undefined && row.skel_perimeter_px !== null);
     lines.push(`## First ${rows.length} Frame Rows`, "");
-    lines.push("| Frame | Contour | Area (um2) | Perimeter (um) | Circularity | Deformation index |");
-    lines.push("| ---: | :---: | ---: | ---: | ---: | ---: |");
+    lines.push(
+      `| Frame | Contour | Area (um2) | Perimeter (um) | Circularity | Deformation index${showSkelUm ? " | Skel perimeter (um)" : ""}${showSkelPx ? " | Skel perimeter (px)" : ""} |`
+    );
+    lines.push(
+      `| ---: | :---: | ---: | ---: | ---: | ---:${showSkelUm ? " | ---:" : ""}${showSkelPx ? " | ---:" : ""} |`
+    );
     rows.forEach((row) => {
+      const skelUm =
+        showSkelUm
+          ? ` | ${row.skel_perimeter_um !== undefined && row.skel_perimeter_um !== null ? formatNumber(row.skel_perimeter_um) : "—"}`
+          : "";
+      const skelPx =
+        showSkelPx
+          ? ` | ${row.skel_perimeter_px !== undefined && row.skel_perimeter_px !== null ? formatNumber(row.skel_perimeter_px) : "—"}`
+          : "";
       lines.push(
-        `| ${row.frame_index} | ${row.has_contour ? "yes" : "no"} | ${formatNumber(row.area_um2)} | ${formatNumber(row.perimeter_um)} | ${formatNumber(row.circularity)} | ${formatNumber(row.deformation_index)} |`
+        `| ${row.frame_index} | ${row.has_contour ? "yes" : "no"} | ${formatNumber(row.area_um2)} | ${formatNumber(row.perimeter_um)} | ${formatNumber(row.circularity)} | ${formatNumber(row.deformation_index)}${skelUm}${skelPx} |`
       );
     });
     lines.push("");
@@ -2676,6 +3867,8 @@ function currentProjectSettings(): ProjectSettings {
     roi: roi ?? undefined,
     z_range: zRange ?? undefined,
     include_mesh: mustElement<HTMLInputElement>("mesh-input").checked,
+    enable_skeleton: readEnableSkeleton(),
+    skeleton_prune_pix: readSkeletonPrunePix(),
     prefer_opencv: !mustElement<HTMLInputElement>("fallback-input").checked,
     sweep: {
       start: readNumber("sweep-start"),
@@ -2695,8 +3888,8 @@ function validateProjectSettings(payload: unknown): ProjectSettings {
 
   const settings: ProjectSettings = { version: 1 };
   if (payload.profile !== undefined) {
-    if (payload.profile !== "vesicle" && payload.profile !== "rbc") {
-      throw new Error("Project profile must be vesicle or rbc.");
+    if (payload.profile !== "vesicle" && payload.profile !== "rbc" && payload.profile !== "active_surfaces") {
+      throw new Error("Project profile must be vesicle, rbc, or active_surfaces.");
     }
     settings.profile = payload.profile;
   }
@@ -2735,6 +3928,12 @@ function validateProjectSettings(payload: unknown): ProjectSettings {
   }
   if (payload.include_mesh !== undefined) {
     settings.include_mesh = booleanValue(payload.include_mesh, "include_mesh");
+  }
+  if (payload.enable_skeleton !== undefined) {
+    settings.enable_skeleton = booleanValue(payload.enable_skeleton, "enable_skeleton");
+  }
+  if (payload.skeleton_prune_pix !== undefined) {
+    settings.skeleton_prune_pix = finiteNumber(payload.skeleton_prune_pix, "skeleton_prune_pix");
   }
   if (payload.prefer_opencv !== undefined) {
     settings.prefer_opencv = booleanValue(payload.prefer_opencv, "prefer_opencv");
@@ -2791,6 +3990,13 @@ function applyProjectSettings(settings: ProjectSettings): void {
   if (settings.include_mesh !== undefined) {
     mustElement<HTMLInputElement>("mesh-input").checked = settings.include_mesh;
   }
+  if (settings.enable_skeleton !== undefined) {
+    mustElement<HTMLInputElement>("skeleton-input").checked = settings.enable_skeleton;
+  }
+  if (settings.skeleton_prune_pix !== undefined) {
+    mustElement<HTMLInputElement>("skeleton-prune-input").value = formatInputNumber(settings.skeleton_prune_pix);
+  }
+  updateSkeletonPruneVisibility();
   if (settings.prefer_opencv !== undefined) {
     mustElement<HTMLInputElement>("fallback-input").checked = !settings.prefer_opencv;
   }
@@ -2807,10 +4013,22 @@ function applyProjectSettings(settings: ProjectSettings): void {
   }
 }
 
+function analysisCsvColumns(rows: AnalysisRow[]): string[] {
+  const columns: string[] = [...CSV_COLUMNS];
+  if (rows.some((row) => row.skel_perimeter_um !== undefined && row.skel_perimeter_um !== null)) {
+    columns.push("skel_perimeter_um");
+  }
+  if (rows.some((row) => row.skel_perimeter_px !== undefined && row.skel_perimeter_px !== null)) {
+    columns.push("skel_perimeter_px");
+  }
+  return columns;
+}
+
 function rowsToCsv(rows: AnalysisRow[]): string {
+  const columns = analysisCsvColumns(rows);
   const lines = [
-    CSV_COLUMNS.join(","),
-    ...rows.map((row) => CSV_COLUMNS.map((column) => csvCell(row[column])).join(","))
+    columns.join(","),
+    ...rows.map((row) => columns.map((column) => csvCell(row[column as keyof AnalysisRow])).join(","))
   ];
   return `${lines.join("\r\n")}\r\n`;
 }
@@ -2882,13 +4100,120 @@ async function apiGet<T>(url: string): Promise<T> {
   return parseResponse<T>(response);
 }
 
-async function apiPost<T>(url: string, body: unknown): Promise<T> {
+async function apiPost<T>(url: string, body: unknown, signal?: AbortSignal): Promise<T> {
   const response = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
+    signal
   });
   return parseResponse<T>(response);
+}
+
+function isAbortError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  const name = "name" in error ? String((error as { name?: unknown }).name) : "";
+  return name === "AbortError";
+}
+
+function fileIdentity(file: File): string {
+  return `${file.name}|${file.size}|${file.lastModified}`;
+}
+
+function clearUploadSession(): void {
+  sessionStackId = null;
+  sessionFileKey = null;
+  sessionOpenPromise = null;
+  updateSessionBanner();
+}
+
+function rememberUploadSession(stackId: string, file: File): void {
+  sessionStackId = stackId;
+  sessionFileKey = fileIdentity(file);
+  sessionOpenPromise = null;
+  updateSessionBanner();
+}
+
+function hasActiveUploadSession(file: File): boolean {
+  return sessionStackId !== null && sessionFileKey === fileIdentity(file);
+}
+
+function updateSessionBanner(): void {
+  const banner = document.getElementById("session-banner");
+  const status = document.getElementById("session-status");
+  if (!(banner instanceof HTMLElement) || !(status instanceof HTMLElement)) {
+    return;
+  }
+  const path = stackPathOrNull();
+  const file = selectedFile();
+  const fileMode = !path && file !== null;
+  banner.hidden = !fileMode;
+  if (!fileMode) {
+    status.hidden = true;
+    status.textContent = "";
+    return;
+  }
+  status.hidden = false;
+  if (hasActiveUploadSession(file)) {
+    status.className = "session-status ok";
+    status.textContent = `Server session active for ${file.name} — Preview / Mesh / Analyze will not re-upload.`;
+  } else {
+    status.className = "session-status muted";
+    status.textContent = "No server session yet — Inspect (or first Preview) loads the file once into memory.";
+  }
+}
+
+/**
+ * Ensure the chosen File is loaded once on the server; return stack_id for JSON APIs.
+ * Concurrent callers share a single in-flight open.
+ */
+async function ensureUploadSession(
+  file: File,
+  options: {
+    onProgress?: (percent: number) => void;
+  } = {}
+): Promise<string> {
+  const key = fileIdentity(file);
+  if (sessionStackId && sessionFileKey === key) {
+    return sessionStackId;
+  }
+  if (sessionOpenPromise && sessionFileKey === key) {
+    return sessionOpenPromise;
+  }
+
+  sessionFileKey = key;
+  sessionStackId = null;
+  updateSessionBanner();
+
+  sessionOpenPromise = (async () => {
+    const formData = new FormData();
+    appendFileAndVoxel(formData, file);
+    const payload = await apiUploadPost<SessionOpenResponse>(
+      "/api/upload/session",
+      formData,
+      options.onProgress
+    );
+    sessionStackId = payload.stack_id;
+    sessionFileKey = key;
+    updateSessionBanner();
+    return payload.stack_id;
+  })();
+
+  try {
+    return await sessionOpenPromise;
+  } catch (error) {
+    if (sessionFileKey === key) {
+      clearUploadSession();
+    }
+    throw error;
+  } finally {
+    if (sessionOpenPromise) {
+      // Clear latch only if we still own this open (success keeps stack id).
+      sessionOpenPromise = null;
+    }
+  }
 }
 
 async function apiUploadPost<T>(
@@ -2899,7 +4224,9 @@ async function apiUploadPost<T>(
   return new Promise<T>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", url);
-    xhr.responseType = "json";
+    // text + JSON.parse: clearer errors than responseType=json when proxy/API returns HTML/empty
+    xhr.responseType = "text";
+    xhr.timeout = 30 * 60 * 1000; // large CZI/LSM uploads
     xhr.upload.onprogress = (event) => {
       if (!onUploadProgress || !event.lengthComputable || event.total <= 0) {
         return;
@@ -2907,59 +4234,80 @@ async function apiUploadPost<T>(
       onUploadProgress(Math.round((event.loaded / event.total) * 100));
     };
     xhr.onload = () => {
-      const payload = xhr.response;
+      const raw = typeof xhr.response === "string" ? xhr.response : "";
+      let payload: unknown = null;
+      if (raw.trim()) {
+        try {
+          payload = JSON.parse(raw);
+        } catch {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            reject(new Error("API returned a non-JSON response. Is the MorphoStack backend running?"));
+            return;
+          }
+          reject(new Error(raw.slice(0, 240) || xhr.statusText || "Request failed"));
+          return;
+        }
+      }
       if (xhr.status >= 200 && xhr.status < 300) {
         resolve(payload as T);
         return;
       }
-      let message = xhr.statusText || "Request failed";
-      if (payload && typeof payload === "object" && "detail" in payload) {
-        const detail = (payload as { detail?: unknown }).detail;
-        if (typeof detail === "string") {
-          message = detail;
-        } else if (Array.isArray(detail)) {
-          message = detail
-            .map((item) => {
-              if (item && typeof item === "object" && "msg" in item) {
-                const loc = "loc" in item && Array.isArray(item.loc) ? item.loc.join(".") : "";
-                return loc ? `${loc}: ${String(item.msg)}` : String(item.msg);
-              }
-              return String(item);
-            })
-            .join(", ");
-        } else if (detail !== undefined) {
-          message = JSON.stringify(detail);
-        }
-      }
-      reject(new Error(message));
+      reject(new Error(detailFromPayload(payload, xhr.statusText || `HTTP ${xhr.status}`)));
     };
-    xhr.onerror = () => reject(new Error("Network error during upload"));
+    xhr.ontimeout = () =>
+      reject(new Error("Upload timed out. Try a smaller stack, or use a local path with morphostack app/serve."));
+    xhr.onerror = () =>
+      reject(
+        new Error(
+          "Cannot reach MorphoStack API (network error). " +
+            "Run `morphostack dev` (UI+API) or `morphostack app`, and keep that terminal open. " +
+            "If you only opened the static UI, the backend is not attached."
+        )
+      );
     xhr.send(formData);
   });
 }
 
-async function parseResponse<T>(response: Response): Promise<T> {
-  const payload = await response.json();
-  if (!response.ok) {
-    let msg = response.statusText;
-    if (payload && payload.detail) {
-      if (Array.isArray(payload.detail)) {
-        msg = payload.detail
-          .map((d: any) => {
-            if (d && typeof d === "object" && "msg" in d) {
-              const locStr = d.loc ? d.loc.join(".") : "";
-              return locStr ? `${locStr}: ${d.msg}` : d.msg;
-            }
-            return String(d);
-          })
-          .join(", ");
-      } else if (typeof payload.detail === "object") {
-        msg = JSON.stringify(payload.detail);
-      } else {
-        msg = String(payload.detail);
-      }
+function detailFromPayload(payload: unknown, fallback: string): string {
+  if (payload && typeof payload === "object" && "detail" in payload) {
+    const detail = (payload as { detail?: unknown }).detail;
+    if (typeof detail === "string") {
+      return detail;
     }
-    throw new Error(msg);
+    if (Array.isArray(detail)) {
+      return detail
+        .map((item) => {
+          if (item && typeof item === "object" && "msg" in item) {
+            const loc = "loc" in item && Array.isArray(item.loc) ? item.loc.join(".") : "";
+            return loc ? `${loc}: ${String((item as { msg: unknown }).msg)}` : String((item as { msg: unknown }).msg);
+          }
+          return String(item);
+        })
+        .join(", ");
+    }
+    if (detail !== undefined) {
+      return JSON.stringify(detail);
+    }
+  }
+  return fallback;
+}
+
+async function parseResponse<T>(response: Response): Promise<T> {
+  const raw = await response.text();
+  let payload: unknown = null;
+  if (raw.trim()) {
+    try {
+      payload = JSON.parse(raw);
+    } catch {
+      if (!response.ok) {
+        // Starlette bare 500s often return plain text "Internal Server Error"
+        throw new Error(raw.slice(0, 400).trim() || response.statusText || `HTTP ${response.status}`);
+      }
+      throw new Error("API returned a non-JSON response. Is the MorphoStack backend running?");
+    }
+  }
+  if (!response.ok) {
+    throw new Error(detailFromPayload(payload, response.statusText || `HTTP ${response.status}`));
   }
   return payload as T;
 }
@@ -2990,71 +4338,31 @@ function inspectUploadForm(file: File): FormData {
   return formData;
 }
 
-function appendObjectSeedFields(formData: FormData): void {
-  if (selectedObjectSeed) {
-    formData.set("object_seed_x", String(selectedObjectSeed.x));
-    formData.set("object_seed_y", String(selectedObjectSeed.y));
-    formData.set("object_seed_frame", String(selectedObjectSeed.frame_index));
-    formData.set("object_seed_radius", String(selectedObjectSeed.radius));
-    if (selectedObjectSeed.max_tracking_dist_um !== undefined) {
-      formData.set("object_seed_max_dist_um", String(selectedObjectSeed.max_tracking_dist_um));
-    }
-    formData.set("object_seed_type", selectedObjectSeed.type || "circle");
-    if (selectedObjectSeed.points) {
-      formData.set("object_seed_points", JSON.stringify(selectedObjectSeed.points));
-    }
+function readEnableSkeleton(): boolean {
+  return mustElement<HTMLInputElement>("skeleton-input").checked;
+}
+
+function readSkeletonPrunePix(): number {
+  const raw = mustElement<HTMLInputElement>("skeleton-prune-input").value.trim();
+  const value = raw === "" ? 1 : Number(raw);
+  if (!Number.isFinite(value) || value < 0) {
+    return 1;
   }
+  return value;
 }
 
-function analyzeUploadForm(file: File, excludedFrames: number[] = []): FormData {
-  const formData = new FormData();
-  appendFileAndVoxel(formData, file);
-  formData.set("threshold", String(readNumber("threshold-input")));
-  formData.set("profile", readProfile());
-  formData.set("include_mesh", String(mustElement<HTMLInputElement>("mesh-input").checked));
-  formData.set("prefer_opencv", String(!mustElement<HTMLInputElement>("fallback-input").checked));
-  appendRoiFields(formData);
-  appendZRangeFields(formData);
-  appendObjectSeedFields(formData);
-  if (excludedFrames.length > 0) {
-    formData.set("excluded_frames", excludedFrames.join(","));
+function updateSkeletonPruneVisibility(): void {
+  const wrap = document.querySelector(".skeleton-prune-wrap");
+  const pruneInput = document.getElementById("skeleton-prune-input");
+  const enabled = readEnableSkeleton();
+  if (wrap instanceof HTMLElement) {
+    wrap.classList.toggle("is-disabled", !enabled);
   }
-  return formData;
-}
-
-function previewUploadForm(file: File): FormData {
-  const formData = new FormData();
-  appendFileAndVoxel(formData, file);
-  formData.set("threshold", String(readNumber("threshold-input")));
-  formData.set("frame_index", String(globalPreviewFrameIndex(readLocalPreviewFrameIndex())));
-  formData.set("prefer_opencv", String(!mustElement<HTMLInputElement>("fallback-input").checked));
-  appendRoiFields(formData);
-  appendZRangeFields(formData);
-  appendObjectSeedFields(formData);
-  return formData;
-}
-
-function meshPreviewUploadForm(file: File): FormData {
-  const formData = new FormData();
-  appendFileAndVoxel(formData, file);
-  formData.set("threshold", String(readNumber("threshold-input")));
-  formData.set("profile", readProfile());
-  formData.set("prefer_opencv", String(!mustElement<HTMLInputElement>("fallback-input").checked));
-  formData.set("downsample", "2");
-  formData.set("max_faces", "12000");
-  appendRoiFields(formData);
-  appendZRangeFields(formData);
-  appendObjectSeedFields(formData);
-  return formData;
-}
-
-function thresholdUploadForm(file: File): FormData {
-  const formData = new FormData();
-  appendFileAndVoxel(formData, file);
-  formData.set("method", "auto");
-  appendRoiFields(formData);
-  appendZRangeFields(formData);
-  return formData;
+  if (pruneInput instanceof HTMLInputElement) {
+    // Keep editable always so users can set prune before enabling skeleton.
+    pruneInput.disabled = false;
+    pruneInput.readOnly = false;
+  }
 }
 
 function batchUploadForm(files: File[]): FormData {
@@ -3064,20 +4372,6 @@ function batchUploadForm(files: File[]): FormData {
   });
   appendVoxelFields(formData);
   formData.set("threshold", String(readNumber("threshold-input")));
-  formData.set("profile", readProfile());
-  formData.set("include_mesh", String(mustElement<HTMLInputElement>("mesh-input").checked));
-  formData.set("prefer_opencv", String(!mustElement<HTMLInputElement>("fallback-input").checked));
-  appendRoiFields(formData);
-  appendZRangeFields(formData);
-  return formData;
-}
-
-function sweepUploadForm(file: File): FormData {
-  const formData = new FormData();
-  appendFileAndVoxel(formData, file);
-  formData.set("start", String(readNumber("sweep-start")));
-  formData.set("stop", String(readNumber("sweep-stop")));
-  formData.set("step", String(readNumber("sweep-step")));
   formData.set("profile", readProfile());
   formData.set("include_mesh", String(mustElement<HTMLInputElement>("mesh-input").checked));
   formData.set("prefer_opencv", String(!mustElement<HTMLInputElement>("fallback-input").checked));
@@ -3139,12 +4433,38 @@ function appendZRangeFields(formData: FormData): void {
   formData.set("z_max", String(zRange.zmax));
 }
 
-function readPath(): string {
+/**
+ * Real local path from Stack path input, or null if empty / still the placeholder example.
+ * Placeholder text is never treated as a real path.
+ */
+function stackPathOrNull(): string | null {
   const value = mustElement<HTMLInputElement>("path-input").value.trim();
   if (!value) {
-    throw new Error("Stack path is required.");
+    return null;
+  }
+  // Normalize slashes so pasted placeholder variants are ignored.
+  const normalized = value.replace(/\//g, "\\").toLowerCase();
+  const placeholderNorm = PATH_PLACEHOLDER.replace(/\//g, "\\").toLowerCase();
+  if (normalized === placeholderNorm) {
+    return null;
   }
   return value;
+}
+
+/**
+ * Prefer a non-empty real Stack path over Choose File upload.
+ * Browsers cannot expose the disk path of a selected File; user must paste path for large stacks.
+ */
+function resolveStackSource(): { kind: "path"; path: string } | { kind: "file"; file: File } {
+  const path = stackPathOrNull();
+  if (path) {
+    return { kind: "path", path };
+  }
+  const file = selectedFile();
+  if (file) {
+    return { kind: "file", file };
+  }
+  throw new Error("Choose a stack file or enter a local stack path.");
 }
 
 function readVoxel(): VoxelOverride | null {
@@ -3165,6 +4485,26 @@ function readProfile(): AnalysisProfile {
     throw new Error("Analysis profile must be vesicle, rbc, or active_surfaces.");
   }
   return value as AnalysisProfile;
+}
+
+function updateProfileHelp(): void {
+  const profile = mustElement<HTMLSelectElement>("profile-input").value;
+  const help = document.getElementById("profile-help");
+  const warn = document.getElementById("profile-warning");
+  if (help) {
+    if (profile === "vesicle") {
+      help.textContent =
+        "Standard: select one object, set threshold, then Analyze or View 3D Mesh.";
+    } else if (profile === "rbc") {
+      help.textContent = "RBC: same pipeline with red-blood-cell oriented defaults.";
+    } else {
+      help.textContent =
+        "Experimental 3D surface refinement. Slower; use only if Standard cannot lock the membrane. Requires Select Object.";
+    }
+  }
+  if (warn instanceof HTMLElement) {
+    warn.hidden = profile !== "active_surfaces";
+  }
 }
 
 function readRoi(): RectRoi | null {
@@ -3261,8 +4601,38 @@ function formatUnknownNumber(value: unknown): string {
   return Number.isFinite(numberValue) ? formatNumber(numberValue) : "";
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : "Unknown error";
+/**
+ * Surface API/FastAPI detail text. For upload failures that look like size/memory
+ * limits (or bare 500), add guidance to use Stack path instead of Choose File.
+ */
+function errorMessage(error: unknown, context: "upload" | "general" = "general"): string {
+  const base = error instanceof Error ? error.message : "Unknown error";
+  if (context !== "upload") {
+    return base;
+  }
+  const lower = base.toLowerCase();
+  const looksLikeSizeOrServer =
+    lower === "internal server error" ||
+    lower.includes("internal server error") ||
+    lower.includes("memoryerror") ||
+    lower.includes("out of memory") ||
+    lower.includes("too large") ||
+    lower.includes("request entity") ||
+    lower.includes("payload too large") ||
+    lower.includes("body exceeded") ||
+    lower.includes("upload inspect failed");
+  if (!looksLikeSizeOrServer) {
+    return base;
+  }
+  const pathHint =
+    "Put the full path in Stack path and Inspect without using Choose File.";
+  if (lower === "internal server error" || /^http 500\b/i.test(base)) {
+    return `Upload failed (file too large?). ${pathHint}`;
+  }
+  if (base.includes(pathHint) || base.toLowerCase().includes("stack path")) {
+    return base;
+  }
+  return `${base} ${pathHint}`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -274,6 +274,7 @@ def test_upload_inspect_stack(client):
     assert payload["grayscale_shape"] == [3, 8, 8]
     assert payload["voxel_size"] == {"x_um": 0.1, "y_um": 0.2, "z_um": 0.3}
     assert payload["voxel_source"] == "override"
+    assert isinstance(payload.get("stack_id"), str) and payload["stack_id"]
 
 
 def test_upload_analyze_stack_with_mesh(client):
@@ -303,7 +304,9 @@ def test_upload_analyze_stack_with_mesh(client):
     assert payload["manifest"]["source_sha256"] == hashlib.sha256(upload_bytes).hexdigest()
     assert payload["manifest"]["include_mesh"] is True
     assert payload["manifest"]["voxel_source"] == "override"
-    assert payload["warnings"] == []
+    codes = {w["code"] for w in payload["warnings"]}
+    assert "slice_volume_stack_boundary" in codes
+    assert "sparse_z_sampling" in codes
     assert payload["summary"]["metrics"]["area_um2"]["mean"] == 9.0
     assert payload["frame_count"] == 3
     assert payload["valid_frame_count"] == 3
@@ -538,6 +541,59 @@ def test_preview_with_z_range_accepts_global_frame_index(client, tmp_path):
     assert response.json()["frame_index"] == 1
 
 
+def test_preview_roi_returns_cropped_dimensions(client, tmp_path):
+    pytest.importorskip("PIL")
+    path = tmp_path / "stack.tif"
+    write_stack(path)
+
+    response = client.post(
+        "/preview",
+        json={
+            "path": str(path),
+            "threshold": 100,
+            "frame_index": 1,
+            "roi": {"xmin": 1, "xmax": 5, "ymin": 2, "ymax": 6},
+            "prefer_opencv": False,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["frame_index"] == 1
+    assert payload["width"] == 4
+    assert payload["height"] == 4
+    assert b64decode(payload["image_png_base64"]).startswith(b"\x89PNG")
+
+
+def test_preview_path_does_not_call_full_stack_apply_rect_roi(client, tmp_path, monkeypatch):
+    pytest.importorskip("PIL")
+    import importlib
+
+    # Package re-exports FastAPI as morphostack.api.app; load the real module.
+    api_app_module = importlib.import_module("morphostack.api.app")
+    path = tmp_path / "stack.tif"
+    write_stack(path)
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("preview path must not call full-stack apply_rect_roi")
+
+    monkeypatch.setattr(api_app_module, "apply_rect_roi", _boom)
+
+    response = client.post(
+        "/preview",
+        json={
+            "path": str(path),
+            "threshold": 100,
+            "frame_index": 0,
+            "roi": {"xmin": 1, "xmax": 6, "ymin": 1, "ymax": 6},
+            "prefer_opencv": False,
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["width"] == 5
+    assert response.json()["height"] == 5
+
+
 def test_mesh_export_writes_obj_with_seed_and_z_range(client, tmp_path):
     pytest.importorskip("cv2")
     pytest.importorskip("skimage")
@@ -570,4 +626,616 @@ def test_mesh_export_writes_obj_with_seed_and_z_range(client, tmp_path):
     assert "f " in obj_text
     assert payload["object_seed"]["x"] == 60
     assert payload["tracking"] is not None
+
+
+def test_upload_session_then_preview_by_stack_id(client):
+    pytest.importorskip("PIL")
+    open_response = client.post(
+        "/upload/session",
+        files={"file": ("session_stack.tif", stack_upload_bytes(), "image/tiff")},
+        data={"voxel_x_um": "1.0", "voxel_y_um": "1.0", "voxel_z_um": "1.0"},
+    )
+    assert open_response.status_code == 200
+    opened = open_response.json()
+    stack_id = opened["stack_id"]
+    assert opened["source_path"] == "session_stack.tif"
+    assert opened["grayscale_shape"] == [3, 8, 8]
+    assert opened["voxel_source"] == "override"
+
+    preview = client.post(
+        "/preview",
+        json={
+            "stack_id": stack_id,
+            "threshold": 100,
+            "frame_index": 1,
+            "prefer_opencv": False,
+        },
+    )
+    assert preview.status_code == 200
+    payload = preview.json()
+    assert payload["source_path"] == "session_stack.tif"
+    assert payload["frame_index"] == 1
+    assert b64decode(payload["image_png_base64"]).startswith(b"\x89PNG")
+
+    threshold = client.post(
+        "/threshold",
+        json={"stack_id": stack_id, "method": "percentile"},
+    )
+    assert threshold.status_code == 200
+    assert threshold.json()["threshold"] >= 0
+
+
+def _write_ring_stack(path, *, n: int = 8, h: int = 64, w: int = 64, cx: int = 32, cy: int = 32):
+    tifffile = pytest.importorskip("tifffile")
+    yy, xx = np.ogrid[:h, :w]
+    stack = np.zeros((n, h, w), dtype=np.uint8)
+    for z in range(n):
+        d = (xx - cx) ** 2 + (yy - cy) ** 2
+        stack[z][((d >= 10**2) & (d <= 14**2))] = 200
+    tifffile.imwrite(path, stack, photometric="minisblack")
+    return path
+
+
+def test_preview_caching_reuses_results(client, tmp_path, monkeypatch):
+    """Two previews with same seed / different frames: second uses extend path."""
+    pytest.importorskip("PIL")
+    pytest.importorskip("skimage")
+
+    from morphostack.core.seeded_vesicle import (
+        extend_track as real_extend,
+        track_seeded_vesicle_stack as real_track,
+    )
+    from morphostack.core.stack_cache import default_tracking_cache
+    import morphostack.core.seeded_vesicle as sv
+
+    default_tracking_cache.clear()
+    calls = {"track": 0, "extend": 0}
+
+    def counting_track(*args, **kwargs):
+        calls["track"] += 1
+        return real_track(*args, **kwargs)
+
+    def counting_extend(*args, **kwargs):
+        calls["extend"] += 1
+        return real_extend(*args, **kwargs)
+
+    monkeypatch.setattr(sv, "track_seeded_vesicle_stack", counting_track)
+    monkeypatch.setattr(sv, "extend_track", counting_extend)
+
+    path = _write_ring_stack(tmp_path / "ring_stack.tif")
+
+    seed = {"x": 32, "y": 32, "frame_index": 0, "radius": 14}
+    r1 = client.post(
+        "/preview",
+        json={
+            "path": str(path),
+            "threshold": 100,
+            "frame_index": 2,
+            "object_seed": seed,
+            "prefer_opencv": False,
+        },
+    )
+    assert r1.status_code == 200
+    p1 = r1.json()
+    assert b64decode(p1["image_png_base64"]).startswith(b"\x89PNG")
+    assert p1["preview_quality"] == "exact"
+    assert p1["cache_hit"] is False
+    assert calls["track"] == 1
+    assert calls["extend"] == 0
+
+    r2 = client.post(
+        "/preview",
+        json={
+            "path": str(path),
+            "threshold": 100,
+            "frame_index": 5,
+            "object_seed": seed,
+            "prefer_opencv": False,
+        },
+    )
+    assert r2.status_code == 200
+    p2 = r2.json()
+    assert b64decode(p2["image_png_base64"]).startswith(b"\x89PNG")
+    assert p2["preview_quality"] == "exact"
+    assert p2["cache_hit"] is True
+    # Second request must extend from cache, not full re-walk from seed.
+    assert calls["extend"] == 1
+    assert calls["track"] == 1
+    assert len(default_tracking_cache) >= 1
+
+
+def test_fast_preview_is_provisional_and_skips_tracker(client, tmp_path, monkeypatch):
+    """fast_preview=true stays one-plane provisional and never runs seeded Z track."""
+    pytest.importorskip("PIL")
+    pytest.importorskip("skimage")
+
+    import morphostack.core.seeded_vesicle as sv
+    from morphostack.core.stack_cache import default_tracking_cache
+
+    default_tracking_cache.clear()
+    calls = {"track": 0, "extend": 0}
+
+    def boom_track(*_a, **_k):
+        calls["track"] += 1
+        raise AssertionError("fast provisional path must not call track_seeded_vesicle_stack")
+
+    def boom_extend(*_a, **_k):
+        calls["extend"] += 1
+        raise AssertionError("fast provisional path must not call extend_track")
+
+    monkeypatch.setattr(sv, "track_seeded_vesicle_stack", boom_track)
+    monkeypatch.setattr(sv, "extend_track", boom_extend)
+
+    path = _write_ring_stack(tmp_path / "fast_ring.tif")
+    seed = {"x": 32, "y": 32, "frame_index": 0, "radius": 14}
+    response = client.post(
+        "/preview",
+        json={
+            "path": str(path),
+            "threshold": 100,
+            "frame_index": 3,
+            "object_seed": seed,
+            "prefer_opencv": False,
+            "fast_preview": True,
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["preview_quality"] == "provisional"
+    assert payload["cache_hit"] is False
+    assert payload["frame_index"] == 3
+    assert b64decode(payload["image_png_base64"]).startswith(b"\x89PNG")
+    assert calls["track"] == 0
+    assert calls["extend"] == 0
+    assert len(default_tracking_cache) == 0
+
+
+def test_exact_preview_uses_tracker_and_marks_quality(client, tmp_path, monkeypatch):
+    """Exact seeded preview uses track/cache path and is marked exact."""
+    pytest.importorskip("PIL")
+    pytest.importorskip("skimage")
+
+    from morphostack.core.seeded_vesicle import track_seeded_vesicle_stack as real_track
+    from morphostack.core.stack_cache import default_tracking_cache
+    import morphostack.core.seeded_vesicle as sv
+
+    default_tracking_cache.clear()
+    calls = {"track": 0}
+
+    def counting_track(*args, **kwargs):
+        calls["track"] += 1
+        return real_track(*args, **kwargs)
+
+    monkeypatch.setattr(sv, "track_seeded_vesicle_stack", counting_track)
+
+    path = _write_ring_stack(tmp_path / "exact_ring.tif")
+    seed = {"x": 32, "y": 32, "frame_index": 0, "radius": 14}
+    response = client.post(
+        "/preview",
+        json={
+            "path": str(path),
+            "threshold": 100,
+            "frame_index": 2,
+            "object_seed": seed,
+            "prefer_opencv": False,
+            "fast_preview": False,
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["preview_quality"] == "exact"
+    assert payload["cache_hit"] is False
+    assert calls["track"] == 1
+    assert b64decode(payload["image_png_base64"]).startswith(b"\x89PNG")
+
+
+def test_tracking_cache_not_reused_across_roi_or_source(client, tmp_path, monkeypatch):
+    """Cache entries must not be reused when ROI or stack identity changes."""
+    pytest.importorskip("PIL")
+    pytest.importorskip("skimage")
+
+    from morphostack.core.seeded_vesicle import (
+        extend_track as real_extend,
+        track_seeded_vesicle_stack as real_track,
+    )
+    from morphostack.core.stack_cache import default_tracking_cache
+    import morphostack.core.seeded_vesicle as sv
+
+    default_tracking_cache.clear()
+    calls = {"track": 0, "extend": 0}
+
+    def counting_track(*args, **kwargs):
+        calls["track"] += 1
+        return real_track(*args, **kwargs)
+
+    def counting_extend(*args, **kwargs):
+        calls["extend"] += 1
+        return real_extend(*args, **kwargs)
+
+    monkeypatch.setattr(sv, "track_seeded_vesicle_stack", counting_track)
+    monkeypatch.setattr(sv, "extend_track", counting_extend)
+
+    path_a = _write_ring_stack(tmp_path / "cache_a.tif")
+    path_b = _write_ring_stack(tmp_path / "cache_b.tif")
+    seed = {"x": 32, "y": 32, "frame_index": 0, "radius": 14}
+
+    r1 = client.post(
+        "/preview",
+        json={
+            "path": str(path_a),
+            "threshold": 100,
+            "frame_index": 2,
+            "object_seed": seed,
+            "prefer_opencv": False,
+        },
+    )
+    assert r1.status_code == 200
+    assert r1.json()["cache_hit"] is False
+    assert calls["track"] == 1
+
+    # Same seed/frame but different source path → full track again, not extend.
+    r2 = client.post(
+        "/preview",
+        json={
+            "path": str(path_b),
+            "threshold": 100,
+            "frame_index": 2,
+            "object_seed": seed,
+            "prefer_opencv": False,
+        },
+    )
+    assert r2.status_code == 200
+    assert r2.json()["cache_hit"] is False
+    assert calls["track"] == 2
+    assert calls["extend"] == 0
+
+    # Same source, different ROI → must not hit previous full-field cache.
+    r3 = client.post(
+        "/preview",
+        json={
+            "path": str(path_a),
+            "threshold": 100,
+            "frame_index": 2,
+            "object_seed": {"x": 16, "y": 16, "frame_index": 0, "radius": 14},
+            "roi": {"xmin": 16, "xmax": 48, "ymin": 16, "ymax": 48},
+            "prefer_opencv": False,
+        },
+    )
+    assert r3.status_code == 200
+    assert r3.json()["cache_hit"] is False
+    assert calls["track"] == 3
+
+
+def test_preview_quality_distinguishes_provisional_vs_exact(client, tmp_path):
+    """Response metadata must distinguish provisional vs exact overlays."""
+    pytest.importorskip("PIL")
+    pytest.importorskip("skimage")
+    path = _write_ring_stack(tmp_path / "quality_ring.tif")
+    seed = {"x": 32, "y": 32, "frame_index": 0, "radius": 14}
+    body = {
+        "path": str(path),
+        "threshold": 100,
+        "frame_index": 1,
+        "object_seed": seed,
+        "prefer_opencv": False,
+    }
+    fast = client.post("/preview", json={**body, "fast_preview": True})
+    exact = client.post("/preview", json={**body, "fast_preview": False})
+    assert fast.status_code == 200
+    assert exact.status_code == 200
+    assert fast.json()["preview_quality"] == "provisional"
+    assert exact.json()["preview_quality"] == "exact"
+    assert fast.json()["preview_quality"] != exact.json()["preview_quality"]
+
+
+def test_tracking_cache_miss_when_file_revision_changes(client, tmp_path, monkeypatch):
+    """Same path with replaced pixels/mtime must not reuse tracking cache."""
+    pytest.importorskip("PIL")
+    pytest.importorskip("skimage")
+    tifffile = pytest.importorskip("tifffile")
+
+    from morphostack.core.seeded_vesicle import track_seeded_vesicle_stack as real_track
+    from morphostack.core.stack_cache import default_tracking_cache, default_stack_cache
+    import morphostack.core.seeded_vesicle as sv
+    import time
+
+    default_tracking_cache.clear()
+    default_stack_cache.clear()
+    calls = {"track": 0}
+
+    def counting_track(*args, **kwargs):
+        calls["track"] += 1
+        return real_track(*args, **kwargs)
+
+    monkeypatch.setattr(sv, "track_seeded_vesicle_stack", counting_track)
+
+    path = _write_ring_stack(tmp_path / "rev_ring.tif", cx=32, cy=32)
+    seed = {"x": 32, "y": 32, "frame_index": 0, "radius": 14}
+    body = {
+        "path": str(path),
+        "threshold": 100,
+        "frame_index": 2,
+        "object_seed": seed,
+        "prefer_opencv": False,
+        "fast_preview": False,
+    }
+    r1 = client.post("/preview", json=body)
+    assert r1.status_code == 200
+    assert r1.json()["cache_hit"] is False
+    assert calls["track"] == 1
+
+    # Replace file contents and bump mtime so path_source_identity changes.
+    time.sleep(0.02)
+    _write_ring_stack(path, cx=40, cy=40)
+    # Ensure mtime differs even on coarse FS timestamps.
+    path.touch()
+    default_stack_cache.clear()
+
+    r2 = client.post("/preview", json={**body, "object_seed": {"x": 40, "y": 40, "frame_index": 0, "radius": 14}})
+    assert r2.status_code == 200
+    # New source revision + different seed → full track, not cache hit.
+    assert r2.json()["cache_hit"] is False
+    assert calls["track"] == 2
+
+
+def test_tracking_cache_miss_for_subpixel_distinct_seeds(client, tmp_path, monkeypatch):
+    """Sub-pixel distinct seeds must not share a tracking cache entry."""
+    pytest.importorskip("PIL")
+    pytest.importorskip("skimage")
+
+    from morphostack.core.seeded_vesicle import track_seeded_vesicle_stack as real_track
+    from morphostack.core.stack_cache import default_tracking_cache
+    import morphostack.core.seeded_vesicle as sv
+
+    default_tracking_cache.clear()
+    calls = {"track": 0}
+
+    def counting_track(*args, **kwargs):
+        calls["track"] += 1
+        return real_track(*args, **kwargs)
+
+    monkeypatch.setattr(sv, "track_seeded_vesicle_stack", counting_track)
+    path = _write_ring_stack(tmp_path / "subpx.tif")
+
+    r1 = client.post(
+        "/preview",
+        json={
+            "path": str(path),
+            "threshold": 100,
+            "frame_index": 2,
+            "object_seed": {"x": 32.10, "y": 32.10, "frame_index": 0, "radius": 14.10},
+            "prefer_opencv": False,
+        },
+    )
+    r2 = client.post(
+        "/preview",
+        json={
+            "path": str(path),
+            "threshold": 100,
+            "frame_index": 2,
+            "object_seed": {"x": 32.49, "y": 32.49, "frame_index": 0, "radius": 14.49},
+            "prefer_opencv": False,
+        },
+    )
+    assert r1.status_code == 200 and r2.status_code == 200
+    assert r1.json()["cache_hit"] is False
+    assert r2.json()["cache_hit"] is False
+    assert calls["track"] == 2
+
+
+def test_multipart_upload_preview_does_not_share_tracking_cache(client, tmp_path, monkeypatch):
+    """Distinct multipart uploads must not reuse tracking results via content sample."""
+    pytest.importorskip("PIL")
+    pytest.importorskip("skimage")
+    tifffile = pytest.importorskip("tifffile")
+
+    from morphostack.core.seeded_vesicle import track_seeded_vesicle_stack as real_track
+    from morphostack.core.stack_cache import default_tracking_cache
+    import morphostack.core.seeded_vesicle as sv
+
+    default_tracking_cache.clear()
+    calls = {"track": 0}
+
+    def counting_track(*args, **kwargs):
+        calls["track"] += 1
+        return real_track(*args, **kwargs)
+
+    monkeypatch.setattr(sv, "track_seeded_vesicle_stack", counting_track)
+
+    def ring_bytes(cx: int) -> bytes:
+        h, w, n = 48, 48, 4
+        yy, xx = np.ogrid[:h, :w]
+        stack = np.zeros((n, h, w), dtype=np.uint8)
+        for z in range(n):
+            d = (xx - cx) ** 2 + (yy - 24) ** 2
+            stack[z][((d >= 8**2) & (d <= 12**2))] = 200
+        buf = BytesIO()
+        tifffile.imwrite(buf, stack, photometric="minisblack")
+        return buf.getvalue()
+
+    data = {
+        "threshold": "100",
+        "frame_index": "1",
+        "object_seed_x": "24",
+        "object_seed_y": "24",
+        "object_seed_frame": "0",
+        "object_seed_radius": "12",
+        "prefer_opencv": "false",
+    }
+    r1 = client.post(
+        "/upload/preview",
+        files={"file": ("a.tif", ring_bytes(24), "image/tiff")},
+        data=data,
+    )
+    r2 = client.post(
+        "/upload/preview",
+        files={"file": ("b.tif", ring_bytes(28), "image/tiff")},
+        data={**data, "object_seed_x": "28"},
+    )
+    assert r1.status_code == 200 and r2.status_code == 200
+    # Each multipart request must track fresh (no cross-upload cache).
+    assert calls["track"] == 2
+    assert len(default_tracking_cache) == 0
+
+
+def test_path_fast_preview_skips_full_file_sha(client, tmp_path, monkeypatch):
+    """Path-mode fast_preview must not call full-file SHA (keeps scrub cheap)."""
+    pytest.importorskip("PIL")
+    import importlib
+
+    # Package re-exports FastAPI as morphostack.api.app; load the real module.
+    api_app_module = importlib.import_module("morphostack.api.app")
+    path = _write_ring_stack(tmp_path / "sha_fast.tif")
+    calls = {"sha": 0}
+
+    def boom_sha(*_a, **_k):
+        calls["sha"] += 1
+        raise AssertionError("fast_preview path must not compute full-file SHA")
+
+    monkeypatch.setattr(api_app_module, "file_sha256", boom_sha)
+    response = client.post(
+        "/preview",
+        json={
+            "path": str(path),
+            "threshold": 100,
+            "frame_index": 0,
+            "fast_preview": True,
+            "prefer_opencv": False,
+        },
+    )
+    assert response.status_code == 200
+    assert calls["sha"] == 0
+
+
+def test_should_apply_preview_stale_generation_rule():
+    """Pure stale-response rule: older gen never replaces newer; provisional never overwrites exact."""
+    # Mirrors apps/web/src/main.ts shouldApplyPreview without a frontend test runner.
+    def should_apply(
+        gen: int,
+        current_gen: int,
+        frame_index: int,
+        quality: str,
+        last: dict | None,
+    ) -> bool:
+        if gen != current_gen:
+            return False
+        if (
+            last
+            and last["gen"] == gen
+            and last["frameIndex"] == frame_index
+            and last["quality"] == "exact"
+            and quality == "provisional"
+        ):
+            return False
+        return True
+
+    # Frame A (gen 1) must not apply after user moved to gen 2.
+    assert should_apply(1, 2, 0, "exact", None) is False
+    # Newest gen always applies when nothing rendered yet.
+    assert should_apply(2, 2, 5, "provisional", None) is True
+    # Exact for frame B wins.
+    last = {"gen": 2, "frameIndex": 5, "quality": "exact"}
+    assert should_apply(2, 2, 5, "exact", last) is True
+    # Late provisional for same frame must not replace exact.
+    assert should_apply(2, 2, 5, "provisional", last) is False
+    # Provisional for a different frame under same gen is allowed only if gen matches
+    # (UI re-bumps gen on each schedule, so this is defensive).
+    assert should_apply(2, 2, 6, "provisional", last) is True
+
+
+def test_preview_unknown_stack_id_returns_400(client):
+    response = client.post(
+        "/preview",
+        json={
+            "stack_id": "00000000-0000-0000-0000-000000000000",
+            "threshold": 100,
+            "frame_index": 0,
+        },
+    )
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert "stack_id" in detail
+    assert "expired" in detail.lower() or "unknown" in detail.lower()
+
+
+def test_preview_requires_path_or_stack_id(client):
+    response = client.post(
+        "/preview",
+        json={"threshold": 100, "frame_index": 0},
+    )
+    assert response.status_code == 400
+    assert "path or stack_id" in response.json()["detail"].lower()
+
+
+def test_upload_session_analyze_by_stack_id(client):
+    open_response = client.post(
+        "/upload/session",
+        files={"file": ("analyze_session.tif", stack_upload_bytes(), "image/tiff")},
+        data={"voxel_x_um": "1.0", "voxel_y_um": "1.0", "voxel_z_um": "1.0"},
+    )
+    assert open_response.status_code == 200
+    stack_id = open_response.json()["stack_id"]
+
+    response = client.post(
+        "/analyze",
+        json={
+            "stack_id": stack_id,
+            "threshold": 100,
+            "profile": "vesicle",
+            "prefer_opencv": False,
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["source_path"] == "analyze_session.tif"
+    assert payload["frame_count"] == 3
+    assert payload["valid_frame_count"] == 3
+
+
+def test_mesh_preview_active_surfaces_without_seed_returns_400(client, tmp_path):
+    """Experimental mesh must fail fast without Select Object (no long hang)."""
+    path = tmp_path / "stack.tif"
+    write_stack(path)
+
+    response = client.post(
+        "/mesh-preview",
+        json={
+            "path": str(path),
+            "threshold": 100,
+            "profile": "active_surfaces",
+            "prefer_opencv": False,
+        },
+    )
+    assert response.status_code == 400
+    detail = response.json()["detail"].lower()
+    assert "seed" in detail
+
+
+def test_upload_session_mesh_preview_by_stack_id(client):
+    pytest.importorskip("cv2")
+    pytest.importorskip("skimage")
+    open_response = client.post(
+        "/upload/session",
+        files={"file": ("mesh_session.tif", stack_upload_bytes(), "image/tiff")},
+        data={"voxel_x_um": "1.0", "voxel_y_um": "1.0", "voxel_z_um": "1.0"},
+    )
+    assert open_response.status_code == 200
+    stack_id = open_response.json()["stack_id"]
+
+    response = client.post(
+        "/mesh-preview",
+        json={
+            "stack_id": stack_id,
+            "threshold": 100,
+            "profile": "vesicle",
+            "prefer_opencv": False,
+            "downsample": 1,
+            "max_faces": 5000,
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["source_path"] == "mesh_session.tif"
+    assert payload["has_mesh"] is True
+    assert payload["vertex_count"] > 0
 

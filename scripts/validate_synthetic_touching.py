@@ -1,5 +1,19 @@
 #!/usr/bin/env python3
-"""Document threshold-merge failure on synthetic touching vesicles (negative reference)."""
+"""Mandatory seeded-identity suite on labelled synthetic membrane fixtures.
+
+Geometry: hollow bright rings with polar shrink (not filled cylinders).
+Residual seeded merge/contamination is a **failure**, never a successful
+“negative reference”. Unseeded baseline merge is **not** required for pass.
+
+For each mandatory case the script scores:
+  - target mask IoU, neighbour contamination, centroid error,
+  - valid coverage, identity after blank gaps.
+
+Ambiguous contact may pass via correct isolation **or** safe rejection.
+Exit 0 only when every mandatory case passes.
+
+Real CZI review is separate — see docs/validation-real-czi-signoff.md.
+"""
 
 from __future__ import annotations
 
@@ -13,180 +27,177 @@ import numpy as np
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from morphostack.core.export import (
-    analysis_manifest,
-    analysis_run_warnings,
-    write_analysis_csv,
-    write_analysis_manifest_json,
-)
 from morphostack.core.models import VoxelSize
 from morphostack.core.pipeline import ObjectSeed, analyze_stack
+from morphostack.core.synthetic_touching import (
+    all_mandatory_cases,
+    score_case_from_predictions,
+)
 
 
-def build_touching_vesicle_stack(
-    *,
-    shape: tuple[int, int, int] = (5, 80, 80),
-    large_center: tuple[float, float] = (30.0, 40.0),
-    large_radius: float = 12.0,
-    small_center: tuple[float, float] = (48.0, 40.0),
-    small_radius: float = 8.0,
-    intensity: int = 220,
-) -> np.ndarray:
-    stack = np.zeros(shape, dtype=np.uint8)
-    lcx, lcy = large_center
-    scx, scy = small_center
-    for z in range(shape[0]):
-        for y in range(shape[1]):
-            for x in range(shape[2]):
-                if np.hypot(x - lcx, y - lcy) < large_radius or np.hypot(x - scx, y - scy) < small_radius:
-                    stack[z, y, x] = intensity
-    return stack
+def _frame_flags(analysis, n_frames: int) -> tuple[list, list[bool], list[bool]]:
+    """Extract contours, tracked flags, merge_rejected flags from StackAnalysis."""
+    contours: list = [None] * n_frames
+    tracked = [False] * n_frames
+    merge_rejected = [False] * n_frames
+
+    # analysis.frames use global frame indices starting at 0 for full-stack runs.
+    by_idx = {int(f.frame_index): f for f in analysis.frames}
+    track_by_idx = {}
+    if analysis.tracking is not None:
+        track_by_idx = {int(r.frame_index): r for r in analysis.tracking.records}
+
+    for z in range(n_frames):
+        fa = by_idx.get(z)
+        if fa is not None and fa.contour is not None:
+            contours[z] = fa.contour
+            tracked[z] = True
+        rec = track_by_idx.get(z)
+        if rec is not None:
+            if not rec.tracked:
+                tracked[z] = False
+                contours[z] = None
+            merge_rejected[z] = bool(getattr(rec, "merge_rejected", False))
+            if getattr(rec, "loss_reason", None) == "merge_rejected":
+                merge_rejected[z] = True
+    return contours, tracked, merge_rejected
 
 
-def center_frame_neighbor_bleed(*, analysis, frame_index: int, neighbor_x: float) -> bool:
-    frame = analysis.frames[frame_index]
-    if frame.contour is None or len(frame.contour) == 0:
-        return False
-    return float(np.max(frame.contour[:, 0])) > neighbor_x
+def run_case(case, *, voxel: VoxelSize) -> dict:
+    seed = ObjectSeed(
+        x=float(case.seed_x),
+        y=float(case.seed_y),
+        frame_index=int(case.seed_frame),
+        radius=float(case.seed_radius),
+        type="circle",
+    )
+    analysis = analyze_stack(
+        case.stack,
+        thresholds=100.0,  # unused by seeded adaptive path; kept for API
+        voxel_size=voxel,
+        profile="vesicle",
+        include_mesh=False,
+        prefer_opencv=False,
+        object_seed=seed,
+    )
+    contours, tracked, merge_rejected = _frame_flags(analysis, case.stack.shape[0])
+    score = score_case_from_predictions(
+        case,
+        contours=contours,
+        tracked=tracked,
+        merge_rejected=merge_rejected,
+    )
+    return {
+        "case_id": case.case_id,
+        "description": case.description,
+        "passed": score.passed,
+        "summary": score.summary,
+        "valid_coverage": score.valid_coverage,
+        "mean_target_iou": score.mean_target_iou,
+        "max_neighbor_contamination": score.max_neighbor_contamination,
+        "mean_centroid_error_px": score.mean_centroid_error_px,
+        "identity_after_gap_ok": score.identity_after_gap_ok,
+        "seed": {
+            "x": case.seed_x,
+            "y": case.seed_y,
+            "frame_index": case.seed_frame,
+            "radius": case.seed_radius,
+        },
+        "geometry": {
+            "stack_shape_zyx": list(case.stack.shape),
+            "note": "Labelled synthetic membranes; not biological ground truth.",
+        },
+        "frames": [
+            {
+                "frame_index": fs.frame_index,
+                "policy": fs.policy,
+                "tracked": fs.tracked,
+                "target_iou": fs.target_iou,
+                "neighbor_contamination": fs.neighbor_contamination,
+                "centroid_error_px": fs.centroid_error_px,
+                "merge_rejected": fs.merge_rejected,
+                "frame_pass": fs.frame_pass,
+                "detail": fs.detail,
+            }
+            for fs in score.frames
+        ],
+    }
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--out-dir",
-        default=str(PROJECT_ROOT / "validation" / "runs" / "synthetic-touching-failure"),
-        help="Validation output directory.",
-    )
-    parser.add_argument(
-        "--with-active-surfaces",
-        dest="with_active_surfaces",
-        action="store_true",
-        help="Also run the experimental Active Surfaces profile (slow; optional comparison only).",
+        default=str(PROJECT_ROOT / "validation" / "runs" / "synthetic-touching-membranes"),
+        help="Directory for per-case JSON + aggregate summary.",
     )
     args = parser.parse_args()
-
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    stack = build_touching_vesicle_stack()
     voxel = VoxelSize(1.0, 1.0, 1.0)
-    threshold = 100.0
-    seed = ObjectSeed(x=30.0, y=40.0, frame_index=2, radius=9.0, type="circle")
-
-    threshold_only = analyze_stack(
-        stack,
-        thresholds=threshold,
-        voxel_size=voxel,
-        profile="vesicle",
-        include_mesh=True,
-        prefer_opencv=False,
-    )
-    threshold_seeded = analyze_stack(
-        stack,
-        thresholds=threshold,
-        voxel_size=voxel,
-        profile="vesicle",
-        include_mesh=True,
-        prefer_opencv=False,
-        object_seed=seed,
-    )
-
-    write_analysis_csv(threshold_only, out_dir / "threshold-only-metrics.csv")
-    write_analysis_csv(threshold_seeded, out_dir / "threshold-seeded-metrics.csv")
-
-    threshold_only_vol = threshold_only.mesh.volume_um3 if threshold_only.mesh else 0.0
-    threshold_mesh_vol = threshold_seeded.mesh.volume_um3 if threshold_seeded.mesh else 0.0
-    threshold_warnings = {str(item["code"]) for item in analysis_run_warnings(threshold_seeded, voxel_source="override")}
-
-    # Fast negative reference: circle seed does not stop threshold tracking from merging neighbors.
-    seed_ignored = abs(threshold_mesh_vol - threshold_only_vol) < max(50.0, threshold_only_vol * 0.05)
-    merge_detected = "likely_neighbor_merge" in threshold_warnings
-    contour_bleeds = center_frame_neighbor_bleed(
-        analysis=threshold_seeded,
-        frame_index=seed.frame_index,
-        neighbor_x=42.0,
-    )
-    failure_mode_confirmed = seed_ignored or merge_detected or contour_bleeds
-
-    active_surfaces_mesh_vol = None
-    if args.with_active_surfaces:
-        active_surfaces_seeded = analyze_stack(
-            stack,
-            thresholds=threshold,
-            voxel_size=voxel,
-            profile="active_surfaces",
-            include_mesh=True,
-            prefer_opencv=False,
-            object_seed=seed,
+    cases = all_mandatory_cases()
+    results = []
+    for case in cases:
+        result = run_case(case, voxel=voxel)
+        results.append(result)
+        (out_dir / f"{case.case_id}.json").write_text(
+            json.dumps(result, indent=2) + "\n", encoding="utf-8"
         )
-        write_analysis_csv(active_surfaces_seeded, out_dir / "active_surfaces-seeded-metrics.csv")
-        active_surfaces_mesh_vol = active_surfaces_seeded.mesh.volume_um3 if active_surfaces_seeded.mesh else 0.0
 
-    summary = {
-        "case": "synthetic-touching-failure",
-        "expected": "threshold vesicle profile merges touching neighbors despite circle seed",
-        "failure_mode_confirmed": failure_mode_confirmed,
-        "threshold_only_mesh_volume_um3": threshold_only_vol,
-        "threshold_seeded_mesh_volume_um3": threshold_mesh_vol,
-        "active_surfaces_seeded_mesh_volume_um3": active_surfaces_mesh_vol,
-        "threshold_warning_codes": sorted(threshold_warnings),
-        "checks": {
-            "seed_ignored_same_mesh_as_unseeded": seed_ignored,
-            "likely_neighbor_merge": merge_detected,
-            "center_frame_contour_bleeds_past_neighbor": contour_bleeds,
-        },
-    }
-    (out_dir / "failure-summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
-
-    manifest = analysis_manifest(
-        threshold_seeded,
-        source_path="synthetic-touching-failure",
-        threshold=threshold,
-        include_mesh=True,
-        prefer_opencv=False,
-        voxel_source="override",
-        object_seed=seed,
-    )
-    manifest["negative_reference"] = True
-    manifest["failure_mode_confirmed"] = failure_mode_confirmed
-    write_analysis_manifest_json(manifest, out_dir / "manifest.json")
-
-    (out_dir / "README.md").write_text(
-        "\n".join(
-            [
-                "# Synthetic Touching Vesicles — Negative Reference",
-                "",
-                "Two touching vesicles in a 5-slice stack (large r=12 µm at x=30, small r=8 µm at x=48).",
-                "Circle seed is on the large vesicle only.",
-                "",
-                "This run documents an **expected failure mode** for threshold-only vesicle tracking:",
-                "the seed does not change the merged mesh compared with the unseeded run.",
-                "",
-                "Run (fast, threshold only):",
-                "",
-                "```powershell",
-                "python scripts/validate_synthetic_touching.py",
-                "```",
-                "",
-                "Optional Active Surfaces comparison (slow):",
-                "",
-                "```powershell",
-                "python scripts/validate_synthetic_touching.py --with-active_surfaces",
-                "```",
-                "",
-                f"- Threshold-only mesh volume: {threshold_only_vol:.1f} µm³",
-                f"- Threshold seeded mesh volume: {threshold_mesh_vol:.1f} µm³",
-                f"- Failure mode confirmed: `{failure_mode_confirmed}`",
-                "",
-                "Use ROI crop, polygon seed, or Active Surfaces when objects touch.",
-                "",
-            ]
+    all_pass = all(bool(r["passed"]) for r in results)
+    aggregate = {
+        "suite": "synthetic-touching-membranes",
+        "mandatory_case_count": len(results),
+        "passed_count": sum(1 for r in results if r["passed"]),
+        "failed_count": sum(1 for r in results if not r["passed"]),
+        "all_passed": all_pass,
+        "exit_zero_only_if_all_mandatory_pass": True,
+        "residual_seeded_merge_is_failure": True,
+        "unseeded_merge_not_required": True,
+        "synthetic_limits": (
+            "Hollow-ring geometry with polar shrink and labelled masks. "
+            "IoU/contamination gates are computational, not biological proof. "
+            "Real crowded CZI sign-off is separate (docs/validation-real-czi-signoff.md)."
         ),
-        encoding="utf-8",
-    )
+        "cases": [
+            {"case_id": r["case_id"], "passed": r["passed"], "summary": r["summary"]}
+            for r in results
+        ],
+    }
+    (out_dir / "summary.json").write_text(json.dumps(aggregate, indent=2) + "\n", encoding="utf-8")
+    # Compat alias for older tooling that looked for failure-summary.json
+    (out_dir / "failure-summary.json").write_text(json.dumps(aggregate, indent=2) + "\n", encoding="utf-8")
 
-    print(json.dumps(summary, indent=2))
-    return 0 if failure_mode_confirmed else 1
+    lines = [
+        "# Synthetic Touching Membranes — Seeded Identity Suite",
+        "",
+        f"**Aggregate: {'PASS' if all_pass else 'FAIL'}** "
+        f"({aggregate['passed_count']}/{aggregate['mandatory_case_count']} cases)",
+        "",
+        "Residual seeded merge/contamination is a **failure**, not a successful negative reference.",
+        "Fixtures: hollow membrane rings + polar shrink + per-frame target/neighbour masks.",
+        "",
+        "| Case | Result |",
+        "| --- | --- |",
+    ]
+    for r in results:
+        lines.append(f"| `{r['case_id']}` | {'PASS' if r['passed'] else 'FAIL'} |")
+    lines.extend(
+        [
+            "",
+            "Real-data protocol: [validation-real-czi-signoff.md](../../../docs/validation-real-czi-signoff.md)",
+            "",
+            "```powershell",
+            "python scripts/validate_synthetic_touching.py",
+            "```",
+            "",
+        ]
+    )
+    (out_dir / "README.md").write_text("\n".join(lines), encoding="utf-8")
+
+    print(json.dumps(aggregate, indent=2))
+    return 0 if all_pass else 1
 
 
 if __name__ == "__main__":

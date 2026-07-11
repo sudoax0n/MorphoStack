@@ -10,7 +10,7 @@ from typing import Any
 
 import numpy as np
 
-from morphostack.core.images import as_color_stack, as_grayscale_stack
+from morphostack.core.images import as_color_stack, as_grayscale_stack, color_stub_for_grayscale
 from morphostack.core.models import ImageStack, VoxelSize
 
 SUPPORTED_EXTENSIONS = {".tif", ".tiff", ".lsm", ".czi"}
@@ -21,8 +21,14 @@ def load_image_stack(
     path: str | Path,
     *,
     voxel_override: VoxelSize | None = None,
+    include_color: bool = False,
 ) -> ImageStack:
-    """Load a TIFF/TIFF-like or CZI file without GUI prompts."""
+    """Load a TIFF/TIFF-like or CZI file without GUI prompts.
+
+    ``include_color`` defaults to False: analysis/session/cache paths only need
+    grayscale, and a full RGB copy roughly triples RAM on large stacks. Pass
+    True only when real multichannel color pixels are required.
+    """
 
     file_path = Path(path)
     ext = file_path.suffix.lower()
@@ -44,10 +50,15 @@ def load_image_stack(
     else:
         voxel = DEFAULT_VOXEL_SIZE
         voxel_source = "default"
+    grayscale = as_grayscale_stack(raw)
+    if include_color:
+        color = as_color_stack(raw)
+    else:
+        color = color_stub_for_grayscale(grayscale)
     return ImageStack(
         source_path=file_path,
-        grayscale=as_grayscale_stack(raw),
-        color=as_color_stack(raw),
+        grayscale=grayscale,
+        color=color,
         voxel_size=voxel,
         voxel_source=voxel_source,
     )

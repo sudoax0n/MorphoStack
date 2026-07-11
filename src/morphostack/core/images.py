@@ -56,6 +56,21 @@ def as_color_stack(image: np.ndarray) -> np.ndarray:
     raise ValueError(f"Unsupported image stack shape: {arr.shape}")
 
 
+def color_stub_for_grayscale(grayscale: np.ndarray) -> np.ndarray:
+    """Zero-allocation RGB shape stub matching a (z, y, x) grayscale stack.
+
+    Analysis/preview/mesh only use grayscale. Building a full color copy via
+    ``as_color_stack`` triples RAM on large CZI/TIFF stacks. This broadcast view
+    satisfies ``ImageStack`` shape checks for API metadata without owning pixels.
+    """
+
+    arr = np.asarray(grayscale)
+    if arr.ndim != 3:
+        raise ValueError("color_stub_for_grayscale expects grayscale shape (z, y, x)")
+    z, y, x = (int(arr.shape[0]), int(arr.shape[1]), int(arr.shape[2]))
+    return np.broadcast_to(np.array(0, dtype=np.uint8), (z, y, x, 3))
+
+
 def rgb_to_gray(rgb: np.ndarray) -> np.ndarray:
     """Convert RGB data to luminance grayscale without requiring OpenCV."""
 
@@ -70,19 +85,38 @@ def rgb_to_gray(rgb: np.ndarray) -> np.ndarray:
     return gray.astype(arr.dtype, copy=False)
 
 
+def stretch_frame_to_uint8(frame: np.ndarray) -> np.ndarray:
+    """Min-max stretch a single 2D plane to uint8 (float32 path; no 3D stack)."""
+
+    arr = np.asarray(frame)
+    if arr.ndim != 2:
+        raise ValueError("stretch_frame_to_uint8 expects a 2D frame shaped as (y, x)")
+
+    # Integer min/max avoids a full float cast when the plane is already constant
+    # or spans the full uint8 range.
+    if arr.dtype == np.uint8:
+        min_val = int(arr.min())
+        max_val = int(arr.max())
+        if max_val <= min_val:
+            return np.zeros(arr.shape, dtype=np.uint8)
+        if min_val == 0 and max_val == 255:
+            return np.ascontiguousarray(arr)
+        scale = np.float32(255.0 / (max_val - min_val))
+        return ((arr.astype(np.float32) - np.float32(min_val)) * scale).astype(np.uint8)
+
+    frame_f = arr.astype(np.float32, copy=False)
+    min_val = float(frame_f.min())
+    max_val = float(frame_f.max())
+    if max_val <= min_val:
+        return np.zeros(arr.shape, dtype=np.uint8)
+    scale = np.float32(255.0 / (max_val - min_val))
+    return ((frame_f - np.float32(min_val)) * scale).astype(np.uint8)
+
+
 def stretch_to_uint8(stack: np.ndarray) -> np.ndarray:
     """Min-max stretch each z-slice to uint8, preserving constant slices as zero."""
 
     gray = as_grayscale_stack(stack)
-    stretched: list[np.ndarray] = []
-    for frame in gray:
-        frame_float = frame.astype(np.float64)
-        min_val = float(np.min(frame_float))
-        max_val = float(np.max(frame_float))
-        if max_val <= min_val:
-            stretched.append(np.zeros_like(frame, dtype=np.uint8))
-            continue
-        scaled = (frame_float - min_val) / (max_val - min_val) * 255.0
-        stretched.append(scaled.astype(np.uint8))
+    stretched = [stretch_frame_to_uint8(frame) for frame in gray]
     return np.stack(stretched, axis=0)
 

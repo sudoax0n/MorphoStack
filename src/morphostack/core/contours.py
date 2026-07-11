@@ -26,11 +26,13 @@ def segmentation_preview(
     *,
     prefer_opencv: bool = True,
     object_seed: tuple[int, int] | None = None,
+    seed_radius: float = 10.0,
+    ref_area: float | None = None,
 ) -> SegmentationPreview:
     """Threshold an image and return the largest contour-like boundary.
 
-    If object_seed (x, y) is given, selects the component at/nearest that pixel
-    instead of the largest component.
+    If object_seed (x, y) is given, selects the component matching the seed
+    (containment + area prior) instead of the largest component.
     """
 
     mask = np.asarray(image) >= threshold
@@ -38,7 +40,13 @@ def segmentation_preview(
     method = "fallback"
 
     if object_seed is not None:
-        contour = selected_component_contour(mask, seed_x=object_seed[0], seed_y=object_seed[1])
+        contour = selected_component_contour(
+            mask,
+            seed_x=object_seed[0],
+            seed_y=object_seed[1],
+            seed_radius=seed_radius,
+            ref_area=ref_area,
+        )
         if contour is not None:
             method = "seed"
     elif prefer_opencv:
@@ -66,62 +74,45 @@ def selected_component_contour(
     seed_x: int,
     seed_y: int,
     min_area_px: int = 16,
+    seed_radius: float = 10.0,
+    ref_area: float | None = None,
 ) -> np.ndarray | None:
-    """Return the contour of the component at/nearest (seed_x, seed_y).
+    """Return the contour of the component best matching the seed.
 
-    Uses OpenCV connectedComponentsWithStats when available. Falls back to
-    picking the component whose bounding-box centre is nearest the seed.
+    Prefers exterior contours that contain the seed (hollow GUV rings), with
+    area consistency against ``ref_area`` / ``seed_radius``. On fused multi-
+    vesicle masks, distance-transform watershed splits necks before pick so
+    the contour does not wrap a neighbor. Rejects merge-sized blobs and dust.
     """
-    try:
-        import cv2
-    except Exception:
-        return _seed_component_fallback(mask, seed_x=seed_x, seed_y=seed_y, min_area_px=min_area_px)
+    from morphostack.core.object_select import (
+        contour_from_component,
+        isolate_seeded_mask,
+        pick_component_from_mask,
+    )
 
     arr = np.asarray(mask, dtype=bool)
     if arr.ndim != 2:
         raise ValueError("selected_component_contour expects a 2D mask")
 
-    binary = arr.astype(np.uint8) * 255
-    n_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
+    # Split neck-fused multi-vesicle blobs before component selection.
+    arr = isolate_seeded_mask(
+        arr,
+        seed_x=float(seed_x),
+        seed_y=float(seed_y),
+        seed_radius=float(seed_radius),
+    )
 
-    if n_labels <= 1:
-        return None
-
-    height, width = arr.shape
-    sx = int(np.clip(seed_x, 0, width - 1))
-    sy = int(np.clip(seed_y, 0, height - 1))
-
-    # Filter out background (label 0) and tiny components.
-    label_ids = [
-        i for i in range(1, n_labels)
-        if int(stats[i, cv2.CC_STAT_AREA]) >= min_area_px
-    ]
-    if not label_ids:
-        return None
-
-    # If seed falls on a foreground pixel, use that label directly.
-    seed_label = int(labels[sy, sx])
-    if seed_label in label_ids:
-        chosen = seed_label
-    else:
-        # Choose the component whose centroid is nearest the seed.
-        def centroid_dist(lbl: int) -> float:
-            area = int(stats[lbl, cv2.CC_STAT_AREA])
-            if area == 0:
-                return float("inf")
-            region = labels == lbl
-            ys, xs = np.nonzero(region)
-            cx = float(xs.mean())
-            cy = float(ys.mean())
-            return float((cx - sx) ** 2 + (cy - sy) ** 2)
-
-        chosen = min(label_ids, key=centroid_dist)
-
-    component_mask = (labels == chosen).astype(np.uint8) * 255
-    contours, _ = cv2.findContours(component_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not contours or len(contours[0]) < 3:
-        return None
-    return normalize_points(contours[0])
+    comp = pick_component_from_mask(
+        arr,
+        seed_x=float(seed_x),
+        seed_y=float(seed_y),
+        seed_radius=float(seed_radius),
+        ref_area=ref_area,
+        min_area_px=min_area_px,
+    )
+    if comp is None:
+        return _seed_component_fallback(mask, seed_x=seed_x, seed_y=seed_y, min_area_px=min_area_px)
+    return contour_from_component(comp)
 
 
 def _seed_component_fallback(
@@ -188,7 +179,10 @@ def largest_opencv_contour(mask: np.ndarray) -> np.ndarray | None:
         raise ValueError("largest_opencv_contour expects a 2D mask")
 
     binary = (arr.astype(np.uint8)) * 255
-    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # Close 1-2 px noise holes before tracing (geometry only; no mask Gaussian).
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=2)
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
     if not contours:
         return None
     valid = [contour for contour in contours if is_candidate_object_contour(contour, arr.shape)]
@@ -196,7 +190,8 @@ def largest_opencv_contour(mask: np.ndarray) -> np.ndarray | None:
     largest = max(candidates, key=lambda contour: float(cv2.contourArea(contour)))
     if largest is None or len(largest) < 3:
         return None
-    return normalize_points(largest)
+    pts = normalize_points(largest)
+    return smooth_contour_spline(pts)
 
 
 def is_candidate_object_contour(contour, shape: tuple[int, int]) -> bool:
@@ -301,49 +296,117 @@ def flood_component(
     return points
 
 
+def _arc_length_resample(xy: np.ndarray, target_spacing: float = 1.0) -> np.ndarray:
+    """Resample a closed contour to uniform arc-length spacing."""
+    pts = np.asarray(xy, dtype=np.float64)
+    if pts.ndim != 2 or pts.shape[0] < 3 or pts.shape[1] < 2:
+        return pts
+    # Drop duplicate closing vertex if present.
+    if np.allclose(pts[0], pts[-1], atol=1e-9):
+        pts = pts[:-1]
+    if len(pts) < 3:
+        return np.asarray(xy, dtype=np.float64)
+
+    closed = np.vstack([pts, pts[0:1]])
+    seg = np.hypot(np.diff(closed[:, 0]), np.diff(closed[:, 1]))
+    cum = np.concatenate([[0.0], np.cumsum(seg)])
+    total = float(cum[-1])
+    if total <= 1e-12:
+        return pts
+    n_pts = max(8, int(round(total / max(float(target_spacing), 1e-6))))
+    t_new = np.linspace(0.0, total, n_pts, endpoint=False)
+    x_new = np.interp(t_new, cum, closed[:, 0])
+    y_new = np.interp(t_new, cum, closed[:, 1])
+    return np.column_stack([x_new, y_new])
+
+
+def smooth_contour_spline(
+    xy: np.ndarray,
+    *,
+    sigma_px: float = 1.5,
+    target_spacing: float = 0.75,
+) -> np.ndarray:
+    """Periodic cubic B-spline smooth on arc-length-resampled points.
+
+    Uses the noise-budget rule ``s ≈ M · σ²`` (research: contour_smoothing_method).
+    Falls back to the original points if the fit fails or scipy is unavailable.
+    Tiny contours (perimeter ≲ 24 px) are left unsmoothed — high ``s`` relative to
+    object scale collapses them toward a point.
+    """
+    pts_in = normalize_points(xy)
+    if len(pts_in) < 4:
+        return pts_in
+
+    peri_in = polygon_perimeter(pts_in, x_scale=1.0, y_scale=1.0)
+    if peri_in < 24.0:
+        return pts_in
+
+    # Cap σ by object scale so small contours (test fixtures / tiny vesicles)
+    # are not over-smoothed into severe area shrinkage. For R≳30 px membranes,
+    # 0.08·R ≥ 1.5 and the default noise budget applies fully.
+    char_r = peri_in / (2.0 * np.pi)
+    sigma_eff = min(float(sigma_px), max(0.35, 0.08 * char_r))
+
+    try:
+        from scipy.interpolate import splev, splprep
+    except Exception:
+        return pts_in
+
+    pts = _arc_length_resample(pts_in, target_spacing=float(target_spacing))
+    m = len(pts)
+    if m < 6:
+        return pts_in
+
+    s_target = float(m) * (sigma_eff ** 2)
+    try:
+        # per=True: closed curve; last sample is unused by FITPACK periodic mode.
+        tck, _ = splprep(
+            [pts[:, 0], pts[:, 1]],
+            per=True,
+            k=3,
+            s=s_target,
+        )
+        # Evaluate at 2x points for stable perimeter integration.
+        u_eval = np.linspace(0.0, 1.0, m * 2, endpoint=False)
+        xs, ys = splev(u_eval, tck)
+        out = np.column_stack([np.asarray(xs, dtype=np.float64), np.asarray(ys, dtype=np.float64)])
+        if len(out) < 3 or not np.all(np.isfinite(out)):
+            return pts_in
+        # Reject degenerate collapse (all points nearly identical).
+        span = float(np.ptp(out[:, 0]) + np.ptp(out[:, 1]))
+        if span < 1e-3:
+            return pts_in
+        return out
+    except Exception:
+        return pts_in
+
+
 def smooth_contour_guarded(
     contour: np.ndarray,
     *,
     desired_circularity: float = 0.8,
     max_iterations: int = 100,
     tolerance: float = 1e-3,
+    sigma_px: float = 1.5,
 ) -> tuple[np.ndarray, float]:
-    """Smooth a contour with OpenCV when available, preserving nondegenerate output."""
+    """Smooth a closed contour with periodic cubic B-spline (noise-budget).
 
+    ``desired_circularity`` / ``max_iterations`` / ``tolerance`` are retained for
+    API compatibility; smoothing is a single spline pass (no polyline simplify).
+    """
+    del max_iterations, tolerance  # API compat; spline uses noise budget not RDP loop
     pts = normalize_points(contour)
     original_circularity = contour_circularity(pts)
     if original_circularity >= desired_circularity or len(pts) < 4:
         return pts, original_circularity
 
-    try:
-        import cv2
-    except Exception:
+    smoothed = smooth_contour_spline(pts, sigma_px=sigma_px)
+    if len(smoothed) < 3:
         return pts, original_circularity
-
-    cv_contour = pts.astype(np.float32).reshape((-1, 1, 2))
-    perimeter = float(cv2.arcLength(cv_contour, closed=True))
-    if perimeter <= 0:
-        return pts, 0.0
-
-    epsilon_coefficient = 0.001
-    last_valid = pts
-    last_circularity = original_circularity
-    for _ in range(max_iterations):
-        epsilon = epsilon_coefficient * perimeter
-        smoothed = cv2.approxPolyDP(cv_contour, epsilon, closed=True)
-        if smoothed is None or len(smoothed) < 4:
-            break
-
-        smoothed_pts = normalize_points(smoothed)
-        circularity = contour_circularity(smoothed_pts)
-        last_valid = smoothed_pts
-        last_circularity = circularity
-        if circularity >= desired_circularity or abs(circularity - desired_circularity) <= tolerance:
-            return smoothed_pts, circularity
-
-        epsilon_coefficient *= 1.1
-
-    return last_valid, last_circularity
+    circ = contour_circularity(smoothed)
+    if circ <= 0.0:
+        return pts, original_circularity
+    return smoothed, circ
 
 
 def contour_circularity(contour: np.ndarray) -> float:

@@ -3,8 +3,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from morphostack.core import RectROI, VoxelSize, ZRange, analyze_frame, analyze_stack
-from morphostack.core.pipeline import normalize_thresholds
+from morphostack.core import ObjectSeed, RectROI, VoxelSize, ZRange, analyze_frame, analyze_stack
+from morphostack.core.pipeline import crop_stack_xy, normalize_thresholds, seed_isolation_roi
 
 
 def test_analyze_frame_returns_metrics_for_detected_component():
@@ -160,3 +160,41 @@ def test_analyze_stack_rejects_non_stack_input():
 def test_normalize_thresholds_rejects_wrong_length():
     with pytest.raises(ValueError, match="threshold sequence length"):
         normalize_thresholds([1, 2], frame_count=3)
+
+
+def test_crop_stack_xy_reduces_dimensions():
+    stack = np.arange(2 * 10 * 12, dtype=np.uint8).reshape(2, 10, 12)
+    roi = RectROI(xmin=2, xmax=8, ymin=1, ymax=5)
+    cropped = crop_stack_xy(stack, roi)
+    assert cropped.shape == (2, 4, 6)
+    assert np.array_equal(cropped, stack[:, 1:5, 2:8])
+
+
+def test_seed_without_roi_isolates_one_blob_on_two_blob_stack():
+    """Seed + no ROI crops around seed so only one object is measured."""
+    stack = np.zeros((3, 40, 100), dtype=np.uint8)
+    # Left blob and far-right blob
+    for y in range(40):
+        for x in range(100):
+            if (x - 20) ** 2 + (y - 20) ** 2 <= 8 ** 2:
+                stack[:, y, x] = 200
+            if (x - 80) ** 2 + (y - 20) ** 2 <= 8 ** 2:
+                stack[:, y, x] = 200
+
+    seed = ObjectSeed(x=80, y=20, frame_index=1, radius=8.0)
+    isolation = seed_isolation_roi(seed, width=100, height=40)
+    # Neighbor at x=20 must fall outside isolation crop
+    assert isolation.xmin > 30
+
+    analysis = analyze_stack(
+        stack,
+        thresholds=100,
+        voxel_size=VoxelSize(1.0, 1.0, 1.0),
+        object_seed=seed,
+        prefer_opencv=False,
+    )
+    for frame in analysis.frames:
+        assert frame.contour is not None
+        cx = float(frame.contour[:, 0].mean())
+        assert cx > 60
+        assert float(frame.contour[:, 0].min()) > 40

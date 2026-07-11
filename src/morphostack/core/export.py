@@ -20,7 +20,11 @@ from morphostack.core.pipeline import (
 
 CSV_COLUMNS = (
     "frame_index",
+    # Legacy: effective intensity gate when applicable; empty when N/A (polar/unavailable).
     "threshold",
+    "requested_threshold",
+    "effective_threshold",
+    "threshold_semantics",
     "profile",
     "method",
     "excluded",
@@ -38,10 +42,15 @@ CSV_COLUMNS = (
     "extent",
     "equivalent_diameter_um",
     "solidity",
+    "skel_ok",
+    "skel_perimeter_px",
+    "skel_perimeter_um",
     "mesh_surface_area_um2",
     "mesh_volume_um3",
     "mesh_equivalent_sphere_diameter_um",
     "mesh_sphericity",
+    "slice_integrated_volume_um3",
+    "mesh_slice_volume_relative_difference",
 )
 
 SUMMARY_METRICS = (
@@ -73,21 +82,84 @@ BATCH_SUMMARY_COLUMNS = (
     "mesh_volume_um3",
     "mesh_equivalent_sphere_diameter_um",
     "mesh_sphericity",
+    "slice_integrated_volume_um3",
+    "mesh_slice_volume_relative_difference",
     "warning_codes",
     *tuple(f"{metric}_{stat}" for metric in SUMMARY_METRICS for stat in ("mean", "min", "max", "std")),
 )
 
 
+VOLUME_CROSSCHECK_WARNING_FRACTION = 0.05
+
+
+def slice_volume_relative_difference(analysis: StackAnalysis) -> float | None:
+    """Return the fractional disagreement between mesh and slice-integrated volume."""
+
+    slice_volume = analysis.slice_volume
+    if analysis.mesh is None or slice_volume is None or slice_volume.volume_um3 is None:
+        return None
+    mesh_volume = float(analysis.mesh.volume_um3)
+    integrated_volume = float(slice_volume.volume_um3)
+    denominator = (abs(mesh_volume) + abs(integrated_volume)) / 2.0
+    if denominator <= 0.0:
+        return None
+    return abs(mesh_volume - integrated_volume) / denominator
+
+
+def slice_volume_payload(analysis: StackAnalysis) -> dict[str, object] | None:
+    """Return the auditable slice-area volume cross-check for API/report use."""
+
+    measurement = analysis.slice_volume
+    if measurement is None:
+        return None
+    return {
+        "method": "trapezoidal_slice_area_integration",
+        "volume_um3": measurement.volume_um3,
+        "partial_volume_um3": measurement.partial_volume_um3,
+        "relative_difference_from_mesh": slice_volume_relative_difference(analysis),
+        "sampled_slice_count": measurement.sampled_slice_count,
+        "valid_slice_indices": list(measurement.valid_slice_indices),
+        "internal_missing_slice_indices": list(measurement.internal_missing_slice_indices),
+        "coverage_fraction": measurement.coverage_fraction,
+        "z_step_um": measurement.z_step_um,
+        "has_internal_gaps": measurement.has_internal_gaps,
+        "has_observed_start_cap": measurement.has_observed_start_cap,
+        "has_observed_end_cap": measurement.has_observed_end_cap,
+        "touches_stack_boundary": measurement.touches_stack_boundary,
+    }
+
+
 def analysis_rows(analysis: StackAnalysis) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
+    slice_volume = analysis.slice_volume
+    integrated_volume = slice_volume.volume_um3 if slice_volume is not None else None
+    volume_difference = slice_volume_relative_difference(analysis)
     for frame in analysis.frames:
         metrics = frame.metrics
         mesh = analysis.mesh
         excluded = frame.frame_index in analysis.excluded_frames
+        def _csv_num(v: float | None) -> float | str:
+            if v is None:
+                return ""
+            try:
+                fv = float(v)
+            except (TypeError, ValueError):
+                return ""
+            if fv != fv:  # NaN
+                return ""
+            return fv
+
+        req = getattr(frame, "requested_threshold", None)
+        eff = getattr(frame, "effective_threshold", None)
+        sem = getattr(frame, "threshold_semantics", None) or "global_intensity"
+        legacy = frame.threshold
         rows.append(
             {
                 "frame_index": frame.frame_index,
-                "threshold": frame.threshold,
+                "threshold": _csv_num(legacy if legacy is not None else None),
+                "requested_threshold": _csv_num(req if req is not None else legacy),
+                "effective_threshold": _csv_num(eff),
+                "threshold_semantics": sem,
                 "profile": frame.profile,
                 "method": frame.preview.method,
                 "excluded": excluded,
@@ -105,10 +177,15 @@ def analysis_rows(analysis: StackAnalysis) -> list[dict[str, object]]:
                 "extent": metrics.extent if metrics else 0.0,
                 "equivalent_diameter_um": metrics.equivalent_diameter_um if metrics else 0.0,
                 "solidity": metrics.solidity if metrics else 0.0,
+                "skel_ok": bool(frame.skel_ok),
+                "skel_perimeter_px": frame.skel_perimeter_px if frame.skel_perimeter_px is not None else 0.0,
+                "skel_perimeter_um": frame.skel_perimeter_um if frame.skel_perimeter_um is not None else 0.0,
                 "mesh_surface_area_um2": mesh.surface_area_um2 if mesh else 0.0,
                 "mesh_volume_um3": mesh.volume_um3 if mesh else 0.0,
                 "mesh_equivalent_sphere_diameter_um": mesh.equivalent_sphere_diameter_um if mesh else 0.0,
                 "mesh_sphericity": mesh.sphericity if mesh else 0.0,
+                "slice_integrated_volume_um3": integrated_volume,
+                "mesh_slice_volume_relative_difference": volume_difference,
             }
         )
     return rows
@@ -166,6 +243,44 @@ def analysis_warnings(analysis: StackAnalysis) -> list[dict[str, object]]:
                 "message": "3D mesh measurement returned zero surface area or volume.",
             }
         )
+
+    slice_volume = analysis.slice_volume
+    if slice_volume is not None:
+        if slice_volume.has_internal_gaps:
+            warnings.append(
+                {
+                    "code": "slice_volume_internal_gap",
+                    "severity": "warning",
+                    "message": "Slice-integrated volume was withheld because contour slices are missing inside the object; no gap interpolation was performed.",
+                    "frame_indices": list(slice_volume.internal_missing_slice_indices),
+                }
+            )
+        if slice_volume.touches_stack_boundary:
+            warnings.append(
+                {
+                    "code": "slice_volume_stack_boundary",
+                    "severity": "warning",
+                    "message": "The segmented object reaches the selected stack boundary; slice-integrated volume may omit a pole or cap.",
+                }
+            )
+        if slice_volume.sampled_slice_count < 8:
+            warnings.append(
+                {
+                    "code": "sparse_z_sampling",
+                    "severity": "warning",
+                    "message": f"Only {slice_volume.sampled_slice_count} segmented Z slices support the 3D measurement; use at least 8-10 slices for a stronger volume cross-check.",
+                }
+            )
+        volume_difference = slice_volume_relative_difference(analysis)
+        if volume_difference is not None and volume_difference > VOLUME_CROSSCHECK_WARNING_FRACTION:
+            warnings.append(
+                {
+                    "code": "mesh_slice_volume_disagreement",
+                    "severity": "warning",
+                    "message": f"3D mesh volume and slice-integrated volume differ by {volume_difference:.1%}; review calibration, stack coverage, and contours.",
+                    "relative_difference": volume_difference,
+                }
+            )
     return warnings
 
 
@@ -209,24 +324,71 @@ def object_tracking_warnings(diagnostics: TrackingDiagnostics | None) -> list[di
                 "code": "roi_boundary_touch",
                 "severity": "warning",
                 "message": (
-                    "Selected component touches the ROI or crop boundary on "
-                    f"{len(boundary_frames)} frame(s); area may be clipped."
+                    "Selected component touches the ROI or full-FOV crop boundary on "
+                    f"{len(boundary_frames)} frame(s); area may be clipped by the "
+                    "analysis window (not the seed search disk)."
                 ),
                 "frame_indices": boundary_frames,
             }
         )
 
-    merge_frames = [record.frame_index for record in diagnostics.records if record.likely_neighbor_merge]
+    seed_disk_frames = [
+        record.frame_index for record in diagnostics.records if getattr(record, "touches_seed_disk", False)
+    ]
+    if seed_disk_frames:
+        warnings.append(
+            {
+                "code": "seed_disk_clip",
+                "severity": "info",
+                "message": (
+                    "Selected component reaches the seed/search disk boundary on "
+                    f"{len(seed_disk_frames)} frame(s); the hard circle prior may be "
+                    "clipping the membrane contour. This is distinct from ROI/FOV clipping."
+                ),
+                "frame_indices": seed_disk_frames,
+            }
+        )
+
+    # Accepted frames with merge/contact suspicion (compat + explicit flag).
+    merge_frames = [
+        record.frame_index
+        for record in diagnostics.records
+        if record.likely_neighbor_merge or getattr(record, "merge_suspect", False)
+    ]
     if merge_frames:
         warnings.append(
             {
                 "code": "likely_neighbor_merge",
                 "severity": "warning",
                 "message": (
-                    "Tracked component area grew sharply on "
-                    f"{len(merge_frames)} frame(s); neighbors may have merged."
+                    "Suspected neighbor contact or merge on "
+                    f"{len(merge_frames)} accepted frame(s) (area jump and/or seeded "
+                    "merge QC). This is a safety suspicion, not a confirmed biological "
+                    "doublet. Metrics and mesh may be contaminated — review contours."
                 ),
                 "frame_indices": merge_frames,
+            }
+        )
+
+    # Untracked frames where a suspected merge was rejected for safety.
+    merge_rejected_frames = [
+        record.frame_index
+        for record in diagnostics.records
+        if getattr(record, "merge_rejected", False)
+        or getattr(record, "loss_reason", None) == "merge_rejected"
+    ]
+    if merge_rejected_frames:
+        warnings.append(
+            {
+                "code": "merge_suspect_rejected",
+                "severity": "warning",
+                "message": (
+                    "Suspected contact/merge was rejected for safety on "
+                    f"{len(merge_rejected_frames)} frame(s); no contour was accepted. "
+                    "This is not a confirmed two-vesicle biological call — re-seed, "
+                    "tighten ROI, or inspect the stack manually."
+                ),
+                "frame_indices": merge_rejected_frames,
             }
         )
     return warnings
@@ -241,6 +403,30 @@ def analysis_run_warnings(analysis: StackAnalysis, *, voxel_source: str = "unkno
                 "code": "default_voxel_size",
                 "severity": "warning",
                 "message": "Voxel spacing came from MorphoStack defaults. Physical units should be treated as uncalibrated.",
+            }
+        )
+    # Seeded Standard path ignores the UI intensity slider for contours; tell the user.
+    seeded_methods = {
+        getattr(frame.preview, "method", "")
+        for frame in analysis.frames
+        if frame.contour is not None
+    }
+    if any(
+        str(m).startswith("circle_seed") or str(m).startswith("polar")
+        for m in seeded_methods
+    ):
+        warnings.append(
+            {
+                "code": "seeded_adaptive_threshold",
+                "severity": "info",
+                "message": (
+                    "Seeded vesicle/RBC analysis uses per-slice adaptive local intensity "
+                    "gates (or polar ridge paths) inside the seed disk — not the UI slider. "
+                    "See requested_threshold, effective_threshold (null when N/A), and "
+                    "threshold_semantics. Legacy field `threshold` equals the effective "
+                    "gate when one was used, else null. Provisional fast preview still "
+                    "uses the UI/global threshold and may disagree."
+                ),
             }
         )
     return warnings
@@ -289,6 +475,19 @@ def summarize_values(values: list[float]) -> dict[str, float]:
     }
 
 
+def _seeded_adaptive_threshold_used(analysis: StackAnalysis, object_seed: ObjectSeed | None) -> bool:
+    """True when frame thresholds are local adaptive gates, not the UI slider."""
+    if object_seed is None:
+        return False
+    if analysis.profile not in ("vesicle", "rbc"):
+        return False
+    for frame in analysis.frames:
+        method = getattr(frame.preview, "method", "") or ""
+        if method.startswith("circle_seed") or method.startswith("polar"):
+            return True
+    return False
+
+
 def analysis_manifest(
     analysis: StackAnalysis,
     *,
@@ -310,13 +509,35 @@ def analysis_manifest(
             "equivalent_sphere_diameter_um": analysis.mesh.equivalent_sphere_diameter_um,
             "sphericity": analysis.mesh.sphericity,
         }
+    seeded_adaptive = _seeded_adaptive_threshold_used(analysis, object_seed)
+    # Run-level semantics: per-frame fields are authoritative for polar/unavailable.
+    run_semantics = "seeded_adaptive_local" if seeded_adaptive else "global_intensity"
     return {
         "morphostack_version": __version__,
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "source_path": source_path,
         "source_sha256": source_sha256,
         "profile": analysis.profile,
+        # Legacy run-level key: still the UI/CLI requested value for old clients.
         "threshold": threshold,
+        "requested_threshold": threshold,
+        "threshold_semantics": run_semantics,
+        "threshold_field_notes": {
+            "threshold": (
+                "Legacy. On each CSV/API frame row: effective intensity gate when "
+                "one produced the contour; null/empty when polar ridge or unavailable. "
+                "At manifest root: the requested UI/CLI value (compat)."
+            ),
+            "requested_threshold": "UI/CLI request for this run (may be unused by seeded adaptive).",
+            "effective_threshold": (
+                "Numeric only when an intensity gate produced that frame result; "
+                "JSON null / CSV empty for polar_ridge or seeded_unavailable."
+            ),
+            "threshold_semantics": (
+                "global_intensity | seeded_adaptive_local | polar_ridge | "
+                "seeded_unavailable | provisional_global"
+            ),
+        },
         "roi": roi,
         "z_range": z_range,
         "include_mesh": include_mesh,
@@ -332,6 +553,7 @@ def analysis_manifest(
         "excluded_frames": sorted(analysis.excluded_frames),
         "excluded_frame_count": len(analysis.excluded_frames),
         "mesh": mesh,
+        "slice_volume": slice_volume_payload(analysis),
         "summary": analysis_summary(analysis),
         "warnings": analysis_run_warnings(analysis, voxel_source=voxel_source),
         "object_seed": object_seed_payload(object_seed),
@@ -365,6 +587,8 @@ def analysis_summary_row(
         "mesh_volume_um3": analysis.mesh.volume_um3 if analysis.mesh else 0.0,
         "mesh_equivalent_sphere_diameter_um": analysis.mesh.equivalent_sphere_diameter_um if analysis.mesh else 0.0,
         "mesh_sphericity": analysis.mesh.sphericity if analysis.mesh else 0.0,
+        "slice_integrated_volume_um3": analysis.slice_volume.volume_um3 if analysis.slice_volume and analysis.slice_volume.volume_um3 is not None else "",
+        "mesh_slice_volume_relative_difference": slice_volume_relative_difference(analysis) if slice_volume_relative_difference(analysis) is not None else "",
         "warning_codes": ";".join(str(warning["code"]) for warning in analysis_run_warnings(analysis, voxel_source=voxel_source)),
     }
     if isinstance(metrics, dict):
@@ -450,7 +674,12 @@ def analysis_report_markdown(
         f"- Source SHA-256: `{source_sha256 if source_sha256 is not None else 'not recorded'}`",
         f"- MorphoStack version: `{__version__}`",
         f"- Profile: `{analysis.profile}`",
-        f"- Threshold: `{threshold}`",
+        f"- Requested threshold (UI/CLI): `{threshold}`",
+        f"- Threshold semantics (run): "
+        f"`{'seeded_adaptive_local' if object_seed is not None and analysis.profile in ('vesicle', 'rbc') else 'global_intensity'}`",
+        f"- Note: per-frame `effective_threshold` is the intensity gate when used; "
+        f"polar/unavailable frames leave it empty. Legacy `threshold` column matches "
+        f"effective when applicable.",
         f"- ROI: `{roi if roi is not None else 'full stack'}`",
         f"- Z range: `{z_range if z_range is not None else 'full stack'}`",
         f"- Include mesh: `{include_mesh}`",
@@ -533,8 +762,10 @@ def analysis_report_markdown(
             [
                 "## Mesh Summary",
                 "",
-                f"- Surface area: {format_report_number(analysis.mesh.surface_area_um2)} um^2",
-                f"- Volume: {format_report_number(analysis.mesh.volume_um3)} um^3",
+                f"- 3D mesh surface area: {format_report_number(analysis.mesh.surface_area_um2)} um^2",
+                f"- 3D mesh volume: {format_report_number(analysis.mesh.volume_um3)} um^3",
+                f"- Slice-integrated volume (trapezoidal): {format_report_number(analysis.slice_volume.volume_um3) if analysis.slice_volume and analysis.slice_volume.volume_um3 is not None else 'withheld (incomplete contour coverage)'} um^3",
+                f"- Mesh/slice volume difference: {format_report_number(slice_volume_relative_difference(analysis) * 100.0) + '%' if slice_volume_relative_difference(analysis) is not None else 'not available'}",
                 f"- Equivalent sphere diameter: {format_report_number(analysis.mesh.equivalent_sphere_diameter_um)} um",
                 f"- Sphericity: {format_report_number(analysis.mesh.sphericity)}",
                 "",

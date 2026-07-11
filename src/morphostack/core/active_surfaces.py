@@ -760,8 +760,20 @@ ACTIVE_SURFACES_DEFAULTS: dict[str, float | int] = {
     "d_0": 2.0,
     "f_pressure": 0.02,
     "k_grad": 0.05,
+    # Full-quality Analyze defaults. Mesh preview uses ACTIVE_SURFACES_FAST_DEFAULTS.
     "relaxation_steps": 100,
     "optimization_steps": 300,
+}
+
+# Reduced steps for interactive mesh preview after seed isolation crop.
+# Tuned so synthetic spheres still produce usable contours while finishing much
+# faster than full 100+300 optimization on large CZI stacks.
+ACTIVE_SURFACES_FAST_DEFAULTS: dict[str, float | int] = {
+    "d_0": 2.0,
+    "f_pressure": 0.02,
+    "k_grad": 0.05,
+    "relaxation_steps": 40,
+    "optimization_steps": 80,
 }
 
 

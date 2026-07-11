@@ -8,6 +8,7 @@ from morphostack.core.contours import (
     largest_opencv_contour,
     segmentation_preview,
     smooth_contour_guarded,
+    smooth_contour_spline,
 )
 from morphostack.core.export import (
     CSV_COLUMNS,
@@ -25,8 +26,25 @@ from morphostack.core.export import (
     write_analysis_manifest_json,
     write_analysis_report_markdown,
 )
-from morphostack.core.images import as_color_stack, as_grayscale_stack, stretch_to_uint8
+from morphostack.core.images import as_color_stack, as_grayscale_stack, color_stub_for_grayscale, stretch_to_uint8
 from morphostack.core.io import file_sha256, load_image_stack, inspect_image_stack
+from morphostack.core.skeleton import (
+    SkeletonMetrics,
+    calculate_vs_perimeter,
+    generate_skeleton,
+    measure_skeleton,
+    prune_skeleton,
+    selected_component_mask,
+    skeletonize_component,
+)
+from morphostack.core.stack_cache import (
+    SessionStackEntry,
+    SessionStackStore,
+    StackCache,
+    cached_load_image_stack,
+    default_session_store,
+    default_stack_cache,
+)
 from morphostack.core.mesh import (
     MeshMeasurement,
     contour_to_mask,
@@ -102,7 +120,11 @@ __all__ = [
     "ProjectSettings",
     "RectROI",
     "SegmentationPreview",
+    "SkeletonMetrics",
     "StackAnalysis",
+    "SessionStackEntry",
+    "SessionStackStore",
+    "StackCache",
     "StackViewTransform",
     "TrackingDiagnostics",
     "SWEEP_COLUMNS",
@@ -116,8 +138,13 @@ __all__ = [
     "apply_z_range",
     "as_color_stack",
     "as_grayscale_stack",
+    "color_stub_for_grayscale",
     "analyze_frame",
     "analyze_stack",
+    "cached_load_image_stack",
+    "calculate_vs_perimeter",
+    "default_session_store",
+    "default_stack_cache",
     "mesh_contours_from_analysis",
     "normalize_excluded_frames",
     "analysis_manifest",
@@ -136,6 +163,7 @@ __all__ = [
     "failed_analysis_summary_row",
     "file_sha256",
     "format_validation_report",
+    "generate_skeleton",
     "largest_component_boundary",
     "largest_connected_component",
     "largest_opencv_contour",
@@ -143,12 +171,17 @@ __all__ = [
     "inspect_image_stack",
     "load_image_stack",
     "measure_contour_stack",
+    "measure_skeleton",
     "contour_stack_mesh_geometry",
     "normalize_profile",
     "object_seed_payload",
+    "prune_skeleton",
     "tracking_diagnostics_payload",
     "segmentation_preview",
+    "selected_component_mask",
+    "skeletonize_component",
     "smooth_contour_guarded",
+    "smooth_contour_spline",
     "stretch_to_uint8",
     "surface_area_volume",
     "write_mesh_file",
