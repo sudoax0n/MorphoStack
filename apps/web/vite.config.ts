@@ -9,7 +9,10 @@ export default defineConfig({
       "/api": {
         target: apiTarget,
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api/, "")
+        rewrite: (path) => path.replace(/^\/api/, ""),
+        // Large microscopy uploads (CZI/LSM) need long timeouts
+        timeout: 30 * 60 * 1000,
+        proxyTimeout: 30 * 60 * 1000,
       }
     }
   }
