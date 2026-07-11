@@ -10,7 +10,13 @@ import numpy as np
 from morphostack.core.contours import SegmentationPreview, segmentation_preview
 from morphostack.core.mesh import MeshMeasurement, SliceVolumeMeasurement, measure_contour_stack, measure_slice_integrated_volume
 from morphostack.core.metrics import ContourMetrics, contour_metrics
-from morphostack.core.models import VoxelSize
+from morphostack.core.models import (
+    AuthoritativeMask,
+    ResultAuthorityError,
+    SegmentationCandidate,
+    VoxelSize,
+    accept_segmentation_candidate,
+)
 from morphostack.core.profiles import AnalysisProfile, DEFAULT_PROFILE, normalize_profile
 from morphostack.core.segmentation import apply_rect_roi, apply_z_range
 
@@ -50,6 +56,10 @@ class ObjectSeed:
     max_tracking_dist_um: float | None = None
     type: str = "circle"
     points: list[SeedPoint] | None = None
+    # Packet 13 provenance (optional; not part of tracking key identity).
+    source_revision: str | None = None
+    seed_origin: str = "ui_2d"  # ui_2d | viewer_3d
+    radius_unit: str = "px"  # source XY pixels (ObjectSeed contract)
 
 
 @dataclass(frozen=True)
@@ -208,7 +218,10 @@ class StackViewTransform:
                 radius=seed.radius,
                 max_tracking_dist_um=seed.max_tracking_dist_um,
                 type="polygon",
-                points=local_points
+                points=local_points,
+                source_revision=getattr(seed, "source_revision", None),
+                seed_origin=getattr(seed, "seed_origin", "ui_2d") or "ui_2d",
+                radius_unit=getattr(seed, "radius_unit", "px") or "px",
             )
         else:
             lx, ly, lz = self.to_local_seed(seed)
@@ -219,7 +232,10 @@ class StackViewTransform:
                 radius=seed.radius,
                 max_tracking_dist_um=seed.max_tracking_dist_um,
                 type=getattr(seed, "type", "circle"),
-                points=None
+                points=None,
+                source_revision=getattr(seed, "source_revision", None),
+                seed_origin=getattr(seed, "seed_origin", "ui_2d") or "ui_2d",
+                radius_unit=getattr(seed, "radius_unit", "px") or "px",
             )
 
     def to_global_contour(self, local_contour: np.ndarray | None) -> np.ndarray | None:
@@ -346,6 +362,175 @@ def mesh_contours_from_analysis(analysis: StackAnalysis) -> tuple[np.ndarray | N
     return tuple(
         None if frame.frame_index in analysis.excluded_frames else frame.contour
         for frame in analysis.frames
+    )
+
+
+def segmentation_candidate_from_analysis(
+    analysis: StackAnalysis,
+    *,
+    shape: tuple[int, int, int],
+    source_revision: str | None = None,
+    method: str | None = None,
+    algorithm_version: str | None = None,
+    completeness: str = "complete",
+    provisional: bool = False,
+    is_full_resolution: bool = True,
+) -> SegmentationCandidate:
+    """Build a SegmentationCandidate adapter from an existing StackAnalysis.
+
+    Does not change ``analyze_stack`` outputs. Active-surfaces and exact tracks
+    remain candidates until :func:`authoritative_mask_from_analysis` accepts them.
+    """
+
+    from morphostack.core.mesh import contours_to_mask_stack
+
+    contours = mesh_contours_from_analysis(analysis)
+    if len(shape) != 3:
+        raise ValueError("shape must be (z, y, x)")
+    if len(contours) != shape[0]:
+        raise ValueError("contour count must match shape[0] (z)")
+
+    mask = contours_to_mask_stack(contours, shape=shape)
+    profile = str(analysis.profile)
+    resolved_method = method or (
+        "active_surfaces" if profile == "active_surfaces" else f"exact_{profile}"
+    )
+    # Prefer seeded algorithm version when available; else a stable profile tag.
+    if algorithm_version is None:
+        try:
+            from morphostack.core.seeded_vesicle import EXACT_TRACKING_ALGORITHM_VERSION
+
+            algorithm_version = str(EXACT_TRACKING_ALGORITHM_VERSION)
+        except Exception:  # pragma: no cover - optional import safety
+            algorithm_version = "1"
+
+    valid = analysis.valid_frames
+    thr_frames = [
+        {
+            "frame_index": int(frame.frame_index),
+            "requested_threshold": json_safe_float(frame.requested_threshold),
+            "effective_threshold": json_safe_float(frame.effective_threshold),
+            "threshold_semantics": frame.threshold_semantics,
+            "method": frame.preview.method if frame.preview is not None else None,
+        }
+        for frame in analysis.frames
+    ]
+    # Aggregate threshold provenance: prefer first valid frame's semantics.
+    root_thr: dict[str, object] = {}
+    if valid:
+        root = valid[0]
+        root_thr = {
+            "requested_threshold": json_safe_float(root.requested_threshold),
+            "effective_threshold": json_safe_float(root.effective_threshold),
+            "threshold_semantics": root.threshold_semantics,
+        }
+
+    tracked = 0
+    lost = 0
+    if analysis.tracking is not None:
+        tracked = sum(1 for r in analysis.tracking.records if r.tracked)
+        lost = analysis.tracking.lost_frame_count
+
+    # Partial if caller says so, or if no valid frames / empty mask.
+    resolved_completeness = completeness
+    if resolved_completeness not in ("partial", "complete"):
+        raise ValueError("completeness must be 'partial' or 'complete'")
+    if len(valid) == 0 or np.count_nonzero(mask) == 0:
+        resolved_completeness = "partial"
+
+    return SegmentationCandidate(
+        source_revision=source_revision,
+        method=resolved_method,
+        algorithm_version=str(algorithm_version),
+        completeness=resolved_completeness,  # type: ignore[arg-type]
+        is_full_resolution=bool(is_full_resolution),
+        provisional=bool(provisional),
+        mask=mask,
+        contours=contours,
+        resolution_mapping={"level": 0, "full_resolution": bool(is_full_resolution)},
+        qc={
+            "valid_frame_count": len(valid),
+            "frame_count": len(analysis.frames),
+            "tracked_frame_count": tracked,
+            "lost_frame_count": lost,
+            "excluded_frames": sorted(int(i) for i in analysis.excluded_frames),
+            "profile": profile,
+        },
+        provenance={
+            "adapter": "segmentation_candidate_from_analysis",
+            "profile": profile,
+        },
+        threshold_provenance={
+            **root_thr,
+            "per_frame": thr_frames,
+        },
+    )
+
+
+def authoritative_mask_from_analysis(
+    analysis: StackAnalysis,
+    *,
+    shape: tuple[int, int, int],
+    source_revision: str | None = None,
+    analysis_result_revision: str | None = None,
+    method: str | None = None,
+    algorithm_version: str | None = None,
+    roi: RectROI | None = None,
+    z_range: ZRange | None = None,
+    require_complete: bool = True,
+) -> AuthoritativeMask:
+    """Compatibility adapter: accepted mask for an existing exact analysis result.
+
+    Uses the same contour→mask rasterization path as mesh measurement. Partial
+    or empty analyses raise :class:`ResultAuthorityError` when
+    ``require_complete`` is true (default). Does not mutate ``analyze_stack``.
+    """
+
+    candidate = segmentation_candidate_from_analysis(
+        analysis,
+        shape=shape,
+        source_revision=source_revision,
+        method=method,
+        algorithm_version=algorithm_version,
+        completeness="complete",
+        provisional=False,
+        is_full_resolution=True,
+    )
+    if require_complete and not candidate.can_accept:
+        raise ResultAuthorityError(
+            "analysis result cannot be accepted as AuthoritativeMask "
+            f"(completeness={candidate.completeness!r}, provisional={candidate.provisional}, "
+            f"nonzero={0 if candidate.mask is None else int(np.count_nonzero(candidate.mask))})",
+            role="segmentation_candidate",
+        )
+
+    # Revision is content-bound on AuthoritativeMask construction. A caller
+    # may pass a prior bound revision for idempotent re-accept; conflicting
+    # claims fail closed inside AuthoritativeMask.
+    z_src = z_range if z_range is not None else analysis.z_range
+    roi_mapping: dict[str, object] = {}
+    if roi is not None:
+        roi_mapping = {
+            "xmin": int(roi.xmin),
+            "xmax": int(roi.xmax),
+            "ymin": int(roi.ymin),
+            "ymax": int(roi.ymax),
+        }
+    z_mapping: dict[str, object] = {
+        "frame_count": int(shape[0]),
+        "shape_yx": [int(shape[1]), int(shape[2])],
+    }
+    if z_src is not None:
+        z_mapping["zmin"] = int(z_src.zmin)
+        z_mapping["zmax"] = int(z_src.zmax)
+
+    return accept_segmentation_candidate(
+        candidate,
+        analysis_result_revision=analysis_result_revision,
+        voxel_size=analysis.voxel_size,
+        roi_mapping=roi_mapping,
+        z_mapping=z_mapping,
+        provenance={"adapter": "authoritative_mask_from_analysis"},
     )
 
 
@@ -1352,6 +1537,9 @@ def object_seed_payload(seed: ObjectSeed | None) -> dict[str, object] | None:
         "radius": seed.radius,
         "type": seed.type,
         "max_tracking_dist_um": seed.max_tracking_dist_um,
+        "source_revision": getattr(seed, "source_revision", None),
+        "seed_origin": getattr(seed, "seed_origin", "ui_2d") or "ui_2d",
+        "radius_unit": getattr(seed, "radius_unit", "px") or "px",
     }
     if seed.points is not None:
         payload["points"] = [{"x": point.x, "y": point.y} for point in seed.points]

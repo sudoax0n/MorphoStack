@@ -301,6 +301,23 @@ def standardize_shapes(raw_shape: tuple[int, ...]) -> tuple[tuple[int, ...], tup
     return g_shape, c_shape
 
 
+def open_volume_source(
+    path: str | Path,
+    *,
+    voxel_override: VoxelSize | None = None,
+    register: bool = True,
+):
+    """Open a path-backed :class:`~morphostack.core.volume_source.VolumeSource`.
+
+    Thin adapter over the volume-source module so I/O entry points stay in
+    ``io`` while reader lifecycle lives in ``volume_source``.
+    """
+
+    from morphostack.core.volume_source import open_volume_source as _open
+
+    return _open(path, voxel_override=voxel_override, register=register)
+
+
 def inspect_image_stack(
     path: str | Path,
     *,

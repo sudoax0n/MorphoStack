@@ -4,9 +4,11 @@ import numpy as np
 import pytest
 
 from morphostack.core.segmentation import (
+    THRESHOLD_CONTRACT_VERSION,
     _sample_intensity_values,
     apply_rect_roi,
     suggest_threshold,
+    suggest_threshold_report,
     threshold_mask,
 )
 
@@ -22,6 +24,48 @@ def test_suggest_threshold_handles_constant_stack():
 
     assert threshold == 7.0
     assert method == "constant"
+
+
+def test_suggest_threshold_report_matches_numeric_and_adds_contract():
+    rng = np.random.default_rng(1)
+    stack = rng.integers(0, 200, size=(4, 32, 32), dtype=np.uint8)
+    stack[:, 10:20, 10:20] = 180
+    thr_a, method_a = suggest_threshold(stack, method="auto", max_samples=50_000, seed=0)
+    thr_b, method_b, meta = suggest_threshold_report(
+        stack,
+        method="auto",
+        max_samples=50_000,
+        seed=0,
+        source_path="fixture.tif",
+        source_revision="path:/abs/fixture.tif|m1|s2",
+        source_identity_kind="path",
+    )
+    assert thr_a == thr_b
+    assert method_a == method_b
+    assert meta["threshold"] == thr_b
+    assert meta["method"] == method_b
+    assert meta["threshold_semantics"] == "ui_starting_guess"
+    assert meta["suggestion_scope"] == "stack_sample"
+    assert meta["threshold_contract_version"] == THRESHOLD_CONTRACT_VERSION
+    assert meta["source_revision"] == "path:/abs/fixture.tif|m1|s2"
+    assert meta["source_identity_kind"] == "path"
+    assert meta["authoritative_for"] == []
+    assert "seeded_exact_contour" in meta["not_authoritative_for"]
+    assert meta["histogram_domain"]["dtype"] == "uint8"
+    assert meta["histogram_domain"]["n_samples"] > 0
+    assert any("local per-slice" in w or "local" in w for w in meta["warnings"])
+
+    # Ephemeral upload: revision stays null (never falls back to filename).
+    _t, _m, ephemeral = suggest_threshold_report(
+        stack,
+        method="percentile",
+        source_path="pretty.tif",
+        source_revision=None,
+        source_identity_kind="upload_ephemeral",
+    )
+    assert ephemeral["source_revision"] is None
+    assert ephemeral["source_identity_kind"] == "upload_ephemeral"
+    assert ephemeral["source_path"] == "pretty.tif"
 
 
 def test_suggest_threshold_percentile_fallback():

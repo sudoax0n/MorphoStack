@@ -705,6 +705,7 @@ def test_preview_caching_reuses_results(client, tmp_path, monkeypatch):
     path = _write_ring_stack(tmp_path / "ring_stack.tif")
 
     seed = {"x": 32, "y": 32, "frame_index": 0, "radius": 14}
+    # Diagnostic sync path still exercises extend-from-cache identity.
     r1 = client.post(
         "/preview",
         json={
@@ -713,6 +714,7 @@ def test_preview_caching_reuses_results(client, tmp_path, monkeypatch):
             "frame_index": 2,
             "object_seed": seed,
             "prefer_opencv": False,
+            "force_sync_exact": True,
         },
     )
     assert r1.status_code == 200
@@ -731,6 +733,7 @@ def test_preview_caching_reuses_results(client, tmp_path, monkeypatch):
             "frame_index": 5,
             "object_seed": seed,
             "prefer_opencv": False,
+            "force_sync_exact": True,
         },
     )
     assert r2.status_code == 200
@@ -791,7 +794,7 @@ def test_fast_preview_is_provisional_and_skips_tracker(client, tmp_path, monkeyp
 
 
 def test_exact_preview_uses_tracker_and_marks_quality(client, tmp_path, monkeypatch):
-    """Exact seeded preview uses track/cache path and is marked exact."""
+    """Diagnostic sync exact path still marks quality=exact and runs tracker once."""
     pytest.importorskip("PIL")
     pytest.importorskip("skimage")
 
@@ -819,6 +822,7 @@ def test_exact_preview_uses_tracker_and_marks_quality(client, tmp_path, monkeypa
             "object_seed": seed,
             "prefer_opencv": False,
             "fast_preview": False,
+            "force_sync_exact": True,
         },
     )
     assert response.status_code == 200
@@ -867,6 +871,7 @@ def test_tracking_cache_not_reused_across_roi_or_source(client, tmp_path, monkey
             "frame_index": 2,
             "object_seed": seed,
             "prefer_opencv": False,
+            "force_sync_exact": True,
         },
     )
     assert r1.status_code == 200
@@ -882,6 +887,7 @@ def test_tracking_cache_not_reused_across_roi_or_source(client, tmp_path, monkey
             "frame_index": 2,
             "object_seed": seed,
             "prefer_opencv": False,
+            "force_sync_exact": True,
         },
     )
     assert r2.status_code == 200
@@ -899,6 +905,7 @@ def test_tracking_cache_not_reused_across_roi_or_source(client, tmp_path, monkey
             "object_seed": {"x": 16, "y": 16, "frame_index": 0, "radius": 14},
             "roi": {"xmin": 16, "xmax": 48, "ymin": 16, "ymax": 48},
             "prefer_opencv": False,
+            "force_sync_exact": True,
         },
     )
     assert r3.status_code == 200
@@ -920,7 +927,7 @@ def test_preview_quality_distinguishes_provisional_vs_exact(client, tmp_path):
         "prefer_opencv": False,
     }
     fast = client.post("/preview", json={**body, "fast_preview": True})
-    exact = client.post("/preview", json={**body, "fast_preview": False})
+    exact = client.post("/preview", json={**body, "fast_preview": False, "force_sync_exact": True})
     assert fast.status_code == 200
     assert exact.status_code == 200
     assert fast.json()["preview_quality"] == "provisional"
@@ -958,6 +965,7 @@ def test_tracking_cache_miss_when_file_revision_changes(client, tmp_path, monkey
         "object_seed": seed,
         "prefer_opencv": False,
         "fast_preview": False,
+        "force_sync_exact": True,
     }
     r1 = client.post("/preview", json=body)
     assert r1.status_code == 200
@@ -1005,6 +1013,7 @@ def test_tracking_cache_miss_for_subpixel_distinct_seeds(client, tmp_path, monke
             "frame_index": 2,
             "object_seed": {"x": 32.10, "y": 32.10, "frame_index": 0, "radius": 14.10},
             "prefer_opencv": False,
+            "force_sync_exact": True,
         },
     )
     r2 = client.post(
@@ -1015,6 +1024,7 @@ def test_tracking_cache_miss_for_subpixel_distinct_seeds(client, tmp_path, monke
             "frame_index": 2,
             "object_seed": {"x": 32.49, "y": 32.49, "frame_index": 0, "radius": 14.49},
             "prefer_opencv": False,
+            "force_sync_exact": True,
         },
     )
     assert r1.status_code == 200 and r2.status_code == 200
@@ -1076,6 +1086,267 @@ def test_multipart_upload_preview_does_not_share_tracking_cache(client, tmp_path
     # Each multipart request must track fresh (no cross-upload cache).
     assert calls["track"] == 2
     assert len(default_tracking_cache) == 0
+
+
+def test_exact_subscription_starts_one_job_for_rapid_scrub(client, tmp_path):
+    """Ten uncached exact frames → one tracking job writer, not ten sync walks."""
+    pytest.importorskip("PIL")
+    pytest.importorskip("skimage")
+    import time
+
+    from morphostack.core.stack_cache import default_tracking_cache
+
+    default_tracking_cache.clear()
+    path = _write_ring_stack(tmp_path / "scrub_ring.tif", n=12)
+    seed = {"x": 32, "y": 32, "frame_index": 0, "radius": 14}
+    job_ids: set[str] = set()
+    for frame in range(1, 11):
+        r = client.post(
+            "/preview",
+            json={
+                "path": str(path),
+                "threshold": 100,
+                "frame_index": frame,
+                "object_seed": seed,
+                "prefer_opencv": False,
+                "fast_preview": False,
+            },
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        # Until published, exact path is pending (provisional paint + job).
+        if not body.get("exact_available"):
+            assert body["preview_quality"] == "provisional"
+            assert body.get("exact_pending") is True
+            job = body.get("tracking_job") or {}
+            assert job.get("job_id")
+            job_ids.add(str(job["job_id"]))
+        else:
+            assert body["preview_quality"] == "exact"
+            job = body.get("tracking_job")
+            if job and job.get("job_id"):
+                job_ids.add(str(job["job_id"]))
+    # Single-flight: at most one job id across the scrub.
+    assert len(job_ids) <= 1
+    # Wait for completion and confirm target frames become exact cache hits.
+    if job_ids:
+        jid = next(iter(job_ids))
+        deadline = time.time() + 60
+        state = "running"
+        while state not in ("complete", "cancelled", "failed") and time.time() < deadline:
+            time.sleep(0.05)
+            st = client.get(f"/tracking/jobs/{jid}")
+            assert st.status_code == 200
+            state = st.json()["state"]
+        assert state == "complete"
+    r_hit = client.post(
+        "/preview",
+        json={
+            "path": str(path),
+            "threshold": 100,
+            "frame_index": 5,
+            "object_seed": seed,
+            "prefer_opencv": False,
+            "fast_preview": False,
+        },
+    )
+    assert r_hit.status_code == 200
+    hit = r_hit.json()
+    assert hit["exact_available"] is True
+    assert hit["preview_quality"] == "exact"
+    assert hit["cache_hit"] is True
+
+
+def test_exact_subscription_no_sync_walk_without_force_flag(client, tmp_path, monkeypatch):
+    """Default exact preview must not call track/extend on the request thread."""
+    pytest.importorskip("PIL")
+    pytest.importorskip("skimage")
+    import morphostack.core.seeded_vesicle as sv
+    from morphostack.core.stack_cache import default_tracking_cache
+
+    default_tracking_cache.clear()
+    calls = {"track": 0, "extend": 0}
+
+    def boom_track(*_a, **_k):
+        calls["track"] += 1
+        raise AssertionError("request-thread must not call track_seeded_vesicle_stack")
+
+    def boom_extend(*_a, **_k):
+        calls["extend"] += 1
+        raise AssertionError("request-thread must not call extend_track")
+
+    monkeypatch.setattr(sv, "track_seeded_vesicle_stack", boom_track)
+    monkeypatch.setattr(sv, "extend_track", boom_extend)
+
+    path = _write_ring_stack(tmp_path / "nosync.tif")
+    r = client.post(
+        "/preview",
+        json={
+            "path": str(path),
+            "threshold": 100,
+            "frame_index": 3,
+            "object_seed": {"x": 32, "y": 32, "frame_index": 0, "radius": 14},
+            "prefer_opencv": False,
+            "fast_preview": False,
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
+    # Job worker uses its own track_fn reference (captured at service start), so
+    # request-thread boom must not fire even if worker tracks.
+    assert calls["track"] == 0
+    assert calls["extend"] == 0
+    assert body.get("tracking_job") is not None or body.get("exact_available") is True
+
+
+def test_upload_session_exact_subscription_one_job_no_request_thread_track(
+    client, tmp_path, monkeypatch
+):
+    """Browser upload path: session + stack_id scrub → one job, no sync track on request thread."""
+    pytest.importorskip("PIL")
+    pytest.importorskip("skimage")
+    import time
+
+    import morphostack.core.seeded_vesicle as sv
+    from morphostack.core.stack_cache import default_tracking_cache
+
+    default_tracking_cache.clear()
+    calls = {"track": 0, "extend": 0}
+
+    def boom_track(*_a, **_k):
+        calls["track"] += 1
+        raise AssertionError("request-thread must not call track_seeded_vesicle_stack")
+
+    def boom_extend(*_a, **_k):
+        calls["extend"] += 1
+        raise AssertionError("request-thread must not call extend_track")
+
+    monkeypatch.setattr(sv, "track_seeded_vesicle_stack", boom_track)
+    monkeypatch.setattr(sv, "extend_track", boom_extend)
+
+    path = _write_ring_stack(tmp_path / "upload_scrub.tif", n=12)
+    with path.open("rb") as fh:
+        sess = client.post(
+            "/upload/session",
+            files={"file": ("upload_scrub.tif", fh, "image/tiff")},
+        )
+    assert sess.status_code == 200, sess.text
+    stack_id = sess.json()["stack_id"]
+    assert stack_id
+
+    seed = {"x": 32, "y": 32, "frame_index": 0, "radius": 14}
+    job_ids: set[str] = set()
+
+    # JSON /preview with stack_id (browser after ensureUploadSession).
+    for frame in range(1, 11):
+        r = client.post(
+            "/preview",
+            json={
+                "stack_id": stack_id,
+                "threshold": 100,
+                "frame_index": frame,
+                "object_seed": seed,
+                "prefer_opencv": False,
+                "fast_preview": False,
+            },
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert calls["track"] == 0
+        assert calls["extend"] == 0
+        job = body.get("tracking_job") or {}
+        jid = job.get("job_id")
+        if jid:
+            assert str(jid).strip()  # nonzero / non-empty
+            job_ids.add(str(jid))
+        if body.get("exact_available"):
+            assert body["preview_quality"] == "exact"
+        else:
+            assert body["preview_quality"] == "provisional"
+            assert body.get("exact_pending") is True
+            assert jid
+
+    assert len(job_ids) == 1
+    jid = next(iter(job_ids))
+    deadline = time.time() + 60
+    state = "running"
+    while state not in ("complete", "cancelled", "failed") and time.time() < deadline:
+        time.sleep(0.05)
+        st = client.get(f"/tracking/jobs/{jid}")
+        assert st.status_code == 200
+        state = st.json()["state"]
+    assert state == "complete"
+
+    # Multipart /upload/preview with same stack_id shares session identity + cache.
+    form = {
+        "stack_id": stack_id,
+        "threshold": "100",
+        "frame_index": "5",
+        "object_seed_x": "32",
+        "object_seed_y": "32",
+        "object_seed_frame": "0",
+        "object_seed_radius": "14",
+        "prefer_opencv": "false",
+        "fast_preview": "false",
+    }
+    up = client.post("/upload/preview", data=form)
+    assert up.status_code == 200, up.text
+    up_body = up.json()
+    assert calls["track"] == 0
+    assert calls["extend"] == 0
+    assert up_body["exact_available"] is True
+    assert up_body["preview_quality"] == "exact"
+    assert up_body["cache_hit"] is True
+    # Session key still serves hits after multipart form path.
+    r_hit = client.post(
+        "/preview",
+        json={
+            "stack_id": stack_id,
+            "threshold": 100,
+            "frame_index": 5,
+            "object_seed": seed,
+            "prefer_opencv": False,
+            "fast_preview": False,
+        },
+    )
+    assert r_hit.status_code == 200
+    assert r_hit.json()["cache_hit"] is True
+    assert r_hit.json()["exact_available"] is True
+
+    # Rapid scrub via /upload/preview + stack_id still one job writer.
+    job_ids2: set[str] = set()
+    default_tracking_cache.clear()
+    # New stack_id so cache is cold but same policy:
+    path2 = _write_ring_stack(tmp_path / "upload_scrub2.tif", n=12)
+    with path2.open("rb") as fh:
+        sess2 = client.post(
+            "/upload/session",
+            files={"file": ("upload_scrub2.tif", fh, "image/tiff")},
+        )
+    sid2 = sess2.json()["stack_id"]
+    for frame in range(1, 11):
+        r = client.post(
+            "/upload/preview",
+            data={
+                "stack_id": sid2,
+                "threshold": "100",
+                "frame_index": str(frame),
+                "object_seed_x": "32",
+                "object_seed_y": "32",
+                "object_seed_frame": "0",
+                "object_seed_radius": "14",
+                "prefer_opencv": "false",
+                "fast_preview": "false",
+            },
+        )
+        assert r.status_code == 200, r.text
+        assert calls["track"] == 0
+        body = r.json()
+        job = body.get("tracking_job") or {}
+        if job.get("job_id"):
+            job_ids2.add(str(job["job_id"]))
+    assert len(job_ids2) == 1
+    assert next(iter(job_ids2)).strip()
 
 
 def test_path_fast_preview_skips_full_file_sha(client, tmp_path, monkeypatch):

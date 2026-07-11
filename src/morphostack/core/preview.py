@@ -47,19 +47,7 @@ def extract_preview_frame(
         raise ValueError("preview frame extract expects a grayscale stack shaped as (z, y, x)")
 
     frame_count = arr.shape[0]
-    if z_range is not None:
-        z0 = max(0, min(frame_count, z_range.zmin))
-        z1 = max(0, min(frame_count, z_range.zmax))
-        if z1 <= z0:
-            raise ValueError("Z range bounds must define at least one frame")
-        if frame_index < z_range.zmin or frame_index >= z_range.zmax:
-            raise ValueError(
-                f"Requested frame_index {frame_index} is outside selected Z-range "
-                f"[{z_range.zmin}, {z_range.zmax})"
-            )
-    if frame_index < 0 or frame_index >= frame_count:
-        raise ValueError(f"frame_index must be between 0 and {frame_count - 1}")
-
+    _validate_preview_z(frame_index, frame_count, z_range=z_range)
     transform = StackViewTransform.create(roi=roi, z_range=z_range, raw_shape=arr.shape)
 
     # View of one plane — no full-stack copy. Crop/copy only the needed XY region.
@@ -76,6 +64,63 @@ def extract_preview_frame(
         # Contiguous plane for downstream encode/OpenCV without aliasing cache.
         frame = np.ascontiguousarray(frame)
 
+    return frame, transform
+
+
+def _validate_preview_z(
+    frame_index: int,
+    frame_count: int,
+    *,
+    z_range: ZRange | None,
+) -> None:
+    if z_range is not None:
+        z0 = max(0, min(frame_count, z_range.zmin))
+        z1 = max(0, min(frame_count, z_range.zmax))
+        if z1 <= z0:
+            raise ValueError("Z range bounds must define at least one frame")
+        if frame_index < z_range.zmin or frame_index >= z_range.zmax:
+            raise ValueError(
+                f"Requested frame_index {frame_index} is outside selected Z-range "
+                f"[{z_range.zmin}, {z_range.zmax})"
+            )
+    if frame_index < 0 or frame_index >= frame_count:
+        raise ValueError(f"frame_index must be between 0 and {frame_count - 1}")
+
+
+def extract_preview_frame_from_volume(
+    source: object,
+    frame_index: int,
+    *,
+    roi: RectROI | None = None,
+    z_range: ZRange | None = None,
+) -> tuple[np.ndarray, StackViewTransform]:
+    """Extract one display plane via :class:`~morphostack.core.volume_source.VolumeSource`.
+
+    Same geometry contract as :func:`extract_preview_frame` (global Z index,
+    optional ROI crop, transform offsets). Uses ``read_plane`` so TIFF sources
+    can avoid full-stack materialization; science paths are unchanged.
+    """
+
+    from morphostack.core.volume_source import VolumeSource
+
+    if not isinstance(source, VolumeSource):
+        raise TypeError("extract_preview_frame_from_volume requires a VolumeSource")
+
+    meta = source.metadata()
+    shape = meta.shape
+    _validate_preview_z(frame_index, shape[0], z_range=z_range)
+    transform = StackViewTransform.create(roi=roi, z_range=z_range, raw_shape=shape)
+    frame = source.read_plane(int(frame_index))
+    if roi is not None:
+        frame = crop_rect_roi_2d(
+            frame,
+            xmin=roi.xmin,
+            xmax=roi.xmax,
+            ymin=roi.ymin,
+            ymax=roi.ymax,
+        )
+    else:
+        frame = np.ascontiguousarray(frame)
     return frame, transform
 
 

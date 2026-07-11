@@ -89,22 +89,68 @@ export function busyVisibleForLatest(owner: BusyOwner | null, latestGen: number)
   return owner !== null && owner.gen === latestGen;
 }
 
+/** Server job lifecycle snapshot (subset used for busy captions). */
+export type TrackingJobBusyInfo = {
+  state?: string | null;
+  requested_target_z?: number | null;
+  message?: string | null;
+  error_code?: string | null;
+};
+
 /**
- * After provisional paint: show "Tracking object…" only while exact for the
- * same generation is still pending.
+ * Busy caption from server job state. Empty string means no busy claim.
+ * Browser abort does not cancel the shared job — captions stay server-derived.
+ */
+export function trackingBusyMessage(
+  job: TrackingJobBusyInfo | null | undefined,
+  targetFrame: number | null | undefined
+): string {
+  if (!job) {
+    if (targetFrame != null && Number.isFinite(targetFrame)) {
+      return `Tracking to Z ${targetFrame}…`;
+    }
+    return "Tracking…";
+  }
+  const state = String(job.state || "");
+  if (state === "complete") {
+    return "";
+  }
+  if (state === "cancelled") {
+    return "Tracking cancelled";
+  }
+  if (state === "failed") {
+    const detail = job.message || job.error_code || "error";
+    return `Tracking failed: ${detail}`;
+  }
+  const z =
+    targetFrame != null && Number.isFinite(targetFrame)
+      ? targetFrame
+      : job.requested_target_z != null
+        ? job.requested_target_z
+        : null;
+  if (state === "queued" || state === "running" || state === "partial") {
+    return z != null ? `Tracking to Z ${z}…` : "Tracking…";
+  }
+  return z != null ? `Tracking to Z ${z}…` : "Tracking…";
+}
+
+/**
+ * After provisional paint: show tracking busy only while exact for the same
+ * generation is still pending (target exact frame not yet available).
  */
 export function busyAfterProvisional(
   owner: BusyOwner | null,
   gen: number,
   latestGen: number,
   exactPendingGen: number | null,
-  hasSeed: boolean
+  hasSeed: boolean,
+  message = "Tracking…"
 ): BusyOwner | null {
   if (gen !== latestGen || !hasSeed) {
     return releaseBusyOwner(owner, gen);
   }
   if (exactPendingGen === gen) {
-    return claimBusyOwner(owner, gen, latestGen, "Tracking object…");
+    return claimBusyOwner(owner, gen, latestGen, message);
   }
   // Exact already settled for this gen — do not re-show busy.
   return releaseBusyOwner(owner, gen);

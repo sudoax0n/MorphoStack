@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 
 # Cap for Otsu / percentile suggestion so large Z-stacks never materialize a
 # full float64 ravel or full-volume boolean masks (OOM on ~1e8+ voxels).
 _DEFAULT_MAX_SAMPLES = 2_000_000
 _DEFAULT_SAMPLE_SEED = 0
+
+# Threshold contract schema version (suggestion / preview / export).
+THRESHOLD_CONTRACT_VERSION = "1"
 
 
 def threshold_mask(image: np.ndarray, threshold: float) -> np.ndarray:
@@ -82,7 +87,53 @@ def suggest_threshold(
 
     Large volumes are subsampled (see ``max_samples``) so suggestion never
     allocates a full-stack float64 buffer or full-size boolean masks.
+
+    Numerical algorithm is frozen for Milestone A contract work; use
+    :func:`suggest_threshold_report` for schema metadata without changing values.
     """
+
+    threshold, used_method, _meta = suggest_threshold_report(
+        stack, method=method, max_samples=max_samples, seed=seed
+    )
+    return threshold, used_method
+
+
+def suggest_threshold_report(
+    stack: np.ndarray,
+    *,
+    method: str = "auto",
+    max_samples: int = _DEFAULT_MAX_SAMPLES,
+    seed: int = _DEFAULT_SAMPLE_SEED,
+    suggestion_scope: str = "stack_sample",
+    source_path: str = "",
+    source_revision: str | None = None,
+    source_identity_kind: str | None = None,
+    z_range: dict[str, int] | None = None,
+    roi: dict[str, int] | None = None,
+    frame: int | None = None,
+) -> tuple[float, str, dict[str, Any]]:
+    """Return ``(threshold, method, domain_meta)`` with contract metadata.
+
+    Sampling and Otsu/percentile selection match :func:`suggest_threshold`.
+    ``suggestion_scope`` is recorded only; only ``stack_sample`` is implemented
+    (current_slice / roi_current_slice are not silently substituted).
+
+    ``source_revision`` is the tracking/cache-style identity when known
+    (``path:…|m…|s…`` or ``session:{id}``). Ephemeral uploads must pass
+    ``None`` — never a bare filename. Optional ``source_identity_kind`` is
+    ``path`` | ``session`` | ``upload_ephemeral``.
+    """
+
+    scope = (suggestion_scope or "stack_sample").strip().lower()
+    if scope not in {"stack_sample", "current_slice", "roi_current_slice"}:
+        raise ValueError(
+            "suggestion_scope must be stack_sample, current_slice, or roi_current_slice"
+        )
+    if scope != "stack_sample":
+        # Contract: do not silently substitute; Milestone A keeps stack_sample only.
+        raise ValueError(
+            f"suggestion_scope={scope!r} is not implemented yet; use stack_sample"
+        )
 
     arr = np.asarray(stack)
     if arr.size == 0:
@@ -96,21 +147,84 @@ def suggest_threshold(
     if normalized_method not in {"auto", "otsu", "percentile"}:
         raise ValueError("threshold method must be auto, otsu, or percentile")
     if float(np.min(values)) == float(np.max(values)):
-        return float(values[0]), "constant"
-
-    if normalized_method == "auto":
+        thr, used = float(values[0]), "constant"
+    elif normalized_method == "auto":
         robust = robust_otsu_threshold(values)
         if robust is not None:
-            return robust, "robust_otsu"
-
-    if normalized_method in {"auto", "otsu"}:
+            thr, used = robust, "robust_otsu"
+        else:
+            threshold = otsu_threshold(values)
+            if threshold is not None:
+                thr, used = threshold, "otsu"
+            else:
+                thr, used = float(np.percentile(values, 75)), "percentile"
+    elif normalized_method == "otsu":
         threshold = otsu_threshold(values)
-        if threshold is not None:
-            return threshold, "otsu"
-        if normalized_method == "otsu":
+        if threshold is None:
             raise RuntimeError("Otsu thresholding requires scikit-image")
+        thr, used = threshold, "otsu"
+    else:
+        thr, used = float(np.percentile(values, 75)), "percentile"
 
-    return float(np.percentile(values, 75)), "percentile"
+    dtype_name = str(arr.dtype)
+    warnings: list[str] = [
+        "Single global starting guess; intensity may vary across Z.",
+        "Seeded exact analysis uses a per-frame local gate or ridge method.",
+    ]
+    if used == "robust_otsu":
+        warnings.append(
+            "robust_otsu currently filters intensities with 0 < value < 250; "
+            "this may exclude valid 16-bit membrane values "
+            "(known gap; not fixed in Milestone A)."
+        )
+
+    domain: dict[str, Any] = {
+        "frame": frame if scope != "stack_sample" else None,
+        "z_range": z_range,
+        "roi": roi,
+        "n_voxels_total": int(arr.size),
+        "n_samples": int(values.size),
+        "sample_seed": int(seed),
+        "max_samples": int(max_samples),
+        "dtype": dtype_name,
+        "finite_only": True,
+    }
+    rev = source_revision  # may be None (ephemeral upload)
+    kind = source_identity_kind
+    if kind is None:
+        if rev is None:
+            kind = "unknown"
+        elif str(rev).startswith("session:"):
+            kind = "session"
+        elif str(rev).startswith("path:"):
+            kind = "path"
+        else:
+            kind = "unknown"
+    if rev is None and kind == "upload_ephemeral":
+        warnings.append(
+            "Ephemeral multipart upload: source_revision is null "
+            "(filename is display-only, not a cache/tracking identity)."
+        )
+
+    meta: dict[str, Any] = {
+        "threshold_contract_version": THRESHOLD_CONTRACT_VERSION,
+        "source_path": source_path,
+        "source_revision": rev,
+        "source_identity_kind": kind,
+        "threshold": float(thr),
+        "method": used,
+        "threshold_semantics": "ui_starting_guess",
+        "suggestion_scope": scope,
+        "histogram_domain": domain,
+        "authoritative_for": [],
+        "not_authoritative_for": [
+            "seeded_exact_contour",
+            "seeded_exact_mask",
+            "per_frame_adaptive_threshold",
+        ],
+        "warnings": warnings,
+    }
+    return float(thr), used, meta
 
 
 def otsu_threshold(values: np.ndarray) -> float | None:

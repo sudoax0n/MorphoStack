@@ -15,5 +15,21 @@ export default defineConfig({
         proxyTimeout: 30 * 60 * 1000,
       }
     }
+  },
+  // Packet 12: VTK.js is large; prebundle for dev and keep WebGL volume path offline-friendly.
+  optimizeDeps: {
+    include: [
+      "@kitware/vtk.js/Rendering/Profiles/Volume",
+      "@kitware/vtk.js/Rendering/Misc/GenericRenderWindow",
+      "@kitware/vtk.js/Common/DataModel/ImageData",
+      "@kitware/vtk.js/Common/Core/DataArray",
+      "@kitware/vtk.js/Rendering/Core/Volume",
+      "@kitware/vtk.js/Rendering/Core/VolumeMapper",
+      "@kitware/vtk.js/Rendering/Core/ColorTransferFunction",
+      "@kitware/vtk.js/Common/DataModel/PiecewiseFunction"
+    ]
+  },
+  build: {
+    chunkSizeWarningLimit: 3500
   }
 });

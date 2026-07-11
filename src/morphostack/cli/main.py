@@ -338,6 +338,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Use dependency-light rectangular fallback contours instead of OpenCV contours.",
     )
     batch.add_argument("--opencv-contours", dest="fallback_contours", action="store_false", help="Use OpenCV contours when available.")
+    batch.add_argument(
+        "--workers",
+        default="1",
+        help=(
+            "Process pool size for independent stacks: integer N, or 'auto' "
+            "(min of CPU count, 4, job count, and a RAM estimate). "
+            "workers=1 is the serial reference/rollback path."
+        ),
+    )
     validate = subparsers.add_parser(
         "validate",
         help="Compare two MorphoStack CSV exports within a numeric tolerance.",
@@ -504,6 +513,7 @@ def main(argv: list[str] | None = None) -> int:
             prefer_opencv=prefer_opencv_from_flag(args.fallback_contours),
             include_mesh=args.include_mesh,
             project=args.project,
+            workers=args.workers,
         )
 
     if args.command == "validate":
@@ -1055,7 +1065,14 @@ def run_batch(
     prefer_opencv: bool | None = None,
     include_mesh: bool | None = None,
     project: str | None = None,
+    workers: str | int = "1",
 ) -> int:
+    from morphostack.core.batch import (
+        BatchStackJob,
+        parse_workers_spec,
+        run_batch_jobs,
+    )
+
     project_settings = load_project_for_command(project)
     if isinstance(project_settings, int):
         return project_settings
@@ -1083,6 +1100,12 @@ def run_batch(
         print(f"No supported stacks found in {input_dir}.")
         return 1
 
+    try:
+        workers_spec = parse_workers_spec(workers)
+    except ValueError as exc:
+        print(f"Invalid --workers value: {exc}")
+        return 2
+
     output_path = Path(out)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     frame_metrics_dir = Path(metrics_dir) if metrics_dir else None
@@ -1092,81 +1115,53 @@ def run_batch(
     if run_bundles_dir:
         run_bundles_dir.mkdir(parents=True, exist_ok=True)
 
-    rows: list[dict[str, object]] = []
-    failures = 0
-    for stack_path in stack_paths:
-        source_sha256 = ""
-        try:
-            source_sha256 = file_sha256(stack_path)
-            stack = load_image_stack(stack_path, voxel_override=voxel_override)
-            analysis = analyze_stack(
-                stack.grayscale,
-                thresholds=resolved_threshold,
-                voxel_size=stack.voxel_size,
-                roi=rect_roi,
-                z_range=resolved_z_range,
-                profile=resolved_profile,
-                prefer_opencv=resolved_prefer_opencv,
-                include_mesh=resolved_mesh,
-            )
-            rows.append(
-                analysis_summary_row(
-                    analysis,
-                    source_path=str(stack.source_path),
-                    threshold=resolved_threshold,
-                    source_sha256=source_sha256,
-                    voxel_source=stack.voxel_source,
-                )
-            )
-            if frame_metrics_dir:
-                write_analysis_csv(analysis, frame_metrics_dir / f"{safe_output_stem(stack_path)}_metrics.csv")
-            if run_bundles_dir:
-                run_dir = bundle_run_directory(run_bundles_dir, stack_path, relative_to=input_dir)
-                run_dir.mkdir(parents=True, exist_ok=True)
-                write_analysis_csv(analysis, run_dir / "metrics.csv")
-                write_analysis_manifest_json(
-                    analysis_manifest(
-                        analysis,
-                        source_path=str(stack.source_path),
-                        source_sha256=source_sha256,
-                        threshold=resolved_threshold,
-                        roi=roi_to_payload(rect_roi),
-                        z_range=z_range_to_payload(resolved_z_range),
-                        include_mesh=resolved_mesh,
-                        prefer_opencv=resolved_prefer_opencv,
-                        voxel_source=stack.voxel_source,
-                    ),
-                    run_dir / "manifest.json",
-                )
-                write_analysis_report_markdown(
-                    analysis,
-                    run_dir / "report.md",
-                    source_path=str(stack.source_path),
-                    source_sha256=source_sha256,
-                    threshold=resolved_threshold,
-                    roi=roi_to_payload(rect_roi),
-                    z_range=z_range_to_payload(resolved_z_range),
-                    include_mesh=resolved_mesh,
-                    prefer_opencv=resolved_prefer_opencv,
-                    voxel_source=stack.voxel_source,
-                )
-        except Exception as exc:
-            failures += 1
-            rows.append(failed_analysis_summary_row(str(stack_path), str(exc), source_sha256=source_sha256))
+    roi_tuple = None
+    if rect_roi is not None:
+        roi_tuple = (rect_roi.xmin, rect_roi.xmax, rect_roi.ymin, rect_roi.ymax)
+    z_tuple = None
+    if resolved_z_range is not None:
+        z_tuple = (resolved_z_range.zmin, resolved_z_range.zmax)
+    vx = vy = vz = None
+    if voxel_override is not None:
+        vx, vy, vz = float(voxel_override.x_um), float(voxel_override.y_um), float(voxel_override.z_um)
 
-    write_batch_summary_csv(rows, output_path)
+    jobs = [
+        BatchStackJob(
+            index=i,
+            source_path=str(stack_path.resolve()),
+            threshold=float(resolved_threshold),
+            profile=str(resolved_profile),
+            prefer_opencv=bool(resolved_prefer_opencv),
+            include_mesh=bool(resolved_mesh),
+            voxel_x=vx,
+            voxel_y=vy,
+            voxel_z=vz,
+            roi=roi_tuple,
+            z_range=z_tuple,
+            metrics_dir=str(frame_metrics_dir) if frame_metrics_dir else None,
+            bundle_dir=str(run_bundles_dir) if run_bundles_dir else None,
+            input_dir=str(input_dir.resolve()),
+            compute_sha256=True,
+        )
+        for i, stack_path in enumerate(stack_paths)
+    ]
+
+    report = run_batch_jobs(jobs, workers=workers_spec)
+    write_batch_summary_csv(report.summary_rows, output_path)
 
     print("MorphoStack Batch Complete")
     print("==========================")
     print(f"Stacks found: {len(stack_paths)}")
-    print(f"Succeeded: {len(stack_paths) - failures}")
-    print(f"Failed: {failures}")
+    print(f"Succeeded: {len(stack_paths) - report.failures}")
+    print(f"Failed: {report.failures}")
+    print(f"Workers requested: {report.workers_requested}")
+    print(f"Workers used: {report.workers_used}")
     print(f"Summary CSV: {output_path}")
     if frame_metrics_dir:
         print(f"Frame metrics: {frame_metrics_dir}")
     if run_bundles_dir:
         print(f"Run bundles: {run_bundles_dir}")
-    return 1 if failures else 0
+    return 1 if report.failures else 0
 
 
 def run_validate(
@@ -1339,6 +1334,18 @@ def run_dev(
         )
         processes.append(backend)
 
+        # Wait for the uvicorn worker (not just the reloader parent) so the first
+        # browser /api/health does not hit ECONNREFUSED and stick on "API offline".
+        print("MorphoStack dev app is starting.")
+        print(f"Backend: {api_target}")
+        if not wait_for_http_ok(f"{api_target}/health", timeout_s=45.0):
+            print(
+                "Warning: backend health check did not succeed within 45s; "
+                "starting the web UI anyway (it will retry /api/health)."
+            )
+        else:
+            print("Backend is ready.")
+
         frontend = subprocess.Popen(
             [
                 npm_command,
@@ -1355,12 +1362,14 @@ def run_dev(
         )
         processes.append(frontend)
 
-        print("MorphoStack dev app is starting.")
-        print(f"Backend: {api_target}")
         print(f"Web UI: {web_url}")
         print("Press Ctrl+C to stop both processes.")
         if open_browser:
-            webbrowser.open(web_url)
+            # Prefer opening after Vite is listening so the first paint is not a blank proxy error.
+            if wait_for_tcp(host, web_port, timeout_s=30.0):
+                webbrowser.open(web_url)
+            else:
+                webbrowser.open(web_url)
 
         while True:
             for process in processes:
@@ -1410,6 +1419,40 @@ def can_bind(host: str, port: int) -> bool:
     except OSError:
         return False
     return True
+
+
+def wait_for_tcp(host: str, port: int, *, timeout_s: float = 30.0) -> bool:
+    """Return True when a TCP connect to host:port succeeds within timeout."""
+
+    deadline = time.time() + float(timeout_s)
+    while time.time() < deadline:
+        try:
+            with socket.create_connection((host, int(port)), timeout=0.5):
+                return True
+        except OSError:
+            time.sleep(0.15)
+    return False
+
+
+def wait_for_http_ok(url: str, *, timeout_s: float = 45.0) -> bool:
+    """Poll URL until HTTP 200 or timeout (stdlib only — no urllib3 required)."""
+
+    from urllib.error import HTTPError, URLError
+    from urllib.request import urlopen
+
+    deadline = time.time() + float(timeout_s)
+    while time.time() < deadline:
+        try:
+            with urlopen(url, timeout=1.0) as response:  # noqa: S310 — local dev only
+                if int(getattr(response, "status", 0) or 0) == 200:
+                    return True
+        except HTTPError as exc:
+            if int(exc.code) == 200:
+                return True
+        except (URLError, TimeoutError, OSError):
+            pass
+        time.sleep(0.2)
+    return False
 
 
 def stop_processes(processes: list[subprocess.Popen[bytes]]) -> None:

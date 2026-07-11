@@ -118,6 +118,7 @@ def test_preview_payload_tracked_center_exact_only(tmp_path):
             "frame_index": 4,
             "object_seed": seed,
             "fast_preview": False,
+            "force_sync_exact": True,
         },
     )
     assert exact.status_code == 200

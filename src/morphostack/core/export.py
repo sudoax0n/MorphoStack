@@ -522,20 +522,28 @@ def analysis_manifest(
         "threshold": threshold,
         "requested_threshold": threshold,
         "threshold_semantics": run_semantics,
+        "threshold_contract_version": "1",
         "threshold_field_notes": {
             "threshold": (
-                "Legacy. On each CSV/API frame row: effective intensity gate when "
-                "one produced the contour; null/empty when polar ridge or unavailable. "
-                "At manifest root: the requested UI/CLI value (compat)."
+                "Legacy compatibility. Manifest root: requested UI/CLI value only. "
+                "On each CSV/API frame row: effective intensity gate when one produced "
+                "the contour; null/empty when polar ridge or unavailable. "
+                "Never treat root threshold as the seeded per-frame gate."
             ),
-            "requested_threshold": "UI/CLI request for this run (may be unused by seeded adaptive).",
+            "requested_threshold": (
+                "UI/CLI request for this run (may be unused by seeded adaptive / polar)."
+            ),
             "effective_threshold": (
                 "Numeric only when an intensity gate produced that frame result; "
                 "JSON null / CSV empty for polar_ridge or seeded_unavailable."
             ),
             "threshold_semantics": (
-                "global_intensity | seeded_adaptive_local | polar_ridge | "
-                "seeded_unavailable | provisional_global"
+                "ui_starting_guess | display_global | provisional_global | "
+                "global_intensity | seeded_adaptive_local | polar_ridge | seeded_unavailable"
+            ),
+            "threshold_suggestion": (
+                "Optional full suggestion record (scope/domain/method); not authoritative "
+                "for seeded exact contours."
             ),
         },
         "roi": roi,

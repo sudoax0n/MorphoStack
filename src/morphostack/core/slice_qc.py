@@ -55,6 +55,136 @@ class SliceQC:
         return float(np.clip(raw, 0.0, 1.0))
 
 
+# ---------------------------------------------------------------------------
+# Packet 06 — instrumentation + staged QC policy switches
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class QCStageCounters:
+    """Process-local counters for cheap→expensive QC attribution."""
+
+    cheap_qc_calls: int = 0
+    full_qc_calls: int = 0
+    ransac_calls: int = 0
+    two_circle_calls: int = 0
+    dt_marker_calls: int = 0
+    full_qc_skipped_clean: int = 0
+
+    def as_dict(self) -> dict[str, int]:
+        return {
+            "cheap_qc_calls": int(self.cheap_qc_calls),
+            "full_qc_calls": int(self.full_qc_calls),
+            "ransac_calls": int(self.ransac_calls),
+            "two_circle_calls": int(self.two_circle_calls),
+            "dt_marker_calls": int(self.dt_marker_calls),
+            "full_qc_skipped_clean": int(self.full_qc_skipped_clean),
+        }
+
+    def reset(self) -> None:
+        self.cheap_qc_calls = 0
+        self.full_qc_calls = 0
+        self.ransac_calls = 0
+        self.two_circle_calls = 0
+        self.dt_marker_calls = 0
+        self.full_qc_skipped_clean = 0
+
+
+_QC_COUNTERS = QCStageCounters()
+# When True: full RANSAC/two-circle/DT only after cheap suspicion flags.
+# Packet-06 production default: False — A6 performance exit was not met;
+# keep instrumentation/switches for re-bench. Reference path = always full QC.
+_GATE_STAGED_FULL_QC: bool = False
+
+
+def reset_qc_stage_counters() -> None:
+    _QC_COUNTERS.reset()
+
+
+def get_qc_stage_counters() -> dict[str, int]:
+    return _QC_COUNTERS.as_dict()
+
+
+def set_qc_gating_policy(*, staged_full_qc: bool | None = None) -> dict[str, bool]:
+    """Configure QC escalation policy. None leaves the flag unchanged."""
+    global _GATE_STAGED_FULL_QC
+    if staged_full_qc is not None:
+        _GATE_STAGED_FULL_QC = bool(staged_full_qc)
+    return get_qc_gating_policy()
+
+
+def get_qc_gating_policy() -> dict[str, bool]:
+    return {"staged_full_qc": bool(_GATE_STAGED_FULL_QC)}
+
+
+def far_mass_fraction(
+    mask: np.ndarray,
+    seed_x: float,
+    seed_y: float,
+    far_limit_px: float,
+) -> float:
+    """Fraction of solid pixels farther than ``far_limit_px`` from the seed."""
+    binary = np.asarray(mask, dtype=bool)
+    if not np.any(binary):
+        return 0.0
+    ys, xs = np.where(binary)
+    if ys.size == 0:
+        return 0.0
+    dist = np.hypot(xs.astype(np.float64) - float(seed_x), ys.astype(np.float64) - float(seed_y))
+    return float(np.count_nonzero(dist > float(far_limit_px))) / float(ys.size)
+
+
+def cheap_suspicion_flags(
+    qc: "SliceQC",
+    mask: np.ndarray,
+    *,
+    seed_x: float,
+    seed_y: float,
+    seed_radius: float,
+    ref_area: float | None = None,
+) -> tuple[str, ...]:
+    """Named cheap-path suspicion flags (no RANSAC / two-circle / DT).
+
+    Used to decide whether full contact QC is required. Flags are explicit and
+    auditable; empty flags feed the pre-registered clean-frame rule.
+    """
+    flags: list[str] = []
+    R = max(float(seed_radius), 1.0)
+    binary = np.asarray(mask, dtype=bool)
+    area = float(np.count_nonzero(binary))
+    expected = math.pi * R * R
+
+    # Soft circularity cue only — never a solo fail-closed reject elsewhere.
+    if float(qc.circularity) < 0.85:
+        flags.append("low_circularity")
+    if float(qc.edge_support) < 0.55:
+        flags.append("weak_edge")
+    if area < 0.35 * expected or area > 1.55 * expected:
+        flags.append("area_outlier")
+    if ref_area is not None and float(ref_area) > 0:
+        ra = float(ref_area)
+        if area < 0.40 * ra or area > 1.80 * ra:
+            flags.append("ref_area_outlier")
+    far_limit = R * 1.25
+    far = far_mass_fraction(binary, seed_x, seed_y, far_limit)
+    if far >= 0.08:
+        flags.append("far_mass")
+    if float(qc.edge_support) < 0.25:
+        flags.append("collapsed_edge")
+    return tuple(flags)
+
+
+def is_clean_frame_pre_refine(flags: tuple[str, ...] | list[str]) -> bool:
+    """Pre-registered clean-frame rule: no cheap suspicion flags."""
+    return len(flags) == 0
+
+def note_full_qc_skipped_clean() -> None:
+    """Record that staged policy skipped full RANSAC/two-circle/DT."""
+    _QC_COUNTERS.full_qc_skipped_clean += 1
+
+
+
+
 @dataclass(frozen=True)
 class SliceQCRef:
     """Seed-frame reference ranges for adaptive thresholds."""
@@ -445,6 +575,10 @@ def compute_slice_qc(
     and distance-transform markers.
     """
     del seed_x, seed_y  # reserved for future seed-relative residual weighting
+    if cheap:
+        _QC_COUNTERS.cheap_qc_calls += 1
+    else:
+        _QC_COUNTERS.full_qc_calls += 1
     binary = np.asarray(mask, dtype=bool)
     R = max(float(seed_radius), 1.0)
     circ, _area, _peri = crofton_circularity(binary)
@@ -456,12 +590,17 @@ def compute_slice_qc(
     defect = 0.0
     flat = 0.0
     delta_bic = 0.0
-    n_markers = count_dt_markers(binary, R) if not cheap else 0
+    if not cheap:
+        _QC_COUNTERS.dt_marker_calls += 1
+        n_markers = count_dt_markers(binary, R)
+    else:
+        n_markers = 0
 
     if pts is not None and len(pts) >= 12:
         if image is not None:
             edge = _edge_support(image, pts)
         if not cheap:
+            _QC_COUNTERS.ransac_calls += 1
             fit, inliers, med = _fit_circle_ransac(
                 pts,
                 residual_threshold=max(1.5, 0.08 * R),
@@ -475,6 +614,7 @@ def compute_slice_qc(
             defect = _convexity_defect_depth_norm(pts, fitted_r)
             flat = _flat_contact_fraction(pts, fitted_r)
             if fit is not None:
+                _QC_COUNTERS.two_circle_calls += 1
                 delta_bic = _two_circle_delta_bic(pts, fit, seed_radius=R)
 
     strong_two = bool(not cheap and delta_bic <= -10.0)

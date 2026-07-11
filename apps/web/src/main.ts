@@ -6,9 +6,30 @@ import {
   releaseBusyOwner,
   busyAfterProvisional,
   busyVisibleForLatest,
+  trackingBusyMessage,
   type BusyOwner,
-  type PreviewQuality as QueuePreviewQuality
+  type PreviewQuality as QueuePreviewQuality,
+  type TrackingJobBusyInfo
 } from "./previewQueue";
+import {
+  DEFAULT_VOLUME_MAX_BYTES,
+  NAVIGATION_ONLY_LABEL,
+  SeedMappingError,
+  VolumeViewerError,
+  VolumeViewerSession,
+  fallbackMessage,
+  geometryFromLevelPayload,
+  isVolumeViewerEnabled,
+  objectSeedToWorld,
+  setVolumeViewerEnabled,
+  waitForPyramidLevelReady,
+  worldExtentUm,
+  worldToObjectSeed,
+  type DisplayLevelResponse,
+  type VolumeBlendMode,
+  type VolumeFallbackReason,
+  type WorldPointUm
+} from "./volumeViewer";
 
 /** Shown as path-input placeholder; never treat as a real stack path. */
 const PATH_PLACEHOLDER = "D:\\lab-data\\sample.tif";
@@ -44,6 +65,10 @@ type ObjectSeed = {
   max_tracking_dist_um?: number;
   type?: string;
   points?: { x: number; y: number }[];
+  /** Packet 13 provenance — not a tracking-key field. */
+  source_revision?: string | null;
+  seed_origin?: "ui_2d" | "viewer_3d";
+  radius_unit?: "px";
 };
 
 type InspectResponse = {
@@ -170,9 +195,14 @@ type PreviewQuality = QueuePreviewQuality;
 type PreviewResponse = {
   source_path: string;
   frame_index: number;
+  frame?: number;
   width: number;
   height: number;
-  threshold: number;
+  threshold: number | null;
+  requested_threshold?: number | null;
+  effective_threshold?: number | null;
+  threshold_semantics?: string;
+  threshold_contract_version?: string;
   method: string;
   area_px2: number;
   perimeter_px: number;
@@ -184,6 +214,8 @@ type PreviewResponse = {
   /** provisional = fast one-plane overlay; exact = tracked / authoritative. */
   preview_quality?: PreviewQuality;
   cache_hit?: boolean;
+  source_revision?: string;
+  tracking_revision?: string | null;
   /**
    * Exact seeded track center in preview-image coordinates (post ROI/Z crop),
    * same frame as the contour. Null when provisional, lost, or untracked.
@@ -191,6 +223,10 @@ type PreviewResponse = {
    */
   tracked_center_x?: number | null;
   tracked_center_y?: number | null;
+  /** Packet 04: target frame published in exact result cache. */
+  exact_available?: boolean;
+  exact_pending?: boolean;
+  tracking_job?: (TrackingJobBusyInfo & { job_id?: string }) | null;
 };
 
 type MeshPreviewResponse = {
@@ -205,12 +241,44 @@ type MeshPreviewResponse = {
   volume_um3: number;
   equivalent_sphere_diameter_um: number;
   sphericity: number;
+  /** Packet 14: preview geometry is display-only (weld/compact). */
+  display_only?: boolean;
+  display_method?: string;
+  source_vertex_count?: number | null;
+  source_face_count?: number | null;
+  boundary_edge_count_source?: number | null;
+  boundary_edge_count_display?: number | null;
+  within_face_budget?: boolean | null;
+  result_authority?: {
+    geometry_role?: string;
+    display_only?: boolean;
+    display_method?: string;
+    measurement_source?: string;
+    measurement_authority_note?: string;
+  };
 };
 
 type ThresholdResponse = {
   source_path: string;
+  source_revision?: string;
   threshold: number;
   method: string;
+  threshold_semantics?: string;
+  suggestion_scope?: string;
+  histogram_domain?: {
+    frame?: number | null;
+    z_range?: { zmin: number; zmax: number } | null;
+    roi?: unknown;
+    n_voxels_total?: number;
+    n_samples?: number;
+    sample_seed?: number;
+    dtype?: string;
+    finite_only?: boolean;
+  };
+  authoritative_for?: string[];
+  not_authoritative_for?: string[];
+  warnings?: string[];
+  threshold_contract_version?: string;
 };
 
 type BatchSummaryRow = Record<string, string | number | boolean>;
@@ -477,7 +545,7 @@ app.innerHTML = `
           <input id="threshold-input" type="number" step="1" value="100" />
         </label>
         <label class="button-label">
-          Auto threshold
+          Starting guess
           <button id="suggest-threshold-btn" class="secondary" type="button">Suggest Threshold</button>
           <span id="suggest-status" class="inline-status"></span>
         </label>
@@ -613,6 +681,50 @@ app.innerHTML = `
         </div>
       </fieldset>
       <div id="preview-output" class="preview-output muted">No preview rendered yet.</div>
+      <div
+        id="volume-viewer-panel"
+        class="volume-viewer-panel"
+        data-state="idle"
+        aria-label="Calibrated 3D volume navigation"
+      >
+        <div class="volume-viewer-header">
+          <h3>3D volume navigation</h3>
+          <span class="volume-nav-badge" id="volume-nav-badge">${NAVIGATION_ONLY_LABEL}</span>
+        </div>
+        <p class="muted" style="margin: 0; font-size: 0.9rem;">
+          Optional coarse display level for spatial context. Does not segment or measure.
+          2D preview stays available if 3D fails or is turned off.
+        </p>
+        <div class="volume-viewer-controls">
+          <label class="checkbox-row" style="min-width: auto;">
+            <input id="volume-viewer-enable" type="checkbox" checked />
+            Enable 3D volume
+          </label>
+          <label>
+            Blend
+            <select id="volume-blend-mode">
+              <option value="mip" selected>MIP</option>
+              <option value="composite">Alpha blend</option>
+            </select>
+          </label>
+          <label>
+            Opacity
+            <input id="volume-opacity" type="range" min="0.05" max="1" step="0.05" value="0.35" />
+          </label>
+          <button id="volume-reload-btn" class="secondary" type="button">Load / refresh 3D</button>
+          <button id="volume-seed-pick-btn" class="secondary" type="button" title="Click in the volume to set the same ObjectSeed as 2D">
+            Pick seed in 3D
+          </button>
+        </div>
+        <div id="volume-viewer-canvas-wrap" class="volume-viewer-canvas-wrap" hidden>
+          <div id="volume-vtk-root" class="volume-vtk-root"></div>
+        </div>
+        <div id="volume-viewer-fallback" class="volume-viewer-fallback muted">
+          Inspect a stack to build a display-only volume (or use Load / refresh 3D).
+        </div>
+        <div id="volume-viewer-status" class="volume-viewer-status">Idle</div>
+        <div id="volume-viewer-meta" class="volume-viewer-meta" hidden></div>
+      </div>
       <div id="mesh-output" class="mesh-output muted">No 3D mesh rendered yet.</div>
       <div id="analysis-summary" class="output muted">No analysis run yet.</div>
     </section>
@@ -811,6 +923,15 @@ const apiStatus = mustElement<HTMLDivElement>("api-status");
 const projectStatus = mustElement<HTMLDivElement>("project-status");
 const inspectOutput = mustElement<HTMLDivElement>("inspect-output");
 const previewOutput = mustElement<HTMLDivElement>("preview-output");
+const volumeViewerPanel = mustElement<HTMLDivElement>("volume-viewer-panel");
+const volumeViewerCanvasWrap = mustElement<HTMLDivElement>("volume-viewer-canvas-wrap");
+const volumeVtkRoot = mustElement<HTMLDivElement>("volume-vtk-root");
+const volumeViewerFallback = mustElement<HTMLDivElement>("volume-viewer-fallback");
+const volumeViewerStatus = mustElement<HTMLDivElement>("volume-viewer-status");
+const volumeViewerMeta = mustElement<HTMLDivElement>("volume-viewer-meta");
+const volumeViewerEnable = mustElement<HTMLInputElement>("volume-viewer-enable");
+const volumeBlendModeSelect = mustElement<HTMLSelectElement>("volume-blend-mode");
+const volumeOpacityInput = mustElement<HTMLInputElement>("volume-opacity");
 const meshOutput = mustElement<HTMLDivElement>("mesh-output");
 const analysisSummary = mustElement<HTMLDivElement>("analysis-summary");
 const batchSummary = mustElement<HTMLDivElement>("batch-summary");
@@ -880,6 +1001,16 @@ let excludedFrameIndices = new Set<number>();
 let selectObjectMode = false;
 let polygonPoints: { imgX: number; imgY: number }[] = [];
 let polygonClosed = false;
+/** Packet 12: isolated display-only volume session (never science authority). */
+let volumeSession: VolumeViewerSession | null = null;
+/** Monotonic token so stack switches cancel in-flight pyramid/volume loads. */
+let volumeLoadGen = 0;
+/** Last display level payload (for seed geometry / stale revision). */
+let lastDisplayLevelPayload: DisplayLevelResponse | null = null;
+/** Inspected full-stack shape (Z,Y,X) for source seed bounds. */
+let inspectedSourceShape: [number, number, number] | null = null;
+/** True while 3D seed pick mode is armed (click, no intensity snap). */
+let volumeSeedPickMode = false;
 
 mustElement<HTMLSelectElement>("profile-input").addEventListener("change", () => {
   updateProfileHelp();
@@ -889,10 +1020,52 @@ mustElement<HTMLSelectElement>("profile-input").addEventListener("change", () =>
 mustElement<HTMLInputElement>("file-input").addEventListener("change", () => {
   clearUploadSession();
   updateSessionBanner();
+  disposeVolumeViewer("stack source changed");
 });
 
 mustElement<HTMLInputElement>("path-input").addEventListener("input", () => {
   updateSessionBanner();
+});
+
+mustElement<HTMLInputElement>("path-input").addEventListener("change", () => {
+  disposeVolumeViewer("stack path changed");
+});
+
+volumeViewerEnable.checked = isVolumeViewerEnabled();
+volumeViewerEnable.addEventListener("change", () => {
+  setVolumeViewerEnabled(volumeViewerEnable.checked);
+  if (!volumeViewerEnable.checked) {
+    disposeVolumeViewer("disabled by user");
+    setVolumeViewerUiFallback(
+      "feature_disabled",
+      fallbackMessage("feature_disabled")
+    );
+    return;
+  }
+  void loadVolumeViewer({ reason: "enabled" });
+});
+
+volumeBlendModeSelect.addEventListener("change", () => {
+  const mode = readVolumeBlendMode();
+  volumeSession?.setBlendMode(mode);
+  if (volumeSession?.readyMeta) {
+    updateVolumeMetaLine(volumeSession.readyMeta);
+  }
+});
+
+volumeOpacityInput.addEventListener("input", () => {
+  const gain = Number(volumeOpacityInput.value);
+  if (Number.isFinite(gain)) {
+    volumeSession?.setOpacityGain(gain);
+  }
+});
+
+mustElement<HTMLButtonElement>("volume-reload-btn").addEventListener("click", () => {
+  void loadVolumeViewer({ reason: "manual refresh" });
+});
+
+mustElement<HTMLButtonElement>("volume-seed-pick-btn").addEventListener("click", () => {
+  toggleVolumeSeedPickMode();
 });
 
 mustElement<HTMLSelectElement>("calibration-mode").addEventListener("change", () => {
@@ -1117,7 +1290,12 @@ mustElement<HTMLButtonElement>("download-logs-btn").addEventListener("click", ()
   downloadLogs();
 });
 
-void refreshHealth();
+/** How long to keep retrying /api/health after load (dev race: Vite ready before uvicorn worker). */
+const HEALTH_RETRY_MS = 45_000;
+const HEALTH_RETRY_INTERVAL_MS = 500;
+let healthPollTimer: number | null = null;
+
+void startHealthPolling();
 updateSkeletonPruneVisibility();
 updateFrameSliceLabel();
 updateSessionBanner();
@@ -1125,32 +1303,86 @@ updateProfileHelp();
 wireOverlayToggles();
 updateObjectSeedStatus();
 
-async function refreshHealth(): Promise<void> {
-  try {
-    const payload = await apiGet<{ ok: boolean; version: string }>("/api/health");
-    apiStatus.textContent = payload.ok ? `API ${payload.version}` : "API unavailable";
-    apiStatus.className = payload.ok ? "status ok" : "status warn";
-  } catch {
-    apiStatus.textContent = "API offline — run morphostack dev or morphostack app";
-    apiStatus.className = "status warn";
+function stopHealthPolling(): void {
+  if (healthPollTimer !== null) {
+    window.clearTimeout(healthPollTimer);
+    healthPollTimer = null;
   }
 }
 
-async function ensureApiOnline(): Promise<void> {
+/**
+ * One-shot health probe. Returns true when API reports ok.
+ * Does not leave a permanent offline banner without retries (see startHealthPolling).
+ */
+async function refreshHealth(): Promise<boolean> {
   try {
     const payload = await apiGet<{ ok: boolean; version: string }>("/api/health");
-    if (!payload.ok) {
-      throw new Error("API reported not ok");
+    if (payload.ok) {
+      apiStatus.textContent = `API ${payload.version}`;
+      apiStatus.className = "status ok";
+      return true;
     }
-    apiStatus.textContent = `API ${payload.version}`;
-    apiStatus.className = "status ok";
-  } catch {
-    apiStatus.textContent = "API offline — run morphostack dev or morphostack app";
+    apiStatus.textContent = "API unavailable";
     apiStatus.className = "status warn";
-    throw new Error(
-      "MorphoStack API is offline. Start it with `morphostack dev` (recommended) or `morphostack app`, then retry Inspect."
-    );
+    return false;
+  } catch {
+    apiStatus.textContent = "Connecting to API…";
+    apiStatus.className = "status warn";
+    return false;
   }
+}
+
+/**
+ * Retry health until the API is up or the budget expires.
+ * Fixes morphostack dev race: browser opens while uvicorn --reload child is still starting.
+ */
+function startHealthPolling(): void {
+  stopHealthPolling();
+  const deadline = Date.now() + HEALTH_RETRY_MS;
+  apiStatus.textContent = "Connecting to API…";
+  apiStatus.className = "status warn";
+
+  const tick = async (): Promise<void> => {
+    const ok = await refreshHealth();
+    if (ok) {
+      stopHealthPolling();
+      return;
+    }
+    if (Date.now() >= deadline) {
+      apiStatus.textContent = "API offline — run morphostack dev or morphostack app";
+      apiStatus.className = "status warn";
+      stopHealthPolling();
+      return;
+    }
+    healthPollTimer = window.setTimeout(() => {
+      void tick();
+    }, HEALTH_RETRY_INTERVAL_MS);
+  };
+  void tick();
+}
+
+async function ensureApiOnline(): Promise<void> {
+  // Short burst of retries so Inspect right after load still wins the startup race.
+  const deadline = Date.now() + 8_000;
+  while (Date.now() < deadline) {
+    try {
+      const payload = await apiGet<{ ok: boolean; version: string }>("/api/health");
+      if (payload.ok) {
+        apiStatus.textContent = `API ${payload.version}`;
+        apiStatus.className = "status ok";
+        stopHealthPolling();
+        return;
+      }
+    } catch {
+      /* retry */
+    }
+    await new Promise((r) => setTimeout(r, HEALTH_RETRY_INTERVAL_MS));
+  }
+  apiStatus.textContent = "API offline — run morphostack dev or morphostack app";
+  apiStatus.className = "status warn";
+  throw new Error(
+    "MorphoStack API is offline. Start it with `morphostack dev` (recommended) or `morphostack app`, then retry Inspect."
+  );
 }
 
 async function loadProjectFromFile(): Promise<void> {
@@ -1266,6 +1498,15 @@ async function inspectStack(): Promise<void> {
     }
 
     inspectedFrameCount = payload.grayscale_shape[0] ?? null;
+    if (payload.grayscale_shape.length >= 3) {
+      inspectedSourceShape = [
+        Number(payload.grayscale_shape[0]),
+        Number(payload.grayscale_shape[1]),
+        Number(payload.grayscale_shape[2])
+      ];
+    } else {
+      inspectedSourceShape = null;
+    }
     syncZRangeControls({ initializeFullRange: true });
     logAction(
       "Inspect Stack Succeeded",
@@ -1273,6 +1514,8 @@ async function inspectStack(): Promise<void> {
         payload.stack_id ? `, stack_id: ${payload.stack_id}` : ""
       }`
     );
+    // Display-only volume: never blocks inspect/2D; fails open to 2D workflow.
+    void loadVolumeViewer({ reason: "inspect" });
   } catch (error) {
     const msg = errorMessage(error, usedUpload ? "upload" : "general");
     inspectOutput.textContent = msg;
@@ -1487,7 +1730,8 @@ async function executeProvisionalFetch(gen: number, signal: AbortSignal): Promis
       gen,
       previewRequestGen,
       exactPendingGen,
-      Boolean(selectedObjectSeed) && quality === "provisional"
+      Boolean(selectedObjectSeed) && quality === "provisional",
+      trackingBusyMessage(null, globalPreviewFrameIndex(readLocalPreviewFrameIndex()))
     );
     syncBusyOverlayDom();
     logAction(
@@ -1530,8 +1774,7 @@ async function requestAuthoritativePreview(): Promise<void> {
   exactAbort?.abort();
   exactPendingGen = selectedObjectSeed ? gen : null;
   if (selectedObjectSeed) {
-    claimTrackingBusy(gen, "Tracking object…");
-    // Optional immediate provisional for responsiveness, then exact.
+    // Provisional first; exact subscription claims busy when target is missing.
     runProvisionalPreview(gen);
   } else {
     releaseTrackingBusy(gen);
@@ -1544,6 +1787,48 @@ async function previewStack(_fastPreview = false): Promise<void> {
   await requestAuthoritativePreview();
 }
 
+function sleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new DOMException("Aborted", "AbortError"));
+      return;
+    }
+    const id = window.setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = (): void => {
+      window.clearTimeout(id);
+      signal.removeEventListener("abort", onAbort);
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function applyExactPayload(gen: number, payload: PreviewResponse, roi: RectRoi | null): void {
+  const quality = previewQualityOf(payload, "exact");
+  if (!shouldApplyPreview(gen, payload.frame_index, quality)) {
+    return;
+  }
+  // Never paint provisional as exact via this path.
+  if (quality !== "exact" && payload.exact_available !== true) {
+    return;
+  }
+  renderPreview(payload, roi);
+  lastAppliedPreview = { gen, frameIndex: payload.frame_index, quality: "exact" };
+  applyTrackedCenterFromPayload(gen, payload);
+  if (exactPendingGen === gen) {
+    exactPendingGen = null;
+  }
+  clearExactPreviewErrorForGen(gen);
+  releaseTrackingBusy(gen);
+}
+
+/**
+ * Exact path (seeded): subscribe to packet-03 job + cache.
+ * Does not launch a second science walk; browser abort only cancels display polling.
+ */
 async function runExactPreview(gen: number): Promise<void> {
   if (gen !== previewRequestGen) {
     return;
@@ -1567,56 +1852,140 @@ async function runExactPreview(gen: number): Promise<void> {
   exactAbort = new AbortController();
   const signal = exactAbort.signal;
   exactPendingGen = gen;
-  claimTrackingBusy(gen, "Tracking object…");
+  const targetFrame = globalPreviewFrameIndex(readLocalPreviewFrameIndex());
+  claimTrackingBusy(gen, trackingBusyMessage(null, targetFrame));
   const roi = readRoi();
   let usedUpload = false;
   try {
     usedUpload = resolveStackSource().kind === "file";
     if (!document.getElementById("preview-image")) {
-      previewOutput.textContent = "Tracking object…";
+      previewOutput.textContent = trackingBusyMessage(null, targetFrame);
     }
-    const payload = await fetchPreviewPayload(false, signal);
+    let payload = await fetchPreviewPayload(false, signal);
     if (signal.aborted || gen !== previewRequestGen) {
-      // Superseded: leave busy ownership to the newer generation.
       if (exactPendingGen === gen) {
         exactPendingGen = null;
       }
       releaseTrackingBusy(gen);
       return;
     }
-    const quality = previewQualityOf(payload, "exact");
-    if (!shouldApplyPreview(gen, payload.frame_index, quality)) {
+
+    // Cache hit / already published: paint exact immediately.
+    if (payload.exact_available !== false && previewQualityOf(payload, "exact") === "exact") {
+      applyExactPayload(gen, payload, roi);
+      logAction(
+        "Exact Preview Succeeded",
+        `Frame: ${payload.frame_index}, cache_hit=${Boolean(payload.cache_hit)}, method=${payload.method}`
+      );
+      return;
+    }
+
+    // Pending: bounded poll of job status + exact re-fetch (no aggressive tight loop).
+    let jobId = payload.tracking_job?.job_id ?? null;
+    let delayMs = 100;
+    const deadline = Date.now() + 90_000;
+    while (gen === previewRequestGen && !signal.aborted && Date.now() < deadline) {
+      const job = payload.tracking_job as TrackingJobBusyInfo | null | undefined;
+      const busyMsg = trackingBusyMessage(job, targetFrame);
+      if (busyMsg) {
+        claimTrackingBusy(gen, busyMsg);
+      }
+      if (job?.state === "failed") {
+        if (exactPendingGen === gen) {
+          exactPendingGen = null;
+        }
+        releaseTrackingBusy(gen);
+        setExactPreviewError(
+          gen,
+          `Tracked contour unavailable: ${job.message || job.error_code || "failed"}`
+        );
+        logAction("Exact Preview Failed", `job failed: ${job.message || job.error_code}`);
+        return;
+      }
+      if (job?.state === "cancelled") {
+        if (exactPendingGen === gen) {
+          exactPendingGen = null;
+        }
+        releaseTrackingBusy(gen);
+        setExactPreviewError(gen, "Tracking cancelled");
+        logAction("Exact Preview Cancelled", `job_id=${jobId ?? "?"}`);
+        return;
+      }
+
+      await sleep(delayMs, signal);
+      delayMs = Math.min(Math.round(delayMs * 1.4), 600);
+
+      if (jobId) {
+        try {
+          const st = await apiGet<TrackingJobBusyInfo & { job_id?: string; available_exact_frames?: number[] }>(
+            `/api/tracking/jobs/${jobId}`
+          );
+          if (gen !== previewRequestGen || signal.aborted) {
+            return;
+          }
+          const msg = trackingBusyMessage(st, targetFrame);
+          if (msg) {
+            claimTrackingBusy(gen, msg);
+          }
+          if (st.state === "failed") {
+            if (exactPendingGen === gen) {
+              exactPendingGen = null;
+            }
+            releaseTrackingBusy(gen);
+            setExactPreviewError(
+              gen,
+              `Tracked contour unavailable: ${st.message || st.error_code || "failed"}`
+            );
+            return;
+          }
+          if (st.state === "cancelled") {
+            if (exactPendingGen === gen) {
+              exactPendingGen = null;
+            }
+            releaseTrackingBusy(gen);
+            setExactPreviewError(gen, "Tracking cancelled");
+            return;
+          }
+        } catch {
+          // Status poll soft-fail; retry exact preview body.
+        }
+      }
+
+      payload = await fetchPreviewPayload(false, signal);
+      if (signal.aborted || gen !== previewRequestGen) {
+        if (exactPendingGen === gen) {
+          exactPendingGen = null;
+        }
+        releaseTrackingBusy(gen);
+        return;
+      }
+      if (!jobId && payload.tracking_job?.job_id) {
+        jobId = payload.tracking_job.job_id;
+      }
+      if (payload.exact_available !== false && previewQualityOf(payload, "exact") === "exact") {
+        applyExactPayload(gen, payload, roi);
+        logAction(
+          "Exact Preview Succeeded",
+          `Frame: ${payload.frame_index}, cache_hit=${Boolean(payload.cache_hit)}, method=${payload.method}, polled=true`
+        );
+        return;
+      }
+    }
+
+    if (gen === previewRequestGen && !signal.aborted) {
       if (exactPendingGen === gen) {
         exactPendingGen = null;
       }
       releaseTrackingBusy(gen);
-      return;
+      setExactPreviewError(gen, "Tracked contour unavailable: timed out waiting for exact frame");
+      logAction("Exact Preview Failed", "poll timeout");
     }
-    renderPreview(payload, roi);
-    lastAppliedPreview = { gen, frameIndex: payload.frame_index, quality: "exact" };
-    applyTrackedCenterFromPayload(gen, payload);
-    if (exactPendingGen === gen) {
-      exactPendingGen = null;
-    }
-    clearExactPreviewErrorForGen(gen);
-    releaseTrackingBusy(gen);
-    const trackLost =
-      !payload.method ||
-      payload.method.includes("lost") ||
-      payload.method.includes("fail") ||
-      (payload.area_px2 === 0 && !payload.method.includes("hidden"));
-    logAction(
-      "Exact Preview Succeeded",
-      `Frame: ${payload.frame_index}, cache_hit=${Boolean(payload.cache_hit)}, method=${payload.method}${
-        trackLost ? " (track unavailable)" : ""
-      }`
-    );
   } catch (error) {
     if (isAbortError(error)) {
       if (exactPendingGen === gen) {
         exactPendingGen = null;
       }
-      // Only release if we still own this gen's busy (newer exact may have claimed).
+      // Display abort only — does not cancel the shared authoritative job.
       releaseTrackingBusy(gen);
       return;
     }
@@ -1631,7 +2000,6 @@ async function runExactPreview(gen: number): Promise<void> {
     if (exactPendingGen === gen) {
       exactPendingGen = null;
     }
-    // Exact settled with error: busy is pending-work only — always release.
     releaseTrackingBusy(gen);
     setExactPreviewError(gen, `Tracked contour unavailable: ${msg}`);
     const canvas = document.querySelector(".preview-canvas");
@@ -1647,17 +2015,18 @@ function schedulePreview(): void {
     return;
   }
   const gen = bumpPreviewGeneration();
-  // Supersede in-flight exact work; provisional uses generation-aware queue.
+  // Supersede in-flight exact *display* polling only (not the shared job).
   exactAbort?.abort();
-  // Mark exact as pending for this gen when a seed is set (before debounce fires).
+  // Exact pending until cache hit / job terminal for this gen.
   exactPendingGen = selectedObjectSeed ? gen : null;
   if (selectedObjectSeed) {
-    claimTrackingBusy(gen, "Tracking object…");
+    // Do not claim global "Tracking object…" merely because a seed exists —
+    // caption updates when exact subscription starts after provisional paint.
+    releaseTrackingBusy(gen);
   } else {
     releaseTrackingBusy(gen);
   }
-  // Queue provisional for this gen immediately as pending if in flight, else
-  // debounce so rapid scrubbing coalesces.
+  // Coalesced provisional current-plane request (only immediate scrub compute).
   if (previewDebounce !== null) {
     window.clearTimeout(previewDebounce);
   }
@@ -1820,10 +2189,18 @@ async function suggestThreshold(): Promise<void> {
       });
     }
     mustElement<HTMLInputElement>("threshold-input").value = formatInputNumber(payload.threshold);
-    status.textContent = `Suggested ${formatNumber(payload.threshold)} (${payload.method})`;
+    const methodLabel = formatThresholdMethodLabel(payload.method);
+    const scopeLabel = formatSuggestionScopeLabel(payload.suggestion_scope || "stack_sample");
+    status.textContent =
+      `Suggested ${formatNumber(payload.threshold)} · ${methodLabel} · ${scopeLabel} · starting guess. ` +
+      `Seeded exact tracking uses a local per-slice gate.`;
     status.className = "inline-status ok";
+    status.title = (payload.warnings || []).join(" ");
     hidePreviewBusyOverlay();
-    logAction("Suggest Threshold Succeeded", `Suggested: ${payload.threshold} (${payload.method})`);
+    logAction(
+      "Suggest Threshold Succeeded",
+      `Suggested: ${payload.threshold} (${payload.method}, ${payload.suggestion_scope || "stack_sample"}, ui_starting_guess)`
+    );
     schedulePreview();
   } catch (error) {
     const msg = errorMessage(error, usedUpload ? "upload" : "general");
@@ -2110,23 +2487,98 @@ function previewImageSource(payload: PreviewResponse): string {
   throw new Error("Preview response did not contain an image.");
 }
 
+function formatThresholdMethodLabel(method: string): string {
+  const m = (method || "").toLowerCase();
+  if (m === "robust_otsu") {
+    return "robust Otsu";
+  }
+  if (m === "otsu") {
+    return "Otsu";
+  }
+  if (m === "percentile") {
+    return "percentile";
+  }
+  if (m === "constant") {
+    return "constant";
+  }
+  return method || "auto";
+}
+
+function formatSuggestionScopeLabel(scope: string): string {
+  const s = (scope || "stack_sample").toLowerCase();
+  if (s === "stack_sample") {
+    return "stack sample";
+  }
+  if (s === "current_slice") {
+    return "current slice";
+  }
+  if (s === "roi_current_slice") {
+    return "ROI current slice";
+  }
+  return scope;
+}
+
+function formatRequestedThreshold(payload: PreviewResponse): string {
+  const req = payload.requested_threshold;
+  if (typeof req === "number" && Number.isFinite(req)) {
+    return formatNumber(req);
+  }
+  const thr = payload.threshold;
+  if (typeof thr === "number" && Number.isFinite(thr)) {
+    return formatNumber(thr);
+  }
+  return "—";
+}
+
 function previewQualityCaption(payload: PreviewResponse): string {
   const quality = previewQualityOf(payload, selectedObjectSeed ? "provisional" : "exact");
   if (!selectedObjectSeed) {
     return "";
   }
+  const requested = formatRequestedThreshold(payload);
   if (quality === "provisional") {
-    return `<br /><span class="preview-quality provisional">Provisional overlay — not the tracked contour</span>`;
+    return (
+      `<br /><span class="preview-quality provisional">` +
+      `Provisional overlay · requested threshold ${escapeHtml(requested)} · not the tracked contour` +
+      `</span>`
+    );
   }
+  const sem = (payload.threshold_semantics || "").toLowerCase();
   const trackLost =
+    sem === "seeded_unavailable" ||
     payload.method.includes("lost") ||
     payload.method.includes("fail") ||
+    payload.method.includes("gap") ||
+    payload.method.includes("reject") ||
     (payload.area_px2 === 0 && !payload.method.includes("hidden"));
-  if (trackLost) {
-    return `<br /><span class="preview-quality unavailable">Tracked contour unavailable on this slice</span>`;
+  if (trackLost || sem === "seeded_unavailable") {
+    return (
+      `<br /><span class="preview-quality unavailable">` +
+      `Exact result unavailable · requested ${escapeHtml(requested)}` +
+      `</span>`
+    );
   }
   const cacheNote = payload.cache_hit ? " · cache" : "";
-  return `<br /><span class="preview-quality exact">Tracked contour (authoritative)${cacheNote}</span>`;
+  if (sem === "polar_ridge") {
+    return (
+      `<br /><span class="preview-quality exact">` +
+      `Tracked contour · polar ridge (no scalar intensity gate) · requested ${escapeHtml(requested)}${cacheNote}` +
+      `</span>`
+    );
+  }
+  const eff = payload.effective_threshold;
+  if (typeof eff === "number" && Number.isFinite(eff)) {
+    return (
+      `<br /><span class="preview-quality exact">` +
+      `Tracked contour · effective threshold ${escapeHtml(formatNumber(eff))} (seeded adaptive) · requested ${escapeHtml(requested)}${cacheNote}` +
+      `</span>`
+    );
+  }
+  return (
+    `<br /><span class="preview-quality exact">` +
+    `Tracked contour (authoritative) · requested ${escapeHtml(requested)}${cacheNote}` +
+    `</span>`
+  );
 }
 
 function renderPreview(payload: PreviewResponse, renderedRoi: RectRoi | null): void {
@@ -2780,13 +3232,17 @@ function applyObjectSeedClick(
     frame_index: payload.frame_index,
     radius: radiusImg,
     max_tracking_dist_um,
-    type: "circle"
+    type: "circle",
+    seed_origin: "ui_2d",
+    radius_unit: "px",
+    source_revision: lastDisplayLevelPayload?.display_volume_spec?.source_revision ?? null
   };
   selectObjectMode = false;
   const btn = mustElement<HTMLButtonElement>("select-object-btn");
   btn.textContent = "Select Object";
   btn.classList.remove("active");
   updateObjectSeedStatus();
+  syncVolumeSeedMarkerFromSelection();
   logAction("Set Object Seed", `Coordinate (${imgX}, ${imgY}) r=${Math.round(radiusImg)} on frame ${payload.frame_index}`);
   void previewStack();
 }
@@ -2846,6 +3302,10 @@ function clearObjectSeed(): void {
   const btn = mustElement<HTMLButtonElement>("select-object-btn");
   btn.textContent = "Select Object";
   btn.classList.remove("active");
+  volumeSession?.clearSeedMarker();
+  volumeSeedPickMode = false;
+  volumeSession?.setSeedPickEnabled(false);
+  updateVolumeSeedPickButton();
   updateObjectSeedStatus();
   logAction("Clear Object Seed", "User cleared the selected object seed.");
   void previewStack();
@@ -2863,10 +3323,12 @@ function updateObjectSeedStatus(): void {
     }
     status.className = "inline-status warn";
   } else if (selectedObjectSeed) {
+    const origin =
+      selectedObjectSeed.seed_origin === "viewer_3d" ? " · from 3D" : selectedObjectSeed.seed_origin === "ui_2d" ? " · from 2D" : "";
     if (selectedObjectSeed.type === "polygon") {
-      status.textContent = `Polygon ROI: center (${Math.round(selectedObjectSeed.x)}, ${Math.round(selectedObjectSeed.y)}) r=${Math.round(selectedObjectSeed.radius)} px · frame ${selectedObjectSeed.frame_index}`;
+      status.textContent = `Polygon ROI: center (${Math.round(selectedObjectSeed.x)}, ${Math.round(selectedObjectSeed.y)}) r=${Math.round(selectedObjectSeed.radius)} px · frame ${selectedObjectSeed.frame_index}${origin}`;
     } else {
-      status.textContent = `Circle ROI: center (${Math.round(selectedObjectSeed.x)}, ${Math.round(selectedObjectSeed.y)}) r=${Math.round(selectedObjectSeed.radius)} px · frame ${selectedObjectSeed.frame_index}`;
+      status.textContent = `Circle ROI: center (${Math.round(selectedObjectSeed.x)}, ${Math.round(selectedObjectSeed.y)}) r=${Math.round(selectedObjectSeed.radius)} px · frame ${selectedObjectSeed.frame_index}${origin}`;
     }
     status.className = "inline-status ok";
   } else {
@@ -3007,25 +3469,31 @@ function renderMeshPreview(payload: MeshPreviewResponse): void {
   }
 
   latestMeshPreview = payload;
+  const srcV = payload.source_vertex_count ?? payload.vertex_count;
+  const srcF = payload.source_face_count ?? payload.face_count;
+  const method = payload.display_method ?? payload.result_authority?.display_method ?? "weld_compact";
   meshOutput.className = "mesh-output";
   meshOutput.innerHTML = `
     <div>
       <strong>${escapeHtml(payload.source_path)}</strong><br />
-      Display mesh: ${payload.vertex_count} vertices, ${payload.face_count} faces, sampling x${payload.downsample}<br />
+      <span class="inline-status warn">Display mesh only (${escapeHtml(method)}) — not a scientific full export</span><br />
+      Display: ${payload.vertex_count} vertices, ${payload.face_count} faces
+      (source complete ${srcV} v / ${srcF} f), sampling x${payload.downsample}<br />
       View: calibrated, unaligned contour stack<br />
-      3D mesh surface area ${formatNumber(payload.surface_area_um2)} um2,
-      3D mesh volume ${formatNumber(payload.volume_um3)} um3,
+      Scientific surface area ${formatNumber(payload.surface_area_um2)} um2,
+      scientific volume ${formatNumber(payload.volume_um3)} um3,
       sphericity ${formatNumber(payload.sphericity)}
+      <span class="muted">(measured on complete mesh before display weld/compact)</span>
     </div>
     <div class="button-row mesh-export-row">
-      <button id="download-mesh-obj-btn" class="secondary" type="button">OBJ</button>
-      <button id="download-mesh-stl-btn" class="secondary" type="button">STL</button>
-      <button id="download-mesh-ply-btn" class="secondary" type="button">PLY</button>
-      <button id="download-mesh-glb-btn" class="secondary" type="button">GLB</button>
-      <button id="download-mesh-html-btn" class="secondary" type="button">Standalone HTML</button>
-      <span class="inline-status muted">Viewer toolbar: camera presets, opacity, PNG. Mesh files use the preview geometry (may be downsampled).</span>
+      <button id="download-mesh-obj-btn" class="secondary" type="button">Display OBJ</button>
+      <button id="download-mesh-stl-btn" class="secondary" type="button">Display STL</button>
+      <button id="download-mesh-ply-btn" class="secondary" type="button">Display PLY</button>
+      <button id="download-mesh-glb-btn" class="secondary" type="button">Display GLB</button>
+      <button id="download-mesh-html-btn" class="secondary" type="button">Display HTML</button>
+      <span class="inline-status muted">Downloads are display/preview geometry only. Full scientific export uses server mesh-export (complete mesh).</span>
     </div>
-    <iframe id="mesh-frame" title="3D mesh preview"></iframe>
+    <iframe id="mesh-frame" title="3D display mesh preview"></iframe>
   `;
   mustElement<HTMLIFrameElement>("mesh-frame").srcdoc = meshPreviewHtml(payload);
   mustElement<HTMLButtonElement>("download-mesh-obj-btn").addEventListener("click", () => {
@@ -3079,7 +3547,7 @@ function meshPreviewHtml(payload: MeshPreviewResponse): string {
     <button type="button" data-camera="top">Top</button>
     <label>Opacity <input id="opacity-range" type="range" min="0.2" max="1" step="0.05" value="0.88" /></label>
     <button id="download-png-btn" type="button">Download PNG</button>
-    <span class="meta">Surface ${formatNumber(payload.surface_area_um2)} um2 · Volume ${formatNumber(payload.volume_um3)} um3</span>
+    <span class="meta">Display preview · scientific SA ${formatNumber(payload.surface_area_um2)} um2 · V ${formatNumber(payload.volume_um3)} um3 (complete mesh)</span>
   </div>
   <div id="plot"></div>
   <script>
@@ -3634,12 +4102,16 @@ function downloadLatestMeshFile(format: MeshDownloadFormat): void {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
-  anchor.download = `${meshBaseFilename(latestMeshPreview.source_path)}_mesh.${format}`;
+  // Packet 14: client rebuild is display/preview only — never labelled as full scientific mesh.
+  anchor.download = `${meshBaseFilename(latestMeshPreview.source_path)}_display_mesh.${format}`;
   document.body.append(anchor);
   anchor.click();
   anchor.remove();
   URL.revokeObjectURL(url);
-  logAction("Export File", `Downloaded mesh ${format.toUpperCase()}: "${anchor.download}"`);
+  logAction(
+    "Export Display Mesh",
+    `Downloaded display-only preview mesh ${format.toUpperCase()}: "${anchor.download}" (not full scientific export)`
+  );
 }
 
 function downloadLatestMeshHtml(): void {
@@ -3652,13 +4124,19 @@ function downloadLatestMeshHtml(): void {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
-  const filename = meshHtmlFilename(latestMeshPreview.source_path);
-  anchor.download = filename;
+  const filename = meshHtmlFilename(latestMeshPreview.source_path).replace(
+    /_mesh\.html$/i,
+    "_display_mesh.html"
+  );
+  anchor.download = filename.endsWith(".html") ? filename : `${filename}_display_mesh.html`;
   document.body.append(anchor);
   anchor.click();
   anchor.remove();
   URL.revokeObjectURL(url);
-  logAction("Export File", `Downloaded standalone mesh HTML: "${filename}"`);
+  logAction(
+    "Export Display Mesh",
+    `Downloaded display-only mesh HTML: "${anchor.download}" (not full scientific export)`
+  );
 }
 
 function analysisReportMarkdown(payload: AnalyzeResponse): string {
@@ -4127,6 +4605,397 @@ function clearUploadSession(): void {
   sessionFileKey = null;
   sessionOpenPromise = null;
   updateSessionBanner();
+}
+
+function readVolumeBlendMode(): VolumeBlendMode {
+  return volumeBlendModeSelect.value === "composite" ? "composite" : "mip";
+}
+
+function disposeVolumeViewer(reason?: string): void {
+  volumeLoadGen += 1;
+  volumeSeedPickMode = false;
+  lastDisplayLevelPayload = null;
+  updateVolumeSeedPickButton();
+  if (volumeSession) {
+    volumeSession.dispose();
+    volumeSession = null;
+  }
+  volumeVtkRoot.replaceChildren();
+  volumeViewerCanvasWrap.hidden = true;
+  if (reason) {
+    volumeViewerFallback.hidden = false;
+    volumeViewerFallback.textContent = `3D volume cleared (${reason}). 2D preview remains available.`;
+    volumeViewerStatus.textContent = "Idle";
+    volumeViewerStatus.classList.remove("is-error");
+    volumeViewerMeta.hidden = true;
+    volumeViewerMeta.textContent = "";
+    volumeViewerPanel.dataset.state = "idle";
+  }
+}
+
+function updateVolumeSeedPickButton(): void {
+  const btn = document.getElementById("volume-seed-pick-btn");
+  if (!(btn instanceof HTMLButtonElement)) return;
+  const ready = volumeSession !== null && volumeViewerPanel.dataset.state === "ready";
+  btn.disabled = !ready;
+  btn.textContent = volumeSeedPickMode ? "Cancel 3D seed pick" : "Pick seed in 3D";
+  btn.classList.toggle("active", volumeSeedPickMode);
+}
+
+function toggleVolumeSeedPickMode(): void {
+  if (!volumeSession || volumeViewerPanel.dataset.state !== "ready") {
+    volumeSeedPickMode = false;
+    updateVolumeSeedPickButton();
+    return;
+  }
+  volumeSeedPickMode = !volumeSeedPickMode;
+  volumeSession.setSeedPickEnabled(volumeSeedPickMode);
+  updateVolumeSeedPickButton();
+  if (volumeSeedPickMode) {
+    volumeViewerStatus.textContent = `Click in the volume to place a source-level seed (${NAVIGATION_ONLY_LABEL}). Orbit drag still works if you move the mouse.`;
+    volumeViewerStatus.classList.remove("is-error");
+  } else if (volumeSession.readyMeta) {
+    volumeViewerStatus.textContent = `Ready · level ${volumeSession.readyMeta.level} · ${NAVIGATION_ONLY_LABEL}`;
+  }
+}
+
+function readSourceVoxelForMapping(): { voxel: VoxelOverride; known: boolean } {
+  const mode = mustElement<HTMLSelectElement>("calibration-mode").value;
+  const x = Number(mustElement<HTMLInputElement>("voxel-x").value);
+  const y = Number(mustElement<HTMLInputElement>("voxel-y").value);
+  const z = Number(mustElement<HTMLInputElement>("voxel-z").value);
+  const voxel = {
+    x_um: Number.isFinite(x) && x > 0 ? x : 1,
+    y_um: Number.isFinite(y) && y > 0 ? y : 1,
+    z_um: Number.isFinite(z) && z > 0 ? z : 1
+  };
+  // Manual override is known. Auto with only the 1×1×1 placeholder is unknown calibration.
+  const placeholder = voxel.x_um === 1 && voxel.y_um === 1 && voxel.z_um === 1;
+  const known = mode === "manual" || !placeholder;
+  return { voxel, known };
+}
+
+function applyObjectSeedFrom3D(world: WorldPointUm): void {
+  const t0 = typeof performance !== "undefined" ? performance.now() : Date.now();
+  try {
+    if (!volumeSession || !lastDisplayLevelPayload || !inspectedSourceShape) {
+      throw new SeedMappingError("3D volume geometry not ready; load volume first", "invalid_geometry");
+    }
+    const { voxel, known } = readSourceVoxelForMapping();
+    const geometry = geometryFromLevelPayload(
+      lastDisplayLevelPayload,
+      inspectedSourceShape,
+      voxel,
+      known
+    );
+    const radiusRaw = Number(mustElement<HTMLInputElement>("object-seed-radius").value);
+    const radiusPx = Number.isFinite(radiusRaw) && radiusRaw > 0 ? radiusRaw : 10;
+    const maxDistVal = parseFloat(mustElement<HTMLInputElement>("object-seed-max-dist").value);
+    const max_tracking_dist_um = isNaN(maxDistVal) ? undefined : maxDistVal;
+    const mapped = worldToObjectSeed(world, geometry, radiusPx, {
+      clampZ: true,
+      maxTrackingDistUm: max_tracking_dist_um,
+      expectedRevision: geometry.sourceRevision
+    });
+    selectedObjectSeed = {
+      x: mapped.x,
+      y: mapped.y,
+      frame_index: mapped.frame_index,
+      radius: mapped.radius,
+      max_tracking_dist_um: mapped.max_tracking_dist_um,
+      type: "circle",
+      source_revision: mapped.source_revision,
+      seed_origin: "viewer_3d",
+      radius_unit: "px"
+    };
+    // Jump 2D scrubber to seed frame (global index).
+    if (inspectedFrameCount != null && selectedObjectSeed.frame_index < inspectedFrameCount) {
+      frameInput.value = String(selectedObjectSeed.frame_index);
+      frameSlider.value = String(selectedObjectSeed.frame_index);
+      updateFrameSliceLabel();
+    }
+    mustElement<HTMLInputElement>("object-seed-radius").value = String(Math.round(mapped.radius));
+    volumeSeedPickMode = false;
+    volumeSession.setSeedPickEnabled(false);
+    updateVolumeSeedPickButton();
+    void volumeSession.setSeedMarker(selectedObjectSeed, geometry);
+    updateObjectSeedStatus();
+    const t1 = typeof performance !== "undefined" ? performance.now() : Date.now();
+    const worldBack = objectSeedToWorld(selectedObjectSeed, geometry);
+    logAction(
+      "Set Object Seed (3D)",
+      `source=(${mapped.x}, ${mapped.y}, z=${mapped.frame_index}) r=${mapped.radius} px · origin=viewer_3d · revision=${mapped.source_revision ?? "none"} · pick_ms=${(t1 - t0).toFixed(1)} · world≈(${worldBack.x_um.toFixed(2)}, ${worldBack.y_um.toFixed(2)}, ${worldBack.z_um.toFixed(2)}) ${known ? "µm" : "µm(uncalibrated)"}`
+    );
+    volumeViewerStatus.textContent = `Seed from 3D · frame ${mapped.frame_index} · (${mapped.x}, ${mapped.y}) r=${Math.round(mapped.radius)} px · ${NAVIGATION_ONLY_LABEL}`;
+    // Same Milestone A path as 2D seed — no separate 3D tracker.
+    void previewStack();
+  } catch (error) {
+    const msg =
+      error instanceof SeedMappingError
+        ? error.message
+        : errorMessage(error);
+    volumeViewerStatus.textContent = msg;
+    volumeViewerStatus.classList.add("is-error");
+    logAction("3D Seed Mapping Failed", msg);
+  }
+}
+
+function syncVolumeSeedMarkerFromSelection(): void {
+  if (!volumeSession || !selectedObjectSeed || !lastDisplayLevelPayload || !inspectedSourceShape) {
+    volumeSession?.clearSeedMarker();
+    return;
+  }
+  try {
+    const { voxel, known } = readSourceVoxelForMapping();
+    const geometry = geometryFromLevelPayload(
+      lastDisplayLevelPayload,
+      inspectedSourceShape,
+      voxel,
+      known
+    );
+    void volumeSession.setSeedMarker(selectedObjectSeed, geometry);
+  } catch {
+    volumeSession.clearSeedMarker();
+  }
+}
+
+function setVolumeViewerUiLoading(message: string): void {
+  volumeViewerPanel.dataset.state = "loading";
+  volumeViewerStatus.textContent = message;
+  volumeViewerStatus.classList.remove("is-error");
+  volumeViewerFallback.hidden = false;
+  volumeViewerFallback.textContent = message;
+  volumeViewerCanvasWrap.hidden = true;
+  volumeViewerMeta.hidden = true;
+}
+
+function setVolumeViewerUiFallback(reason: VolumeFallbackReason, message: string): void {
+  volumeViewerPanel.dataset.state = "fallback";
+  volumeViewerStatus.textContent = message;
+  volumeViewerStatus.classList.add("is-error");
+  volumeViewerFallback.hidden = false;
+  volumeViewerFallback.textContent = message;
+  volumeViewerCanvasWrap.hidden = true;
+  volumeViewerMeta.hidden = reason === "feature_disabled";
+  if (reason !== "feature_disabled") {
+    volumeViewerMeta.hidden = false;
+    volumeViewerMeta.textContent = `fallback=${reason}; ${NAVIGATION_ONLY_LABEL}`;
+  }
+}
+
+function updateVolumeMetaLine(meta: NonNullable<VolumeViewerSession["readyMeta"]>): void {
+  const extent = worldExtentUm(meta.shapeZyx, meta.spacingUm);
+  volumeViewerMeta.hidden = false;
+  volumeViewerMeta.textContent = [
+    `level=${meta.level}`,
+    `shape_zyx=${meta.shapeZyx.join("×")}`,
+    `dtype=${meta.dtype}`,
+    `spacing_um=${meta.spacingUm.x_um}/${meta.spacingUm.y_um}/${meta.spacingUm.z_um}`,
+    `extent_um≈${extent.x.toFixed(2)}×${extent.y.toFixed(2)}×${extent.z.toFixed(2)}`,
+    `bytes=${meta.transferBytes}`,
+    `blend=${meta.blendMode}`,
+    `load_ms=${meta.loadMs.toFixed(0)}`,
+    `display_only=true`
+  ].join(" · ");
+}
+
+type VolumePerfRecord = {
+  reason: string;
+  t0: number;
+  tPyramidReady?: number;
+  tLevelDownloaded?: number;
+  tGpuReady?: number;
+  tFallback?: number;
+  firstPaintMs?: number;
+  gpuMountMs?: number;
+  transferBytes?: number;
+  level?: number;
+  fallbackReason?: string;
+  ok: boolean;
+};
+
+function volumePerfNow(): number {
+  return typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+}
+
+function publishVolumePerf(record: VolumePerfRecord): void {
+  const w = window as Window & { __morphostackVolumePerf?: VolumePerfRecord[] };
+  if (!Array.isArray(w.__morphostackVolumePerf)) {
+    w.__morphostackVolumePerf = [];
+  }
+  w.__morphostackVolumePerf.push(record);
+  // Cap history so long sessions do not grow unbounded.
+  if (w.__morphostackVolumePerf.length > 32) {
+    w.__morphostackVolumePerf.splice(0, w.__morphostackVolumePerf.length - 32);
+  }
+}
+
+/**
+ * Build/load bounded display pyramid level and mount VTK viewer.
+ * Never calls analyze/mesh metric endpoints; 2D path stays independent.
+ */
+async function loadVolumeViewer(options: { reason: string } = { reason: "manual" }): Promise<void> {
+  const gen = ++volumeLoadGen;
+  const perf: VolumePerfRecord = { reason: options.reason, t0: volumePerfNow(), ok: false };
+  if (volumeSession) {
+    volumeSession.dispose();
+    volumeSession = null;
+  }
+  volumeVtkRoot.replaceChildren();
+  volumeViewerCanvasWrap.hidden = true;
+
+  if (!volumeViewerEnable.checked || !isVolumeViewerEnabled()) {
+    setVolumeViewerUiFallback("feature_disabled", fallbackMessage("feature_disabled"));
+    perf.ok = false;
+    perf.fallbackReason = "feature_disabled";
+    perf.tFallback = volumePerfNow();
+    publishVolumePerf(perf);
+    return;
+  }
+
+  setVolumeViewerUiLoading(`Building display volume (${options.reason})…`);
+  try {
+    await ensureApiOnline();
+    if (gen !== volumeLoadGen) return;
+
+    const source = resolveStackSource();
+    const voxel = readVoxel();
+    let buildBody: Record<string, unknown>;
+    if (source.kind === "path") {
+      buildBody = {
+        path: source.path,
+        voxel,
+        max_level_bytes: DEFAULT_VOLUME_MAX_BYTES,
+        background: true
+      };
+    } else {
+      const stackId = await ensureUploadSession(source.file);
+      if (gen !== volumeLoadGen) return;
+      buildBody = {
+        stack_id: stackId,
+        voxel,
+        max_level_bytes: DEFAULT_VOLUME_MAX_BYTES,
+        background: true
+      };
+    }
+
+    const buildPayload = await apiPost<{
+      cache_key?: string;
+      state?: string;
+      levels_ready?: number[];
+      error?: string | null;
+    }>("/api/display-pyramid/build", buildBody);
+    if (gen !== volumeLoadGen) return;
+
+    const cacheKey = String(buildPayload.cache_key ?? "").trim();
+    if (!cacheKey) {
+      throw new VolumeViewerError(
+        "endpoint_error",
+        fallbackMessage("endpoint_error", "build response missing cache_key")
+      );
+    }
+    setVolumeViewerUiLoading(
+      `Display pyramid ${buildPayload.state ?? "queued"} — waiting for coarse level…`
+    );
+    await waitForPyramidLevelReady({
+      cacheKey,
+      intervalMs: 200,
+      timeoutMs: 120_000,
+      isCancelled: () => gen !== volumeLoadGen,
+      pollStatus: (key) =>
+        apiPost("/api/display-pyramid/status", { cache_key: key })
+    });
+    if (gen !== volumeLoadGen) return;
+    perf.tPyramidReady = volumePerfNow();
+
+    setVolumeViewerUiLoading("Downloading bounded display level…");
+    const levelPayload = await apiPost<DisplayLevelResponse>("/api/display-pyramid/level", {
+      cache_key: cacheKey,
+      max_bytes: DEFAULT_VOLUME_MAX_BYTES,
+      include_binary: true
+    });
+    if (gen !== volumeLoadGen) return;
+    perf.tLevelDownloaded = volumePerfNow();
+
+    // Hard isolation: never pass this payload into analyze/mesh metric code paths.
+    if (levelPayload.display_volume_spec && levelPayload.display_volume_spec.display_only === false) {
+      throw new VolumeViewerError(
+        "endpoint_error",
+        "Refusing non-display volume for navigation viewer"
+      );
+    }
+
+    setVolumeViewerUiLoading("Uploading volume to GPU…");
+    volumeViewerFallback.hidden = true;
+    volumeViewerCanvasWrap.hidden = false;
+    const { voxel: srcVoxel, known: calKnown } = readSourceVoxelForMapping();
+    const session = await VolumeViewerSession.mount({
+      container: volumeVtkRoot,
+      payload: levelPayload,
+      blendMode: readVolumeBlendMode(),
+      opacityGain: Number(volumeOpacityInput.value) || 0.35,
+      maxBytes: DEFAULT_VOLUME_MAX_BYTES,
+      sourceShapeZyx: inspectedSourceShape ?? undefined,
+      sourceVoxelSize: srcVoxel,
+      calibrationKnown: calKnown,
+      onWorldPick: (world) => {
+        applyObjectSeedFrom3D(world);
+      }
+    });
+    if (gen !== volumeLoadGen) {
+      session.dispose();
+      return;
+    }
+    volumeSession = session;
+    lastDisplayLevelPayload = levelPayload;
+    const meta = session.readyMeta;
+    volumeViewerPanel.dataset.state = "ready";
+    volumeViewerStatus.textContent = meta
+      ? `Ready · level ${meta.level} · ${NAVIGATION_ONLY_LABEL}`
+      : `Ready · ${NAVIGATION_ONLY_LABEL}`;
+    volumeViewerStatus.classList.remove("is-error");
+    volumeViewerFallback.hidden = true;
+    volumeViewerCanvasWrap.hidden = false;
+    volumeSeedPickMode = false;
+    session.setSeedPickEnabled(false);
+    updateVolumeSeedPickButton();
+    syncVolumeSeedMarkerFromSelection();
+    perf.tGpuReady = volumePerfNow();
+    perf.firstPaintMs = perf.tGpuReady - perf.t0;
+    perf.gpuMountMs = meta?.loadMs;
+    perf.transferBytes = meta?.transferBytes;
+    perf.level = meta?.level;
+    perf.ok = true;
+    publishVolumePerf(perf);
+    if (meta) {
+      updateVolumeMetaLine(meta);
+      logAction(
+        "Volume Viewer Ready",
+        `cache_key=${cacheKey}, level=${meta.level}, bytes=${meta.transferBytes}, load_ms=${meta.loadMs.toFixed(0)}, first_paint_ms=${perf.firstPaintMs.toFixed(0)}, ${NAVIGATION_ONLY_LABEL}`
+      );
+    }
+  } catch (error) {
+    if (gen !== volumeLoadGen) return;
+    if (volumeSession) {
+      volumeSession.dispose();
+      volumeSession = null;
+    }
+    volumeVtkRoot.replaceChildren();
+    volumeViewerCanvasWrap.hidden = true;
+    const reason: VolumeFallbackReason =
+      error instanceof VolumeViewerError ? error.reason : "endpoint_error";
+    const message =
+      error instanceof VolumeViewerError
+        ? error.message
+        : fallbackMessage("endpoint_error", errorMessage(error));
+    setVolumeViewerUiFallback(reason, message);
+    perf.ok = false;
+    perf.fallbackReason = reason;
+    perf.tFallback = volumePerfNow();
+    perf.firstPaintMs = perf.tFallback - perf.t0;
+    publishVolumePerf(perf);
+    logAction("Volume Viewer Fallback", `${reason}: ${message}`);
+  }
 }
 
 function rememberUploadSession(stackId: string, file: File): void {

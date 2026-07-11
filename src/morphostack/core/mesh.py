@@ -11,7 +11,17 @@ from pathlib import Path
 
 import numpy as np
 
-from morphostack.core.models import VoxelSize
+from morphostack.core.models import (
+    AuthoritativeMask,
+    DisplayMesh,
+    DisplayVolumeSpec,
+    ResultAuthorityError,
+    ScientificMesh,
+    SegmentationCandidate,
+    VoxelSize,
+    reject_non_scientific_input,
+    require_authoritative_mask,
+)
 from morphostack.core.metrics import normalize_points, polygon_area
 
 
@@ -85,13 +95,150 @@ class SliceVolumeMeasurement:
 
 @dataclass(frozen=True)
 class MeshGeometry:
+    """Mesh product for export/preview.
+
+    ``measurement`` is always from the **complete** scientific triangulation
+    (before any display weld/compact). Display geometry fields are optional
+    provenance for preview/LOD only.
+    """
+
     vertices_xyz: np.ndarray
     faces: np.ndarray
     measurement: MeshMeasurement
+    # Display derivative provenance (None → complete scientific geometry).
+    display_only: bool = False
+    display_method: str | None = None
+    source_vertex_count: int | None = None
+    source_face_count: int | None = None
+    boundary_edge_count_source: int | None = None
+    boundary_edge_count_display: int | None = None
+    within_face_budget: bool | None = None
+    face_budget: int | None = None
+    scientific_mesh_revision: str | None = None
+
+
+DISPLAY_METHOD_WELD_COMPACT = "weld_compact"
+DISPLAY_MESH_ALGORITHM_VERSION = "1"
+
+
+def count_boundary_edges(faces: np.ndarray) -> int:
+    """Count edges that appear in exactly one triangle (open boundary)."""
+
+    face_idx = np.asarray(faces, dtype=np.int64)
+    if face_idx.size == 0:
+        return 0
+    if face_idx.ndim != 2 or face_idx.shape[1] != 3:
+        raise ValueError("faces must have shape (n, 3)")
+    edges = np.vstack(
+        (
+            face_idx[:, [0, 1]],
+            face_idx[:, [1, 2]],
+            face_idx[:, [2, 0]],
+        )
+    )
+    edges = np.sort(edges, axis=1)
+    _uniq, counts = np.unique(edges, axis=0, return_counts=True)
+    return int(np.count_nonzero(counts == 1))
+
+
+def weld_compact_mesh(
+    vertices_xyz: np.ndarray,
+    faces: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, dict[str, object]]:
+    """Deterministic pure-NumPy weld + compact for display meshes.
+
+    Rules (documented, not silent):
+    - Weld vertices that share **exact** float64 position identity (bit-identical
+      rows). No fuzzy/tolerance merge of nearby distinct samples.
+    - Drop degenerate faces (repeated vertex indices after weld).
+    - Drop duplicate faces (same three indices, order-insensitive).
+    - Compact unused vertices and reindex faces densely.
+
+    Returns ``(vertices, faces, stats)`` where stats include source/output counts
+    and boundary-edge diagnostics.
+    """
+
+    verts = np.ascontiguousarray(np.asarray(vertices_xyz, dtype=np.float64))
+    face_idx = np.ascontiguousarray(np.asarray(faces, dtype=np.int64))
+    if verts.ndim != 2 or verts.shape[1] != 3:
+        raise ValueError("vertices_xyz must have shape (n, 3)")
+    if face_idx.ndim != 2 or face_idx.shape[1] != 3:
+        raise ValueError("faces must have shape (n, 3)")
+
+    source_v = int(len(verts))
+    source_f = int(len(face_idx))
+    boundary_source = count_boundary_edges(face_idx) if source_f else 0
+
+    if source_v == 0 or source_f == 0:
+        empty_v = np.zeros((0, 3), dtype=np.float64)
+        empty_f = np.zeros((0, 3), dtype=np.int64)
+        return empty_v, empty_f, {
+            "display_method": DISPLAY_METHOD_WELD_COMPACT,
+            "source_vertex_count": source_v,
+            "source_face_count": source_f,
+            "output_vertex_count": 0,
+            "output_face_count": 0,
+            "boundary_edge_count_source": boundary_source,
+            "boundary_edge_count_display": 0,
+            "welded_vertex_count": 0,
+            "removed_degenerate_faces": 0,
+            "removed_duplicate_faces": 0,
+        }
+
+    # Exact position weld (marching-cubes coincident vertices share values).
+    unique_verts, inverse = np.unique(verts, axis=0, return_inverse=True)
+    remapped = inverse[face_idx]
+
+    a, b, c = remapped[:, 0], remapped[:, 1], remapped[:, 2]
+    non_degen = (a != b) & (b != c) & (a != c)
+    removed_degen = int(np.count_nonzero(~non_degen))
+    faces_nd = remapped[non_degen]
+
+    removed_dup = 0
+    if len(faces_nd) == 0:
+        compact_faces = np.zeros((0, 3), dtype=np.int64)
+        compact_verts = np.zeros((0, 3), dtype=np.float64)
+    else:
+        # Order-insensitive unique faces; keep first occurrence winding.
+        sorted_faces = np.sort(faces_nd, axis=1)
+        _unique_keys, first_idx = np.unique(sorted_faces, axis=0, return_index=True)
+        faces_unique = faces_nd[np.sort(first_idx)]
+        removed_dup = int(len(faces_nd) - len(faces_unique))
+
+        used = np.unique(faces_unique.ravel())
+        remap = np.full(len(unique_verts), -1, dtype=np.int64)
+        remap[used] = np.arange(len(used), dtype=np.int64)
+        compact_verts = unique_verts[used]
+        compact_faces = remap[faces_unique]
+
+    boundary_display = count_boundary_edges(compact_faces) if len(compact_faces) else 0
+    stats: dict[str, object] = {
+        "display_method": DISPLAY_METHOD_WELD_COMPACT,
+        "source_vertex_count": source_v,
+        "source_face_count": source_f,
+        "output_vertex_count": int(len(compact_verts)),
+        "output_face_count": int(len(compact_faces)),
+        "boundary_edge_count_source": boundary_source,
+        "boundary_edge_count_display": boundary_display,
+        "welded_vertex_count": int(source_v - len(unique_verts)),
+        "removed_degenerate_faces": removed_degen,
+        "removed_duplicate_faces": removed_dup,
+        "algorithm_version": DISPLAY_MESH_ALGORITHM_VERSION,
+    }
+    return compact_verts, compact_faces, stats
 
 
 def surface_area_volume(vertices: np.ndarray, faces: np.ndarray) -> MeshMeasurement:
     """Calculate surface area and enclosed signed-volume magnitude from triangles."""
+
+    # Authority-typed products must not be treated as raw vertex arrays.
+    reject_non_scientific_input(vertices, context="surface_area_volume")
+    reject_non_scientific_input(faces, context="surface_area_volume")
+    if isinstance(vertices, DisplayMesh) or isinstance(faces, DisplayMesh):
+        raise ResultAuthorityError(
+            "surface_area_volume rejects DisplayMesh; use ScientificMesh measurements",
+            role="display_mesh",
+        )
 
     verts = np.asarray(vertices, dtype=np.float64)
     face_idx = np.asarray(faces, dtype=np.int64)
@@ -109,35 +256,159 @@ def surface_area_volume(vertices: np.ndarray, faces: np.ndarray) -> MeshMeasurem
     return MeshMeasurement(surface_area_um2=surface_area, volume_um3=volume)
 
 
-def marching_cubes_geometry(mask_stack: np.ndarray, voxel: VoxelSize, *, max_faces: int | None = None) -> MeshGeometry:
-    """Run marching cubes on a (z, y, x) binary stack and return display geometry."""
+def _mask_array_for_scientific(
+    mask_stack: np.ndarray | AuthoritativeMask,
+    *,
+    context: str,
+) -> np.ndarray:
+    """Extract a full-resolution mask array, rejecting display/candidate types."""
+
+    reject_non_scientific_input(mask_stack, context=context)
+    if isinstance(mask_stack, AuthoritativeMask):
+        return require_authoritative_mask(mask_stack, context=context).mask_array()
+    if isinstance(
+        mask_stack,
+        (DisplayVolumeSpec, DisplayMesh, SegmentationCandidate, ScientificMesh),
+    ):
+        raise ResultAuthorityError(
+            f"{context} rejects {type(mask_stack).__name__}",
+            role=getattr(mask_stack, "role", None),
+        )
+    mask = np.asarray(mask_stack)
+    if mask.ndim != 3:
+        raise ValueError("marching cubes expects a 3D stack shaped as (z, y, x)")
+    return mask
+
+
+def marching_cubes_geometry(
+    mask_stack: np.ndarray | AuthoritativeMask,
+    voxel: VoxelSize,
+    *,
+    max_faces: int | None = None,
+    display_derivative: bool | None = None,
+) -> MeshGeometry:
+    """Run marching cubes on a (z, y, x) binary stack.
+
+    Measurements are always taken on the **complete** triangulation before any
+    display processing. When a display derivative is requested (``max_faces``
+    set, or ``display_derivative=True``), faces/vertices are welded and compacted
+    with :func:`weld_compact_mesh` (``display_method=weld_compact``). Face-stride
+    LOD is **not** used.
+
+    If the welded mesh still exceeds ``max_faces``, the full welded mesh is
+    returned and ``within_face_budget=False`` is recorded — no hole-inducing
+    stride is applied.
+
+    Accepts a raw full-resolution mask array (legacy) or an
+    :class:`AuthoritativeMask`. Display volumes, display meshes, and
+    provisional/partial candidates are rejected.
+    """
 
     try:
         from skimage import measure
     except Exception as exc:  # pragma: no cover - dependency-specific branch
         raise RuntimeError("scikit-image is required for marching cubes") from exc
 
-    mask = np.asarray(mask_stack)
-    if mask.ndim != 3:
-        raise ValueError("marching cubes expects a 3D stack shaped as (z, y, x)")
+    mask = _mask_array_for_scientific(mask_stack, context="marching_cubes_geometry")
     verts, faces, _, _ = measure.marching_cubes(
         mask.astype(np.uint8),
         level=0.5,
         spacing=voxel.marching_cubes_spacing,
     )
+    # Measure complete calibrated mesh before any display processing.
     measurement = surface_area_volume(verts, faces)
-    display_faces = faces
-    if max_faces is not None and max_faces > 0 and len(display_faces) > max_faces:
-        stride = int(np.ceil(len(display_faces) / max_faces))
-        display_faces = display_faces[::stride]
-    vertices_xyz = verts[:, [2, 1, 0]]
-    return MeshGeometry(vertices_xyz=vertices_xyz, faces=display_faces, measurement=measurement)
+    vertices_xyz = np.ascontiguousarray(verts[:, [2, 1, 0]], dtype=np.float64)
+    faces_full = np.ascontiguousarray(faces, dtype=np.int64)
+
+    use_display = display_derivative is True or (
+        display_derivative is None and max_faces is not None
+    )
+    if not use_display:
+        return MeshGeometry(
+            vertices_xyz=vertices_xyz,
+            faces=faces_full,
+            measurement=measurement,
+            display_only=False,
+            display_method=None,
+            source_vertex_count=int(len(vertices_xyz)),
+            source_face_count=int(len(faces_full)),
+            boundary_edge_count_source=count_boundary_edges(faces_full),
+            boundary_edge_count_display=None,
+            within_face_budget=None,
+            face_budget=None,
+        )
+
+    disp_verts, disp_faces, stats = weld_compact_mesh(vertices_xyz, faces_full)
+    budget = int(max_faces) if max_faces is not None and max_faces > 0 else None
+    within_budget = True if budget is None else int(len(disp_faces)) <= budget
+    # Never reintroduce face-stride holes to meet a face budget.
+    return MeshGeometry(
+        vertices_xyz=disp_verts,
+        faces=disp_faces,
+        measurement=measurement,
+        display_only=True,
+        display_method=DISPLAY_METHOD_WELD_COMPACT,
+        source_vertex_count=int(stats["source_vertex_count"]),
+        source_face_count=int(stats["source_face_count"]),
+        boundary_edge_count_source=int(stats["boundary_edge_count_source"]),
+        boundary_edge_count_display=int(stats["boundary_edge_count_display"]),
+        within_face_budget=within_budget,
+        face_budget=budget,
+    )
 
 
-def marching_cubes_measurement(mask_stack: np.ndarray, voxel: VoxelSize) -> MeshMeasurement:
+def marching_cubes_measurement(
+    mask_stack: np.ndarray | AuthoritativeMask,
+    voxel: VoxelSize,
+) -> MeshMeasurement:
     """Run marching cubes on a (z, y, x) binary stack and measure the mesh."""
 
     return marching_cubes_geometry(mask_stack, voxel).measurement
+
+
+def scientific_mesh_from_authoritative_mask(
+    mask: AuthoritativeMask,
+    *,
+    algorithm: str = "skimage_lewiner_marching_cubes",
+    algorithm_version: str | None = None,
+) -> ScientificMesh | None:
+    """Build a complete ScientificMesh from an accepted AuthoritativeMask.
+
+    This is the scientific measurement entry point for typed authority objects.
+    DisplayVolumeSpec / DisplayMesh / provisional candidates are rejected.
+    """
+
+    auth = require_authoritative_mask(mask, context="scientific_mesh_from_authoritative_mask")
+    if np.count_nonzero(auth.mask) == 0:
+        return None
+    geometry = marching_cubes_geometry(
+        auth, auth.voxel_size, max_faces=None, display_derivative=False
+    )
+    version = algorithm_version or auth.algorithm_version
+    # Full complete faces for scientific authority (no display weld).
+    return ScientificMesh(
+        source_mask_revision=auth.analysis_result_revision,
+        analysis_result_revision=auth.analysis_result_revision,
+        vertices_xyz=geometry.vertices_xyz,
+        faces=geometry.faces,
+        surface_area_um2=geometry.measurement.surface_area_um2,
+        volume_um3=geometry.measurement.volume_um3,
+        algorithm=algorithm,
+        algorithm_version=str(version),
+        complete=True,
+    )
+
+
+def measure_authoritative_mask(mask: AuthoritativeMask) -> MeshMeasurement | None:
+    """Scientific surface/volume measurement for an accepted AuthoritativeMask only."""
+
+    scientific = scientific_mesh_from_authoritative_mask(mask)
+    if scientific is None:
+        return None
+    return MeshMeasurement(
+        surface_area_um2=scientific.surface_area_um2,
+        volume_um3=scientific.volume_um3,
+    )
 
 
 def contours_to_mask_stack(
@@ -325,13 +596,31 @@ def _contiguous_index_ranges(indices: Sequence[int]) -> tuple[tuple[int, int], .
 
 
 def measure_contour_stack(
-    contours: list[np.ndarray | None] | tuple[np.ndarray | None, ...],
+    contours: list[np.ndarray | None] | tuple[np.ndarray | None, ...] | AuthoritativeMask,
     *,
-    shape: tuple[int, int, int],
-    voxel: VoxelSize,
+    shape: tuple[int, int, int] | None = None,
+    voxel: VoxelSize | None = None,
 ) -> MeshMeasurement | None:
-    """Rasterize contours and measure their 3D marching-cubes mesh."""
+    """Rasterize contours and measure their 3D marching-cubes mesh.
 
+    Legacy path: contour sequence + shape + voxel.
+    Authority path: pass an :class:`AuthoritativeMask` as the first argument
+    (shape/voxel taken from the mask). Display/candidate types are rejected.
+    """
+
+    reject_non_scientific_input(contours, context="measure_contour_stack")
+    if isinstance(contours, AuthoritativeMask):
+        return measure_authoritative_mask(contours)
+    if isinstance(
+        contours,
+        (DisplayVolumeSpec, DisplayMesh, SegmentationCandidate, ScientificMesh),
+    ):
+        raise ResultAuthorityError(
+            f"measure_contour_stack rejects {type(contours).__name__}",
+            role=getattr(contours, "role", None),
+        )
+    if shape is None or voxel is None:
+        raise TypeError("measure_contour_stack requires shape= and voxel= for contour inputs")
     mask_stack = contours_to_mask_stack(contours, shape=shape)
     if np.count_nonzero(mask_stack) == 0:
         return None
@@ -344,7 +633,7 @@ def contour_stack_mesh_geometry(
     shape: tuple[int, int, int],
     voxel: VoxelSize,
     downsample: int = 1,
-    max_faces: int = 12000,
+    max_faces: int | None = 12000,
     align_slices: bool = False,
 ) -> MeshGeometry | None:
     """Rasterize contours into a calibrated mesh suitable for web display.
@@ -352,7 +641,21 @@ def contour_stack_mesh_geometry(
     ``align_slices`` remains available for visual comparison only. It is off by
     default so preview geometry and reported measurements retain the physical
     XY positions and calibrated Z spacing of the acquired stack.
+
+    DisplayVolumeSpec / DisplayMesh / provisional candidates are not valid
+    contour inputs. For scientific metrics prefer
+    :func:`scientific_mesh_from_authoritative_mask`.
     """
+
+    reject_non_scientific_input(contours, context="contour_stack_mesh_geometry")
+    if isinstance(
+        contours,
+        (DisplayVolumeSpec, DisplayMesh, SegmentationCandidate, AuthoritativeMask, ScientificMesh),
+    ):
+        raise ResultAuthorityError(
+            f"contour_stack_mesh_geometry expects contour sequences, not {type(contours).__name__}",
+            role=getattr(contours, "role", None),
+        )
 
     contours = _filter_outlier_contours(contours)
     mask_stack = contours_to_mask_stack(contours, shape=shape)
@@ -372,7 +675,52 @@ def contour_stack_mesh_geometry(
             z_um=voxel.z_um * factor,
         )
 
-    return marching_cubes_geometry(display_mask, display_voxel, max_faces=max_faces)
+    # max_faces=None → complete scientific geometry; otherwise display weld/compact.
+    if max_faces is None:
+        return marching_cubes_geometry(
+            display_mask,
+            display_voxel,
+            max_faces=None,
+            display_derivative=False,
+        )
+    return marching_cubes_geometry(
+        display_mask,
+        display_voxel,
+        max_faces=max_faces,
+        display_derivative=True,
+    )
+
+
+def display_geometry_from_complete(
+    complete: MeshGeometry,
+    *,
+    max_faces: int | None = None,
+    scientific_mesh_revision: str | None = None,
+) -> MeshGeometry:
+    """Build a weld/compact display MeshGeometry from a complete scientific mesh.
+
+    ``complete.measurement`` is preserved (must already be from full faces).
+    """
+
+    if complete.display_only and complete.display_method == DISPLAY_METHOD_WELD_COMPACT:
+        return complete
+    disp_verts, disp_faces, stats = weld_compact_mesh(complete.vertices_xyz, complete.faces)
+    budget = int(max_faces) if max_faces is not None and max_faces > 0 else None
+    within_budget = True if budget is None else int(len(disp_faces)) <= budget
+    return MeshGeometry(
+        vertices_xyz=disp_verts,
+        faces=disp_faces,
+        measurement=complete.measurement,
+        display_only=True,
+        display_method=DISPLAY_METHOD_WELD_COMPACT,
+        source_vertex_count=int(stats["source_vertex_count"]),
+        source_face_count=int(stats["source_face_count"]),
+        boundary_edge_count_source=int(stats["boundary_edge_count_source"]),
+        boundary_edge_count_display=int(stats["boundary_edge_count_display"]),
+        within_face_budget=within_budget,
+        face_budget=budget,
+        scientific_mesh_revision=scientific_mesh_revision,
+    )
 
 
 def _zoom_mask(mask: np.ndarray, scale: float) -> np.ndarray:

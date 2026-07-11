@@ -106,6 +106,7 @@ def test_exact_polar_preview_serializes_null_effective(client, tmp_path, monkeyp
             "object_seed": {"x": 32, "y": 32, "frame_index": 0, "radius": 14},
             "prefer_opencv": False,
             "fast_preview": False,
+            "force_sync_exact": True,
         },
     )
     assert response.status_code == 200, response.text
@@ -143,6 +144,8 @@ def test_exact_seeded_failed_frame_never_claims_ui_slider(client, tmp_path, monk
             "object_seed": {"x": 32, "y": 32, "frame_index": 0, "radius": 14},
             "prefer_opencv": False,
             "fast_preview": False,
+            # Sync path so monkeypatched track is used (not background job pending).
+            "force_sync_exact": True,
         },
     )
     assert response.status_code == 200
@@ -193,6 +196,84 @@ def test_adaptive_seeded_frame_separates_requested_and_effective():
     )
     assert "Requested threshold" in report
     assert "effective_threshold" in report
+
+
+def test_threshold_endpoint_returns_contract_fields(client, tmp_path):
+    path = _write_ring(tmp_path / "thr.tif")
+    response = client.post(
+        "/threshold",
+        json={"path": str(path), "method": "auto"},
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert "threshold" in payload and "method" in payload
+    assert payload["threshold_semantics"] == "ui_starting_guess"
+    assert payload["suggestion_scope"] == "stack_sample"
+    assert payload["threshold_contract_version"] == "1"
+    assert payload["authoritative_for"] == []
+    assert "seeded_exact_contour" in payload["not_authoritative_for"]
+    assert "histogram_domain" in payload
+    assert payload["histogram_domain"]["finite_only"] is True
+    assert isinstance(payload.get("warnings"), list)
+    assert payload["warnings"]
+
+
+def test_threshold_source_revision_path_uses_path_identity(client, tmp_path):
+    from morphostack.core.stack_cache import path_source_identity
+
+    path = _write_ring(tmp_path / "path_rev.tif")
+    expected = path_source_identity(path)
+    response = client.post("/threshold", json={"path": str(path), "method": "percentile"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["source_identity_kind"] == "path"
+    assert payload["source_revision"] == expected
+    assert str(payload["source_revision"]).startswith("path:")
+    assert "|m" in payload["source_revision"] and "|s" in payload["source_revision"]
+    # Filename alone is not a revision.
+    assert payload["source_revision"] != path.name
+    assert payload["source_revision"] != str(path)
+
+
+def test_threshold_source_revision_session_uses_session_identity(client, tmp_path):
+    path = _write_ring(tmp_path / "sess.tif")
+    with path.open("rb") as handle:
+        opened = client.post(
+            "/upload/session",
+            files={"file": ("sess.tif", handle, "image/tiff")},
+        )
+    assert opened.status_code == 200
+    stack_id = opened.json()["stack_id"]
+    response = client.post(
+        "/threshold",
+        json={"stack_id": stack_id, "method": "percentile"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["source_identity_kind"] == "session"
+    assert payload["source_revision"] == f"session:{stack_id}"
+    assert not str(payload["source_revision"]).endswith(".tif")
+
+
+def test_threshold_multipart_ephemeral_revision_is_null_not_filename(client, tmp_path):
+    path = _write_ring(tmp_path / "multi.tif")
+    with path.open("rb") as handle:
+        response = client.post(
+            "/upload/threshold",
+            files={"file": ("pretty_name.tif", handle, "image/tiff")},
+            data={"method": "percentile"},
+        )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["source_identity_kind"] == "upload_ephemeral"
+    assert payload["source_revision"] is None
+    # Display name may be the client filename; must not be sold as revision.
+    assert payload.get("source_path") in {"pretty_name.tif", "multi.tif"} or payload.get(
+        "source_path"
+    )
+    assert payload["source_revision"] != "pretty_name.tif"
+    assert payload["source_revision"] != path.name
+    assert any("ephemeral" in w.lower() or "null" in w.lower() for w in payload.get("warnings", []))
 
 
 def test_provisional_preview_reports_provisional_global(client, tmp_path):

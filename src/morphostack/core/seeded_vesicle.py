@@ -12,7 +12,9 @@ centroid (GUVs float), and applies IoU + multi-feature continuity gates.
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any, Literal
 
 import numpy as np
 
@@ -57,8 +59,44 @@ def _gaussian(image: np.ndarray, sigma: float = 1.0) -> np.ndarray:
         return np.asarray(image, dtype=np.float64)
 
 
-def _bilateral(img: np.ndarray, sigma_spatial: float = 1.5) -> np.ndarray:
-    """Edge-preserving bilateral filter. Better than Gaussian for membrane images."""
+# Bilateral backend selection (packet 05 experiment).
+# Default remains skimage: OpenCV substitution was rejected on mask IoU parity
+# (G-A5). OpenCV is retained as an opt-in path for re-bench / re-review only.
+BilateralBackend = Literal["skimage", "opencv", "auto"]
+_BILATERAL_BACKEND: BilateralBackend = "skimage"
+_LAST_BILATERAL_IMPL: str = "none"
+
+
+def set_bilateral_backend(backend: BilateralBackend) -> None:
+    """Select denoise implementation for exact seeded crops.
+
+    ``skimage`` — reference / production default (scientific baseline).
+    ``opencv`` — OpenCV float path only; raises if unsupported then falls back.
+    ``auto`` — try OpenCV when supported, else skimage (explicit fallback).
+    """
+    global _BILATERAL_BACKEND
+    if backend not in ("skimage", "opencv", "auto"):
+        raise ValueError(f"unsupported bilateral backend: {backend!r}")
+    _BILATERAL_BACKEND = backend
+
+
+def get_bilateral_backend() -> BilateralBackend:
+    return _BILATERAL_BACKEND
+
+
+def last_bilateral_impl() -> str:
+    """Which implementation last ran: skimage | opencv | gaussian_fallback | none."""
+    return _LAST_BILATERAL_IMPL
+
+
+def _bilateral_win_size(sigma_spatial: float) -> int:
+    """Match skimage.restoration.denoise_bilateral default window sizing."""
+    return max(5, 2 * int(math.ceil(3.0 * float(sigma_spatial))) + 1)
+
+
+def _bilateral_skimage(img: np.ndarray, sigma_spatial: float = 1.5) -> np.ndarray:
+    """Reference bilateral: skimage denoise_bilateral on peak-normalized float."""
+    global _LAST_BILATERAL_IMPL
     try:
         from skimage.restoration import denoise_bilateral
 
@@ -66,10 +104,205 @@ def _bilateral(img: np.ndarray, sigma_spatial: float = 1.5) -> np.ndarray:
         peak = float(np.max(img_f)) if img_f.size else 0.0
         if peak > 0:
             img_f = img_f / peak
+        # sigma_color=None -> image.std() on the normalized image (skimage default).
         out = denoise_bilateral(img_f, sigma_spatial=float(sigma_spatial), channel_axis=None)
+        _LAST_BILATERAL_IMPL = "skimage"
         return np.asarray(out, dtype=np.float64) * (peak if peak > 0 else 1.0)
     except Exception:
+        _LAST_BILATERAL_IMPL = "gaussian_fallback"
         return _gaussian(img, sigma=float(sigma_spatial))
+
+
+def _opencv_bilateral_supported(img: np.ndarray) -> bool:
+    """OpenCV bilateralFilter: 2D finite array, 8-bit or float, CPU only."""
+    try:
+        import cv2  # noqa: F401
+    except Exception:
+        return False
+    arr = np.asarray(img)
+    if arr.ndim != 2 or arr.size == 0:
+        return False
+    if arr.dtype.kind not in "iuf":
+        return False
+    if not np.isfinite(arr).all():
+        return False
+    return True
+
+
+def _bilateral_opencv(img: np.ndarray, sigma_spatial: float = 1.5) -> np.ndarray:
+    """OpenCV bilateral mapped toward skimage units (float32, no uint8 coercion).
+
+    Parameter mapping (not identical algorithms):
+    - Input scaled by peak to [0, 1] float32 (matches skimage [0,1] domain).
+    - ``sigmaSpace`` = ``sigma_spatial`` (pixels).
+    - ``sigmaColor`` = std of the normalized crop (skimage default when
+      ``sigma_color=None``).
+    - ``d`` = skimage ``win_size`` = max(5, 2*ceil(3*sigma_spatial)+1).
+    - ``borderType`` = BORDER_CONSTANT (skimage mode='constant', cval=0).
+    Output restored by peak. Does not quantize to uint8.
+    """
+    global _LAST_BILATERAL_IMPL
+    import cv2
+
+    if not _opencv_bilateral_supported(img):
+        raise ValueError("opencv bilateral unsupported for this array")
+
+    img_f = np.asarray(img, dtype=np.float64)
+    peak = float(np.max(img_f)) if img_f.size else 0.0
+    if peak <= 0.0:
+        _LAST_BILATERAL_IMPL = "opencv"
+        return img_f.copy()
+
+    # Preserve source precision: float32 in [0,1], not uint8.
+    src = np.ascontiguousarray(img_f / peak, dtype=np.float32)
+    d = int(_bilateral_win_size(sigma_spatial))
+    sigma_space = float(sigma_spatial)
+    sigma_color = float(np.std(src))
+    if not np.isfinite(sigma_color) or sigma_color <= 0.0:
+        # Flat / empty crop: no color mixing; still run kernel for stability.
+        sigma_color = 1e-6
+
+    out = cv2.bilateralFilter(
+        src,
+        d=d,
+        sigmaColor=sigma_color,
+        sigmaSpace=sigma_space,
+        borderType=cv2.BORDER_CONSTANT,
+    )
+    _LAST_BILATERAL_IMPL = "opencv"
+    return np.asarray(out, dtype=np.float64) * peak
+
+
+def _bilateral(img: np.ndarray, sigma_spatial: float = 1.5) -> np.ndarray:
+    """Edge-preserving bilateral filter. Better than Gaussian for membrane images.
+
+    Backend is ``get_bilateral_backend()`` (default ``skimage``). OpenCV is only
+    used for ``opencv`` / ``auto`` and only when dtype/shape are supported;
+    otherwise falls back to skimage explicitly (see ``last_bilateral_impl()``).
+    """
+    backend = _BILATERAL_BACKEND
+    if backend in ("opencv", "auto") and _opencv_bilateral_supported(img):
+        try:
+            return _bilateral_opencv(img, sigma_spatial=sigma_spatial)
+        except Exception:
+            # Explicit fallback — never silent Gaussian when OpenCV was requested.
+            return _bilateral_skimage(img, sigma_spatial=sigma_spatial)
+    return _bilateral_skimage(img, sigma_spatial=sigma_spatial)
+
+
+# ---------------------------------------------------------------------------
+# Packet 06 — exact-path stage counters + MorphGAC clean-frame gate
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ExactPathCounters:
+    """Process-local counters for segment_slice_seeded attribution."""
+
+    segment_calls: int = 0
+    morphgac_calls: int = 0
+    morphgac_skipped_clean: int = 0
+    full_qc_skipped_clean: int = 0
+    split_attempts: int = 0
+    polar_repair_attempts: int = 0
+    merge_rejects: int = 0
+    accepted: int = 0
+    clean_frame_hits: int = 0
+    suspicion_escalations: int = 0
+
+    def as_dict(self) -> dict[str, int]:
+        return {
+            "segment_calls": int(self.segment_calls),
+            "morphgac_calls": int(self.morphgac_calls),
+            "morphgac_skipped_clean": int(self.morphgac_skipped_clean),
+            "full_qc_skipped_clean": int(self.full_qc_skipped_clean),
+            "split_attempts": int(self.split_attempts),
+            "polar_repair_attempts": int(self.polar_repair_attempts),
+            "merge_rejects": int(self.merge_rejects),
+            "accepted": int(self.accepted),
+            "clean_frame_hits": int(self.clean_frame_hits),
+            "suspicion_escalations": int(self.suspicion_escalations),
+        }
+
+    def reset(self) -> None:
+        self.segment_calls = 0
+        self.morphgac_calls = 0
+        self.morphgac_skipped_clean = 0
+        self.full_qc_skipped_clean = 0
+        self.split_attempts = 0
+        self.polar_repair_attempts = 0
+        self.merge_rejects = 0
+        self.accepted = 0
+        self.clean_frame_hits = 0
+        self.suspicion_escalations = 0
+
+
+_EXACT_PATH_COUNTERS = ExactPathCounters()
+# Skip MorphGAC only when pre-registered clean-frame rule holds.
+# Packet-06 production default: False (always MorphGAC when refine=True).
+# Rejected for cap/gap identity regressions and A6 performance exit miss.
+# Instrumentation still records skips when the switch is enabled for re-bench.
+_GATE_SKIP_MORPHGAC_CLEAN: bool = False
+
+
+def reset_exact_path_counters() -> None:
+    _EXACT_PATH_COUNTERS.reset()
+
+
+def get_exact_path_counters() -> dict[str, int]:
+    return _EXACT_PATH_COUNTERS.as_dict()
+
+
+def set_exact_path_gating_policy(*, skip_morphgac_when_clean: bool | None = None) -> dict[str, bool]:
+    """Configure MorphGAC clean-frame gate. None leaves the flag unchanged."""
+    global _GATE_SKIP_MORPHGAC_CLEAN
+    if skip_morphgac_when_clean is not None:
+        _GATE_SKIP_MORPHGAC_CLEAN = bool(skip_morphgac_when_clean)
+    return get_exact_path_gating_policy()
+
+
+def get_exact_path_gating_policy() -> dict[str, bool]:
+    return {"skip_morphgac_when_clean": bool(_GATE_SKIP_MORPHGAC_CLEAN)}
+
+
+def set_qc_refinement_gating(
+    *,
+    staged_full_qc: bool | None = None,
+    skip_morphgac_when_clean: bool | None = None,
+) -> dict[str, bool]:
+    """Combined packet-06 policy switch (slice_qc + MorphGAC).
+
+    Reference/rollback path: both False (full QC + MorphGAC always on exact path).
+    """
+    from morphostack.core.slice_qc import set_qc_gating_policy
+
+    set_qc_gating_policy(staged_full_qc=staged_full_qc)
+    set_exact_path_gating_policy(skip_morphgac_when_clean=skip_morphgac_when_clean)
+    return get_qc_refinement_gating()
+
+
+def get_qc_refinement_gating() -> dict[str, bool]:
+    from morphostack.core.slice_qc import get_qc_gating_policy
+
+    out = dict(get_qc_gating_policy())
+    out.update(get_exact_path_gating_policy())
+    return out
+
+
+def reset_qc_refinement_counters() -> None:
+    from morphostack.core.slice_qc import reset_qc_stage_counters
+
+    reset_exact_path_counters()
+    reset_qc_stage_counters()
+
+
+def get_qc_refinement_counters() -> dict[str, int]:
+    from morphostack.core.slice_qc import get_qc_stage_counters
+
+    out = dict(get_qc_stage_counters())
+    out.update(get_exact_path_counters())
+    return out
+
 
 
 def _crop_bounds(
@@ -824,101 +1057,191 @@ def segment_slice_seeded(
         return SeededSliceResult(None, None, (sx, sy), 0.0, 0.0, "circle_seed_fail", False)
 
     # --- Post-segmentation QC + fail-closed contact handling (exact path) ---
+    # Packet 06 ladder:
+    #   1) always cheap circularity/edge (+ far-mass flags)
+    #   2) named suspicion flags
+    #   3) full RANSAC/two-circle/DT only when suspicion or staged gate off
+    #   4) MorphGAC only when not clean (if skip-clean gate on) or always if gate off
+    #   5) full post-refine QC whenever MorphGAC runs
+    #   6) fail-closed multi-body/contact rejection retained
     # fast_preview: cheap diagnostics only; never run full RANSAC/two-circle/repair.
     from morphostack.core.slice_qc import (
         accept_as_is,
+        cheap_suspicion_flags,
         compute_slice_qc,
         fail_closed,
+        get_qc_gating_policy,
+        is_clean_frame_pre_refine,
+        note_full_qc_skipped_clean,
         repair_improves,
         should_attempt_polar_repair,
         should_attempt_split,
     )
 
+    _EXACT_PATH_COUNTERS.segment_calls += 1
     qc_img = crop_raw if fast_preview else crop
-    qc = compute_slice_qc(
-        solid,
-        qc_img,
-        seed_x=local_cx,
-        seed_y=local_cy,
-        seed_radius=R,
-        cheap=bool(fast_preview),
-    )
+    clean_pre_refine = False
+    suspicion: tuple[str, ...] = ()
 
-    if not fast_preview and not accept_as_is(qc):
-        # 1) Thin-neck / multi-marker: marker-controlled watershed child only.
-        if should_attempt_split(qc):
-            try:
-                from morphostack.core.object_select import attempt_seeded_split
-
-                split = attempt_seeded_split(
+    if fast_preview:
+        qc = compute_slice_qc(
+            solid,
+            qc_img,
+            seed_x=local_cx,
+            seed_y=local_cy,
+            seed_radius=R,
+            cheap=True,
+        )
+    else:
+        staged = bool(get_qc_gating_policy().get("staged_full_qc", False))
+        if staged:
+            # Stage 1: cheap circularity/edge first, then named suspicion flags.
+            qc = compute_slice_qc(
+                solid,
+                qc_img,
+                seed_x=local_cx,
+                seed_y=local_cy,
+                seed_radius=R,
+                cheap=True,
+            )
+            suspicion = cheap_suspicion_flags(
+                qc,
+                solid,
+                seed_x=local_cx,
+                seed_y=local_cy,
+                seed_radius=R,
+                ref_area=ref_area,
+            )
+            clean_pre_refine = is_clean_frame_pre_refine(suspicion)
+            # Stage 2–3: full RANSAC/two-circle/DT only when not clean.
+            if clean_pre_refine:
+                _EXACT_PATH_COUNTERS.full_qc_skipped_clean += 1
+                _EXACT_PATH_COUNTERS.clean_frame_hits += 1
+                note_full_qc_skipped_clean()
+            else:
+                _EXACT_PATH_COUNTERS.suspicion_escalations += 1
+                qc = compute_slice_qc(
                     solid,
+                    crop,
                     seed_x=local_cx,
                     seed_y=local_cy,
                     seed_radius=R,
+                    cheap=False,
                 )
-            except Exception:
-                split = None
-            if split is not None:
-                split = _fill_holes(np.asarray(split, dtype=bool)) & disk
-                if np.count_nonzero(split) >= 16:
-                    qc_split = compute_slice_qc(
-                        split,
-                        crop,
+        else:
+            # Reference/rollback path: full QC only (no cheap preamble).
+            qc = compute_slice_qc(
+                solid,
+                crop,
+                seed_x=local_cx,
+                seed_y=local_cy,
+                seed_radius=R,
+                cheap=False,
+            )
+            suspicion = cheap_suspicion_flags(
+                qc,
+                solid,
+                seed_x=local_cx,
+                seed_y=local_cy,
+                seed_radius=R,
+                ref_area=ref_area,
+            )
+            # MorphGAC skip (if enabled) still uses the same clean-frame rule.
+            clean_pre_refine = is_clean_frame_pre_refine(suspicion)
+
+        if not clean_pre_refine and not accept_as_is(qc):
+
+            # 1) Thin-neck / multi-marker: marker-controlled watershed child only.
+            if should_attempt_split(qc):
+                try:
+                    from morphostack.core.object_select import attempt_seeded_split
+
+                    _EXACT_PATH_COUNTERS.split_attempts += 1
+                    split = attempt_seeded_split(
+                        solid,
                         seed_x=local_cx,
                         seed_y=local_cy,
                         seed_radius=R,
-                        cheap=False,
                     )
-                    if repair_improves(qc, qc_split) or not qc_split.merge_suspect:
-                        solid = split
-                        qc = qc_split
-                        method = method + "_split" if not method.endswith("_split") else method
-
-        # 2) Broad-contact / unimodal merge: polar-DP as *primary repair*, not
-        #    unconditional first step. Accept only if QC improves.
-        if should_attempt_polar_repair(qc) and qc.merge_suspect:
-            try:
-                from morphostack.core.polar_dp import segment_slice_polar_dp
-
-                _n_angles = max(360, int(2.0 * np.pi * R))
-                _safe_band = max(0.10, min(0.20, (disk_r - R) / max(R, 1.0)))
-                polar = segment_slice_polar_dp(
-                    crop_raw,
-                    local_cx,
-                    local_cy,
-                    R,
-                    search_band=_safe_band,
-                    n_angles=_n_angles,
-                    smoothness_penalty=3.0,
-                    max_jump=2,
-                )
-                if polar.ok and polar.solid_mask is not None:
-                    repaired = np.asarray(polar.solid_mask, dtype=bool) & disk
-                    repaired = _fill_holes(repaired) & disk
-                    if np.count_nonzero(repaired) >= 16:
-                        qc_rep = compute_slice_qc(
-                            repaired,
+                except Exception:
+                    split = None
+                if split is not None:
+                    split = _fill_holes(np.asarray(split, dtype=bool)) & disk
+                    if np.count_nonzero(split) >= 16:
+                        qc_split = compute_slice_qc(
+                            split,
                             crop,
                             seed_x=local_cx,
                             seed_y=local_cy,
                             seed_radius=R,
                             cheap=False,
                         )
-                        # Centroid drift guard relative to current proposal.
-                        ys, xs = np.where(repaired)
-                        rcx, rcy = float(xs.mean()), float(ys.mean())
-                        ys0, xs0 = np.where(solid)
-                        ocx, ocy = float(xs0.mean()), float(ys0.mean())
-                        drift = math.hypot(rcx - ocx, rcy - ocy)
-                        if drift <= 0.20 * R and repair_improves(qc, qc_rep):
-                            solid = repaired
-                            qc = qc_rep
-                            method = "polar_dp_repair"
-            except Exception:
-                pass
+                        if repair_improves(qc, qc_split) or not qc_split.merge_suspect:
+                            solid = split
+                            qc = qc_split
+                            method = method + "_split" if not method.endswith("_split") else method
 
-        # 3) Fail closed: unresolved strong merge → no contour (track gap).
-        if fail_closed(qc):
+            # 2) Broad-contact / unimodal merge: polar-DP as *primary repair*, not
+            #    unconditional first step. Accept only if QC improves.
+            if should_attempt_polar_repair(qc) and qc.merge_suspect:
+                try:
+                    from morphostack.core.polar_dp import segment_slice_polar_dp
+
+                    _EXACT_PATH_COUNTERS.polar_repair_attempts += 1
+                    _n_angles = max(360, int(2.0 * np.pi * R))
+                    _safe_band = max(0.10, min(0.20, (disk_r - R) / max(R, 1.0)))
+                    polar = segment_slice_polar_dp(
+                        crop_raw,
+                        local_cx,
+                        local_cy,
+                        R,
+                        search_band=_safe_band,
+                        n_angles=_n_angles,
+                        smoothness_penalty=3.0,
+                        max_jump=2,
+                    )
+                    if polar.ok and polar.solid_mask is not None:
+                        repaired = np.asarray(polar.solid_mask, dtype=bool) & disk
+                        repaired = _fill_holes(repaired) & disk
+                        if np.count_nonzero(repaired) >= 16:
+                            qc_rep = compute_slice_qc(
+                                repaired,
+                                crop,
+                                seed_x=local_cx,
+                                seed_y=local_cy,
+                                seed_radius=R,
+                                cheap=False,
+                            )
+                            # Centroid drift guard relative to current proposal.
+                            ys, xs = np.where(repaired)
+                            rcx, rcy = float(xs.mean()), float(ys.mean())
+                            ys0, xs0 = np.where(solid)
+                            ocx, ocy = float(xs0.mean()), float(ys0.mean())
+                            drift = math.hypot(rcx - ocx, rcy - ocy)
+                            if drift <= 0.20 * R and repair_improves(qc, qc_rep):
+                                solid = repaired
+                                qc = qc_rep
+                                method = "polar_dp_repair"
+                except Exception:
+                    pass
+
+            # 3) Fail closed: unresolved strong merge → no contour (track gap).
+            if fail_closed(qc):
+                _EXACT_PATH_COUNTERS.merge_rejects += 1
+                return SeededSliceResult(
+                    None,
+                    None,
+                    (sx, sy),
+                    0.0,
+                    0.0,
+                    "circle_seed_merge_reject",
+                    False,
+                    merge_suspect=True,
+                    qc=qc,
+                )
+        elif clean_pre_refine and float(qc.edge_support) < 0.25:
+            # Cheap-path collapsed membrane (fail_closed ignores cheap bundles).
+            _EXACT_PATH_COUNTERS.merge_rejects += 1
             return SeededSliceResult(
                 None,
                 None,
@@ -931,11 +1254,18 @@ def segment_slice_seeded(
                 qc=qc,
             )
 
-    if refine and not fast_preview:
+    # Stage 4: MorphGAC — skip only under pre-registered clean-frame rule.
+    run_morphgac = bool(refine and not fast_preview)
+    if run_morphgac and _GATE_SKIP_MORPHGAC_CLEAN and clean_pre_refine:
+        _EXACT_PATH_COUNTERS.morphgac_skipped_clean += 1
+        run_morphgac = False
+
+    if run_morphgac:
+        _EXACT_PATH_COUNTERS.morphgac_calls += 1
         solid = _refine_contour_morphgac(crop, solid, disk_mask=disk) & disk
         if not np.any(solid):
             return SeededSliceResult(None, None, (sx, sy), 0.0, 0.0, "circle_seed_fail", False)
-        # Run full QC on the actual final candidate mask after MorphGAC refinement.
+        # Stage 5: full post-refine QC whenever MorphGAC runs.
         qc = compute_slice_qc(
             solid,
             crop,
@@ -945,6 +1275,7 @@ def segment_slice_seeded(
             cheap=False,
         )
         if fail_closed(qc):
+            _EXACT_PATH_COUNTERS.merge_rejects += 1
             return SeededSliceResult(
                 None,
                 None,
@@ -964,6 +1295,7 @@ def segment_slice_seeded(
         from morphostack.core.slice_qc import fail_closed as _fail_closed
 
         if _fail_closed(qc):
+            _EXACT_PATH_COUNTERS.merge_rejects += 1
             return SeededSliceResult(
                 None,
                 None,
@@ -1004,16 +1336,24 @@ def segment_slice_seeded(
                 far_frac = float(np.count_nonzero(dist > far_limit)) / float(ys.size)
         except Exception:
             far_frac = 0.0
-        contact_geo = qc.flat_contact_frac >= 0.10 or qc.defect_depth_norm > 0.06
-        # n_peaks alone is not enough (noisy / mildly concave singles).
-        peaks_plus = n_peaks >= 2 and (
-            far_frac >= 0.10 or contact_geo or qc.strong_two_circle or qc.eta > 0.09
-        )
-        # Far mass alone is not enough (underestimated seed R); need second cue.
-        far_plus = far_frac >= 0.12 and (
-            n_peaks >= 2 or contact_geo or qc.strong_two_circle or qc.delta_bic <= -5.0
-        )
+        # Cheap QC leaves unfitted placeholders (eta=0.25, flat/defect=0); do not
+        # treat those as real contact geometry or radial residual evidence.
+        if qc.cheap:
+            contact_geo = False
+            peaks_plus = n_peaks >= 2 and far_frac >= 0.10
+            far_plus = far_frac >= 0.12 and n_peaks >= 2
+        else:
+            contact_geo = qc.flat_contact_frac >= 0.10 or qc.defect_depth_norm > 0.06
+            # n_peaks alone is not enough (noisy / mildly concave singles).
+            peaks_plus = n_peaks >= 2 and (
+                far_frac >= 0.10 or contact_geo or qc.strong_two_circle or qc.eta > 0.09
+            )
+            # Far mass alone is not enough (underestimated seed R); need second cue.
+            far_plus = far_frac >= 0.12 and (
+                n_peaks >= 2 or contact_geo or qc.strong_two_circle or qc.delta_bic <= -5.0
+            )
         if peaks_plus or far_plus:
+            _EXACT_PATH_COUNTERS.merge_rejects += 1
             return SeededSliceResult(
                 None,
                 None,
@@ -1030,6 +1370,9 @@ def segment_slice_seeded(
     if method == "polar_dp_repair":
         effective_threshold = None
 
+    if not fast_preview:
+        _EXACT_PATH_COUNTERS.accepted += 1
+
     return _result_from_solid(
         solid,
         y0=y0,
@@ -1043,6 +1386,193 @@ def segment_slice_seeded(
     )
 
 
+# Bump when exact seeded association, QC, gap, or segment decisions change.
+# Included in TrackingCacheKey so process-local caches cannot serve stale science.
+# Packet 06 keeps production gates off (reference full QC + MorphGAC); no v2 bump.
+EXACT_TRACKING_ALGORITHM_VERSION: str = "1"
+
+# Canonical mode token for authoritative seeded Z tracking (not provisional).
+EXACT_TRACKING_MODE: str = "seeded_exact"
+
+# Progress marker on :class:`TrackProgressEvent` after a frame is committed.
+TrackProgressMarker = Literal["partial", "complete", "cancelled"]
+
+# Optional cooperative cancel predicate: return True to stop at the next safe boundary.
+CancelCheck = Callable[[], bool]
+
+# Optional progress callback. Invoked only after a frame is written to track state.
+ProgressCallback = Callable[["TrackProgressEvent"], None]
+
+# Live scheduling hints: constants or callables re-read at safe Z boundaries.
+DirectionPriorityHint = int | Callable[[], int | None] | None
+TargetFrameHint = int | Callable[[], int | None] | None
+
+
+def _resolve_direction_priority(hint: DirectionPriorityHint) -> int | None:
+    """Resolve +1 / -1 / None; callables are evaluated at safe Z boundaries."""
+    value = hint() if callable(hint) else hint
+    if value is None:
+        return None
+    ival = int(value)
+    if ival not in (-1, 1):
+        raise ValueError("direction_priority must be None, +1, or -1")
+    return ival
+
+
+def _resolve_target_frame(hint: TargetFrameHint, *, n: int) -> int | None:
+    """Resolve optional target Z; callables are evaluated at safe Z boundaries."""
+    value = hint() if callable(hint) else hint
+    if value is None:
+        return None
+    ival = int(value)
+    if ival < 0 or ival >= n:
+        raise ValueError("target_frame out of range")
+    return ival
+
+
+@dataclass(frozen=True)
+class TrackProgressEvent:
+    """Immutable progress snapshot published after a frame result is committed.
+
+    Does not expose internal mutable walk lists. Array fields on ``result`` are
+    non-writeable views of the committed buffers so callbacks cannot mutate core
+    state in place.
+    """
+
+    frame_index: int
+    result: SeededSliceResult
+    reached_low_z: int
+    reached_high_z: int
+    marker: TrackProgressMarker
+
+
+class TrackingCancelled(Exception):
+    """Cooperative cancellation of progressive seeded tracking.
+
+    Raised at a safe Z boundary or before starting another retry candidate.
+    ``results`` is a full-length list: committed frames keep their values;
+    unvisited slots are ``circle_seed_unreached``. Never represents a completed
+    track — callers/services must map this to a cancelled/partial job state.
+    """
+
+    def __init__(
+        self,
+        results: list[SeededSliceResult],
+        *,
+        reached_low_z: int,
+        reached_high_z: int,
+        message: str = "seeded tracking cancelled",
+    ) -> None:
+        super().__init__(message)
+        self.results = results
+        self.reached_low_z = int(reached_low_z)
+        self.reached_high_z = int(reached_high_z)
+
+
+def _result_for_progress(res: SeededSliceResult) -> SeededSliceResult:
+    """Return a frozen result with non-writeable array views (shared buffers)."""
+    contour = res.contour_xy
+    mask = res.solid_mask
+    if contour is not None:
+        contour = contour.view()
+        contour.flags.writeable = False
+    if mask is not None:
+        mask = mask.view()
+        mask.flags.writeable = False
+    if contour is res.contour_xy and mask is res.solid_mask:
+        return res
+    return SeededSliceResult(
+        contour,
+        mask,
+        res.center_xy,
+        res.area_px,
+        res.perimeter_px,
+        res.method,
+        res.ok,
+        merge_suspect=res.merge_suspect,
+        qc=res.qc,
+        effective_threshold=res.effective_threshold,
+    )
+
+
+def _frontiers_from_results(
+    results: list[SeededSliceResult | None],
+    *,
+    seed_frame: int,
+) -> tuple[int, int]:
+    """Inclusive min/max of committed (non-None) frame indices; seed if empty."""
+    committed = [i for i, r in enumerate(results) if r is not None]
+    if not committed:
+        return seed_frame, seed_frame
+    return min(committed), max(committed)
+
+
+def _materialize_track_results(
+    results: list[SeededSliceResult | None],
+    *,
+    n: int,
+    seed_x: float,
+    seed_y: float,
+) -> list[SeededSliceResult]:
+    out: list[SeededSliceResult] = []
+    for i in range(n):
+        r = results[i] if i < len(results) else None
+        if r is None:
+            out.append(
+                SeededSliceResult(
+                    None, None, (seed_x, seed_y), 0.0, 0.0, "circle_seed_unreached", False
+                )
+            )
+        else:
+            out.append(r)
+    return out
+
+
+def _raise_if_cancelled(
+    cancel_check: CancelCheck | None,
+    results: list[SeededSliceResult | None],
+    *,
+    n: int,
+    seed_x: float,
+    seed_y: float,
+    seed_frame: int,
+) -> None:
+    if cancel_check is None or not cancel_check():
+        return
+    low, high = _frontiers_from_results(results, seed_frame=seed_frame)
+    raise TrackingCancelled(
+        _materialize_track_results(results, n=n, seed_x=seed_x, seed_y=seed_y),
+        reached_low_z=low,
+        reached_high_z=high,
+    )
+
+
+def _emit_track_progress(
+    on_progress: ProgressCallback | None,
+    *,
+    frame_index: int,
+    result: SeededSliceResult,
+    results: list[SeededSliceResult | None],
+    seed_frame: int,
+    marker: TrackProgressMarker,
+) -> None:
+    """Invoke progress callback after commit. Exceptions propagate; state stays consistent."""
+    if on_progress is None:
+        return
+    low, high = _frontiers_from_results(results, seed_frame=seed_frame)
+    event = TrackProgressEvent(
+        frame_index=int(frame_index),
+        result=_result_for_progress(result),
+        reached_low_z=low,
+        reached_high_z=high,
+        marker=marker,
+    )
+    # Policy: do not swallow callback errors. The frame is already committed, so
+    # re-raising cannot corrupt track state; callers see a consistent partial list
+    # if they catch and materialize, or the exception stops the walk.
+    on_progress(event)
+
+
 def track_seeded_vesicle_stack(
     stack: np.ndarray,
     *,
@@ -1053,12 +1583,35 @@ def track_seeded_vesicle_stack(
     max_centroid_jump_px: float | None = None,
     max_area_ratio: float = 2.2,
     min_area_ratio: float = 0.25,
-    target_frame: int | None = None,
+    target_frame: TargetFrameHint = None,
+    on_progress: ProgressCallback | None = None,
+    cancel_check: CancelCheck | None = None,
+    direction_priority: DirectionPriorityHint = None,
 ) -> list[SeededSliceResult]:
     """Z tracking with user circle radius R.
 
     If ``target_frame`` is set (interactive preview), only walks seed_frame → target
     (one direction). Full analyze uses ``target_frame=None`` for bidirectional walk.
+
+    Optional progressive controls (all default ``None`` — identical to legacy callers):
+
+    - ``on_progress``: called only after a frame is committed to the returned list.
+      Callback exceptions propagate; committed state is not rolled back or mutated.
+    - ``cancel_check``: cooperative predicate checked at safe Z boundaries and
+      before each retry candidate / segment call. When true, raises
+      :class:`TrackingCancelled` with a partial (never complete) result list.
+    - ``direction_priority``: for full bidirectional walks, ``+1`` / ``-1`` chooses
+      the next legal frontier. May be a callable re-read at each safe Z boundary
+      so live reprioritization changes only scheduling (never teleports Z).
+      Constant ``None`` keeps legacy order (``+1`` then ``-1``).
+    - ``target_frame``: may also be a callable re-read at safe Z boundaries so a
+      unidirectional stop can extend toward a farther target without a new walk.
+
+    Uninterruptible stage: once ``segment_slice_seeded`` begins for a candidate it
+    runs to completion; cancel is acknowledged before the next candidate/Z.
+
+    Cache/job identity for this path uses
+    :data:`EXACT_TRACKING_ALGORITHM_VERSION` and :data:`EXACT_TRACKING_MODE`.
     """
     del min_area_ratio  # replaced by IoU + multi-feature score; keep param for API compat
     arr = np.asarray(stack)
@@ -1067,11 +1620,25 @@ def track_seeded_vesicle_stack(
     n = arr.shape[0]
     if seed_frame < 0 or seed_frame >= n:
         raise ValueError("seed_frame out of range")
-    if target_frame is not None and (target_frame < 0 or target_frame >= n):
-        raise ValueError("target_frame out of range")
+    # Validate static hints once; callables re-validated when resolved.
+    if not callable(target_frame):
+        _resolve_target_frame(target_frame, n=n)
+    if not callable(direction_priority):
+        _resolve_direction_priority(direction_priority)
 
     R = effective_seed_radius(seed_radius)
     results: list[SeededSliceResult | None] = [None] * n
+
+    # Cancel before any segmentation work.
+    _raise_if_cancelled(
+        cancel_check,
+        results,
+        n=n,
+        seed_x=seed_x,
+        seed_y=seed_y,
+        seed_frame=seed_frame,
+    )
+
     first = segment_slice_seeded(
         arr[seed_frame],
         seed_x=seed_x,
@@ -1084,142 +1651,263 @@ def track_seeded_vesicle_stack(
             SeededSliceResult(None, None, (seed_x, seed_y), 0.0, 0.0, "circle_seed_fail", False)
             for _ in range(n)
         ]
+        # Seed commit is the only real result; publish then return (legacy shape).
+        _emit_track_progress(
+            on_progress,
+            frame_index=seed_frame,
+            result=first,
+            results=results,
+            seed_frame=seed_frame,
+            marker="complete",
+        )
         return fail_list
+
+    _emit_track_progress(
+        on_progress,
+        frame_index=seed_frame,
+        result=first,
+        results=results,
+        seed_frame=seed_frame,
+        marker="partial",
+    )
+    # Chronological last commit (not max-Z frontier) for the terminal complete event.
+    last_committed_z = seed_frame
+    last_committed_res: SeededSliceResult = first
 
     seed_ref_area = max(first.area_px, 1.0)
     jump = max_centroid_jump_px
     if jump is None:
         jump = max(1.25 * R, 60.0)
 
-    def propagate(direction: int, stop_at: int | None = None) -> None:
-        ref_area = float(seed_ref_area)
-        cx, cy = first.center_xy
-        anchor_x, anchor_y = float(seed_x), float(seed_y)
-        # (x, y, frame_index)
-        recent_centers: list[tuple[float, float, int]] = [(cx, cy, seed_frame)]
-        last_valid = first
-        gap_count = 0
-        z = seed_frame + direction
-        while 0 <= z < n:
-            if stop_at is not None:
-                if direction > 0 and z > stop_at:
-                    break
-                if direction < 0 and z < stop_at:
-                    break
+    def _commit_frame(z: int, res: SeededSliceResult) -> None:
+        nonlocal last_committed_z, last_committed_res
+        results[z] = res
+        last_committed_z = int(z)
+        last_committed_res = res
+        _emit_track_progress(
+            on_progress,
+            frame_index=z,
+            result=res,
+            results=results,
+            seed_frame=seed_frame,
+            marker="partial",
+        )
 
-            vel = _per_frame_velocity(recent_centers)
-            extrapolated: tuple[float, float] | None = None
-            if vel is not None:
-                dx, dy = vel
-                steps = gap_count + 1
-                extrapolated = (cx + dx * steps, cy + dy * steps)
+    def _new_walk_state(direction: int) -> dict[str, Any]:
+        cx0, cy0 = first.center_xy
+        return {
+            "direction": int(direction),
+            "ref_area": float(seed_ref_area),
+            "cx": float(cx0),
+            "cy": float(cy0),
+            "anchor_x": float(seed_x),
+            "anchor_y": float(seed_y),
+            "recent_centers": [(cx0, cy0, seed_frame)],
+            "last_valid": first,
+            "gap_count": 0,
+            "z": seed_frame + int(direction),
+            "active": True,
+        }
 
-            if gap_count > 0:
-                # Do not fall back to the original seed after a loss: a nearby
-                # vesicle there can otherwise steal the tracked identity.
-                attempts = [extrapolated] if extrapolated is not None else [(cx, cy)]
-            else:
-                attempts = [
-                    (cx, cy),
-                    (anchor_x, anchor_y),
-                    (first.center_xy[0], first.center_xy[1]),
-                ]
-                if extrapolated is not None:
-                    attempts = [extrapolated] + attempts
+    def _advance_one(state: dict[str, Any], stop_at: int | None) -> None:
+        """Advance one legal Z step (or deactivate the frontier). Mutates ``state``."""
+        direction = int(state["direction"])
+        z = int(state["z"])
+        if not (0 <= z < n):
+            state["active"] = False
+            return
+        if stop_at is not None:
+            if direction > 0 and z > stop_at:
+                state["active"] = False
+                return
+            if direction < 0 and z < stop_at:
+                state["active"] = False
+                return
 
-            prev_z = z - direction
-            prev = results[prev_z] if 0 <= prev_z < n else None
-            association_prev = prev if (prev is not None and prev.ok) else last_valid
-            expected_center = extrapolated if gap_count > 0 else None
-            expected_tolerance = (
-                _gap_reacquisition_tolerance(vel, gap_count=gap_count, radius=R)
-                if gap_count > 0
-                else None
-            )
-            res: SeededSliceResult | None = None
-            for use_r in (R, R * 1.35, R * 1.6):
-                for tx, ty in attempts:
-                    cand = segment_slice_seeded(
-                        arr[z],
-                        seed_x=tx,
-                        seed_y=ty,
-                        seed_radius=use_r,
-                        ref_area=ref_area,
-                    )
-                    if not _candidate_accepted(
-                        cand,
-                        prev=association_prev,
-                        ref_area=ref_area,
-                        max_area_ratio=max_area_ratio,
-                        jump=jump * (gap_count + 1),
-                        expected_center=expected_center,
-                        expected_center_tolerance=expected_tolerance,
-                        search_radius=use_r,
-                        nominal_radius=R,
-                    ):
-                        continue
-                    res = cand
-                    break
-                if res is not None:
-                    break
+        # Safe Z boundary: before starting work on this frame.
+        _raise_if_cancelled(
+            cancel_check,
+            results,
+            n=n,
+            seed_x=seed_x,
+            seed_y=seed_y,
+            seed_frame=seed_frame,
+        )
 
-            if res is None:
-                results[z] = SeededSliceResult(
-                    None, None, (cx, cy), 0.0, 0.0, "circle_seed_gap", False
+        ref_area = float(state["ref_area"])
+        cx = float(state["cx"])
+        cy = float(state["cy"])
+        anchor_x = float(state["anchor_x"])
+        anchor_y = float(state["anchor_y"])
+        recent_centers: list[tuple[float, float, int]] = state["recent_centers"]
+        last_valid = state["last_valid"]
+        gap_count = int(state["gap_count"])
+
+        vel = _per_frame_velocity(recent_centers)
+        extrapolated: tuple[float, float] | None = None
+        if vel is not None:
+            dx, dy = vel
+            steps = gap_count + 1
+            extrapolated = (cx + dx * steps, cy + dy * steps)
+
+        if gap_count > 0:
+            # Do not fall back to the original seed after a loss: a nearby
+            # vesicle there can otherwise steal the tracked identity.
+            attempts = [extrapolated] if extrapolated is not None else [(cx, cy)]
+        else:
+            attempts = [
+                (cx, cy),
+                (anchor_x, anchor_y),
+                (first.center_xy[0], first.center_xy[1]),
+            ]
+            if extrapolated is not None:
+                attempts = [extrapolated] + attempts
+
+        prev_z = z - direction
+        prev = results[prev_z] if 0 <= prev_z < n else None
+        association_prev = prev if (prev is not None and prev.ok) else last_valid
+        expected_center = extrapolated if gap_count > 0 else None
+        expected_tolerance = (
+            _gap_reacquisition_tolerance(vel, gap_count=gap_count, radius=R)
+            if gap_count > 0
+            else None
+        )
+        res: SeededSliceResult | None = None
+        for use_r in (R, R * 1.35, R * 1.6):
+            for tx, ty in attempts:
+                # Before beginning another retry candidate (uninterruptible
+                # once segment_slice_seeded starts).
+                _raise_if_cancelled(
+                    cancel_check,
+                    results,
+                    n=n,
+                    seed_x=seed_x,
+                    seed_y=seed_y,
+                    seed_frame=seed_frame,
                 )
-                gap_count += 1
-                if gap_count > MAX_CONSECUTIVE_TRACK_GAPS:
-                    break
-                z += direction
-                continue
-
-            # Cap stop: membrane signal collapsed vs local background
-            curr_r = np.sqrt(res.area_px / np.pi) if res.area_px > 10.0 else R
-            disk_r = max(curr_r * 1.35, curr_r + 15.0)
-            full_disk = _disk_mask(arr[z].shape, res.center_xy[0], res.center_xy[1], disk_r)
-            if _is_vesicle_cap(arr[z], res.solid_mask, full_disk):
-                results[z] = SeededSliceResult(
-                    res.contour_xy,
-                    res.solid_mask,
-                    res.center_xy,
-                    res.area_px,
-                    res.perimeter_px,
-                    "cap_detected",
-                    False,
-                    merge_suspect=res.merge_suspect,
-                    qc=res.qc,
-                    effective_threshold=res.effective_threshold,
+                cand = segment_slice_seeded(
+                    arr[z],
+                    seed_x=tx,
+                    seed_y=ty,
+                    seed_radius=use_r,
+                    ref_area=ref_area,
                 )
+                if not _candidate_accepted(
+                    cand,
+                    prev=association_prev,
+                    ref_area=ref_area,
+                    max_area_ratio=max_area_ratio,
+                    jump=jump * (gap_count + 1),
+                    expected_center=expected_center,
+                    expected_center_tolerance=expected_tolerance,
+                    search_radius=use_r,
+                    nominal_radius=R,
+                ):
+                    continue
+                res = cand
+                break
+            if res is not None:
                 break
 
-            results[z] = res
-            cx, cy = res.center_xy
-            last_valid = res
-            recent_centers.append((cx, cy, z))
-            if len(recent_centers) > 3:
-                recent_centers = recent_centers[-3:]
-            ref_area = 0.7 * ref_area + 0.3 * res.area_px
-            gap_count = 0
-            z += direction
-
-    if target_frame is None:
-        propagate(+1)
-        propagate(-1)
-    elif target_frame > seed_frame:
-        propagate(+1, stop_at=target_frame)
-    elif target_frame < seed_frame:
-        propagate(-1, stop_at=target_frame)
-
-    out: list[SeededSliceResult] = []
-    for i in range(n):
-        if results[i] is None:
-            out.append(
-                SeededSliceResult(
-                    None, None, (seed_x, seed_y), 0.0, 0.0, "circle_seed_unreached", False
-                )
+        if res is None:
+            gap_res = SeededSliceResult(
+                None, None, (cx, cy), 0.0, 0.0, "circle_seed_gap", False
             )
-        else:
-            out.append(results[i])  # type: ignore[arg-type]
+            _commit_frame(z, gap_res)
+            gap_count += 1
+            if gap_count > MAX_CONSECUTIVE_TRACK_GAPS:
+                state["active"] = False
+                return
+            state["gap_count"] = gap_count
+            state["z"] = z + direction
+            return
+
+        # Cap stop: membrane signal collapsed vs local background
+        curr_r = np.sqrt(res.area_px / np.pi) if res.area_px > 10.0 else R
+        disk_r = max(curr_r * 1.35, curr_r + 15.0)
+        full_disk = _disk_mask(arr[z].shape, res.center_xy[0], res.center_xy[1], disk_r)
+        if _is_vesicle_cap(arr[z], res.solid_mask, full_disk):
+            cap_res = SeededSliceResult(
+                res.contour_xy,
+                res.solid_mask,
+                res.center_xy,
+                res.area_px,
+                res.perimeter_px,
+                "cap_detected",
+                False,
+                merge_suspect=res.merge_suspect,
+                qc=res.qc,
+                effective_threshold=res.effective_threshold,
+            )
+            _commit_frame(z, cap_res)
+            state["active"] = False
+            return
+
+        _commit_frame(z, res)
+        cx, cy = res.center_xy
+        recent_centers.append((cx, cy, z))
+        if len(recent_centers) > 3:
+            recent_centers = recent_centers[-3:]
+        state["cx"] = float(cx)
+        state["cy"] = float(cy)
+        state["last_valid"] = res
+        state["recent_centers"] = recent_centers
+        state["ref_area"] = 0.7 * ref_area + 0.3 * res.area_px
+        state["gap_count"] = 0
+        state["z"] = z + direction
+
+    initial_target = _resolve_target_frame(target_frame, n=n)
+
+    if initial_target is None and not callable(target_frame):
+        # Full bidirectional: interleave one Z at a time, re-reading direction
+        # priority at each safe boundary so live reprioritization only changes
+        # the next legal frontier (no Z teleport). Constant +1 then -1 order
+        # when priority stays +1/None matches legacy sequential walks.
+        states = {+1: _new_walk_state(+1), -1: _new_walk_state(-1)}
+        while states[+1]["active"] or states[-1]["active"]:
+            prefer = _resolve_direction_priority(direction_priority)
+            if prefer is None:
+                prefer = 1
+            advanced = False
+            for d in (prefer, -prefer):
+                st = states[d]
+                if not st["active"]:
+                    continue
+                _advance_one(st, stop_at=None)
+                advanced = True
+                break
+            if not advanced:
+                break
+    else:
+        # Unidirectional toward target; stop_at re-read each step when callable.
+        tf0 = _resolve_target_frame(target_frame, n=n)
+        if tf0 is not None and tf0 != seed_frame:
+            direction = 1 if tf0 > seed_frame else -1
+            state = _new_walk_state(direction)
+            while state["active"]:
+                tf = _resolve_target_frame(target_frame, n=n)
+                if tf is None:
+                    break
+                # If live target flipped to the other side, stop this frontier
+                # (full bidirectional path is used when target starts as None).
+                if direction > 0 and tf < seed_frame:
+                    break
+                if direction < 0 and tf > seed_frame:
+                    break
+                _advance_one(state, stop_at=tf)
+
+    out = _materialize_track_results(results, n=n, seed_x=seed_x, seed_y=seed_y)
+    if on_progress is not None:
+        # Terminal complete reuses the chronological last partial commit
+        # (e.g. low-Z after default bidirectional or direction_priority=+1 second walk).
+        _emit_track_progress(
+            on_progress,
+            frame_index=last_committed_z,
+            result=last_committed_res,
+            results=results,
+            seed_frame=seed_frame,
+            marker="complete",
+        )
     return out
 
 
@@ -1235,9 +1923,18 @@ def extend_track(
     max_centroid_jump_px: float | None = None,
     max_area_ratio: float = 2.2,
     min_area_ratio: float = 0.25,
+    on_progress: ProgressCallback | None = None,
+    cancel_check: CancelCheck | None = None,
+    direction_priority: int | None = None,
 ) -> list[SeededSliceResult]:
-    """Extend a previously cached tracking result to reach ``target_frame``."""
+    """Extend a previously cached tracking result to reach ``target_frame``.
+
+    Progressive controls match :func:`track_seeded_vesicle_stack`. Direction is
+    fixed by ``target_frame`` relative to the seed; ``direction_priority`` is
+    accepted for API symmetry and ignored for single-direction extension.
+    """
     del min_area_ratio  # API compat; gating uses IoU + score
+    del direction_priority  # single-direction extension; scheduling fixed by target
     arr = np.asarray(stack)
     if arr.ndim != 3:
         raise ValueError("extend_track expects (z, y, x)")
@@ -1256,6 +1953,9 @@ def extend_track(
         )
     if len(results) > n:
         results = results[:n]
+
+    # Work on a nullable-compatible view for cancel materialization helpers.
+    results_opt: list[SeededSliceResult | None] = list(results)
 
     existing = results[target_frame]
     if existing.ok or existing.method != "circle_seed_unreached":
@@ -1290,12 +1990,23 @@ def extend_track(
             max_centroid_jump_px=max_centroid_jump_px,
             max_area_ratio=max_area_ratio,
             target_frame=target_frame,
+            on_progress=on_progress,
+            cancel_check=cancel_check,
         )
 
     if (direction > 0 and furthest_ok >= target_frame) or (
         direction < 0 and furthest_ok <= target_frame
     ):
         return results
+
+    _raise_if_cancelled(
+        cancel_check,
+        results_opt,
+        n=n,
+        seed_x=seed_x,
+        seed_y=seed_y,
+        seed_frame=seed_frame,
+    )
 
     R = effective_seed_radius(seed_radius)
     jump = max_centroid_jump_px
@@ -1319,6 +2030,25 @@ def extend_track(
     if not recent_centers:
         recent_centers.append((cx, cy, furthest_ok))
 
+    # Chronological last commit in this extend call (not max-Z frontier).
+    last_committed_z: int | None = None
+    last_committed_res: SeededSliceResult | None = None
+
+    def _commit_extend(z: int, res: SeededSliceResult) -> None:
+        nonlocal last_committed_z, last_committed_res
+        results[z] = res
+        results_opt[z] = res
+        last_committed_z = int(z)
+        last_committed_res = res
+        _emit_track_progress(
+            on_progress,
+            frame_index=z,
+            result=res,
+            results=results_opt,
+            seed_frame=seed_frame,
+            marker="partial",
+        )
+
     gap_count = 0
     z = furthest_ok + direction
     while 0 <= z < n:
@@ -1326,6 +2056,15 @@ def extend_track(
             break
         if direction < 0 and z < target_frame:
             break
+
+        _raise_if_cancelled(
+            cancel_check,
+            results_opt,
+            n=n,
+            seed_x=seed_x,
+            seed_y=seed_y,
+            seed_frame=seed_frame,
+        )
 
         if results[z].ok:
             cx, cy = results[z].center_xy
@@ -1368,6 +2107,14 @@ def extend_track(
         res: SeededSliceResult | None = None
         for use_r in (R, R * 1.35, R * 1.6):
             for tx, ty in attempts:
+                _raise_if_cancelled(
+                    cancel_check,
+                    results_opt,
+                    n=n,
+                    seed_x=seed_x,
+                    seed_y=seed_y,
+                    seed_frame=seed_frame,
+                )
                 cand = segment_slice_seeded(
                     arr[z],
                     seed_x=tx,
@@ -1394,9 +2141,10 @@ def extend_track(
 
         if res is None:
             if results[z].method == "circle_seed_unreached":
-                results[z] = SeededSliceResult(
+                gap_res = SeededSliceResult(
                     None, None, (cx, cy), 0.0, 0.0, "circle_seed_gap", False
                 )
+                _commit_extend(z, gap_res)
             gap_count += 1
             if gap_count > MAX_CONSECUTIVE_TRACK_GAPS:
                 break
@@ -1407,7 +2155,7 @@ def extend_track(
         disk_r = max(curr_r * 1.35, curr_r + 15.0)
         full_disk = _disk_mask(arr[z].shape, res.center_xy[0], res.center_xy[1], disk_r)
         if _is_vesicle_cap(arr[z], res.solid_mask, full_disk):
-            results[z] = SeededSliceResult(
+            cap_res = SeededSliceResult(
                 res.contour_xy,
                 res.solid_mask,
                 res.center_xy,
@@ -1419,9 +2167,10 @@ def extend_track(
                 qc=res.qc,
                 effective_threshold=res.effective_threshold,
             )
+            _commit_extend(z, cap_res)
             break
 
-        results[z] = res
+        _commit_extend(z, res)
         cx, cy = res.center_xy
         last_valid = res
         recent_centers.append((cx, cy, z))
@@ -1431,4 +2180,14 @@ def extend_track(
         gap_count = 0
         z += direction
 
+    if on_progress is not None and last_committed_z is not None and last_committed_res is not None:
+        # Terminal complete matches the final preceding partial of this extend.
+        _emit_track_progress(
+            on_progress,
+            frame_index=last_committed_z,
+            result=last_committed_res,
+            results=results_opt,
+            seed_frame=seed_frame,
+            marker="complete",
+        )
     return results
