@@ -1004,3 +1004,5 @@ input.voxel-default-warning {
     grid-column: auto;
   }
 }
+
+body.has-scientific-theatre{overflow:hidden}.is-theatre{position:fixed!important;inset:8px!important;z-index:10000;width:auto!important;height:calc(100dvh - 16px)!important;max-width:none!important;max-height:none!important;margin:0!important;padding:10px!important;display:flex!important;flex-direction:column;overflow:hidden;background:#f8fafc}.is-theatre .preview-canvas,.is-theatre .volume-viewer-canvas-wrap,.is-theatre iframe{flex:1;min-height:0;height:auto;max-height:none}.preview-output.is-theatre .preview-canvas img{width:100%;height:100%;max-height:none;object-fit:contain}.mesh-output.is-theatre iframe{width:100%}

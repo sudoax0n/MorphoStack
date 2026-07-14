@@ -325,6 +325,7 @@ export function meshPreviewHtml(
           showError("newPlot", err && err.message ? err.message : String(err));
         });
 
+      window.addEventListener("message",function(e){if(e.data&&e.data.type==="morphostack-mesh-resize"&&Plotly.Plots)Plotly.Plots.resize("plot")});
       document.querySelectorAll("[data-camera]").forEach(function (button) {
         button.addEventListener("click", function () {
           const key = button.getAttribute("data-camera");

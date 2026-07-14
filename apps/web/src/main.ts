@@ -1,4 +1,5 @@
 import "./styles.css";
+import { INITIAL_THEATRE_STATE, reduceTheatreState, shouldExitTheatre } from "./theatreMode.ts";
 import {
   ProvisionalPreviewScheduler,
   shouldApplyPreview as shouldApplyPreviewGate,
@@ -738,14 +739,14 @@ app.innerHTML = `
           <span id="z-range-status" class="inline-status">Full stack (all slices)</span>
         </div>
       </fieldset>
-      <div id="preview-output" class="preview-output muted">No preview rendered yet.</div>
+      <button class="secondary" type="button" data-theatre-toggle="preview">Expand preview</button><div id="preview-output" class="preview-output muted">No preview rendered yet.</div>
       <div
         id="volume-viewer-panel"
         class="volume-viewer-panel"
         data-state="idle"
         aria-label="Calibrated 3D volume navigation"
       >
-        <div class="volume-viewer-header">
+        <button class="secondary" type="button" data-theatre-toggle="volume">Expand volume</button><div class="volume-viewer-header">
           <h3>3D volume navigation</h3>
           <span class="volume-nav-badge" id="volume-nav-badge">${NAVIGATION_ONLY_LABEL}</span>
         </div>
@@ -787,7 +788,7 @@ app.innerHTML = `
         <div id="volume-viewer-status" class="volume-viewer-status">Idle</div>
         <div id="volume-viewer-meta" class="volume-viewer-meta" hidden></div>
       </div>
-      <div id="mesh-output" class="mesh-output muted">No 3D mesh rendered yet.</div>
+      <button class="secondary" type="button" data-theatre-toggle="mesh">Expand mesh</button><div id="mesh-output" class="mesh-output muted">No 3D mesh rendered yet.</div>
       <div id="analysis-summary" class="output muted">No analysis run yet.</div>
     </section>
   </main>
@@ -1002,6 +1003,7 @@ const volumeBlackLevelLabel = mustElement<HTMLLabelElement>("volume-black-level-
 const volumeBlackLevelInput = mustElement<HTMLInputElement>("volume-black-level");
 const meshOutput = mustElement<HTMLDivElement>("mesh-output");
 const analysisSummary = mustElement<HTMLDivElement>("analysis-summary");
+let theatreState={...INITIAL_THEATRE_STATE};function theatreHost(k:string):HTMLElement{return k==="preview"?previewOutput:k==="volume"?volumeViewerPanel:meshOutput}function syncTheatre():void{for(const k of ["preview","volume","mesh"])theatreHost(k).classList.toggle("is-theatre",theatreState.active===k);document.body.classList.toggle("has-scientific-theatre",theatreState.active!==null);requestAnimationFrame(()=>{relayoutPreviewOverlays();volumeSession?.fitCamera();(document.getElementById("mesh-frame") as HTMLIFrameElement|null)?.contentWindow?.postMessage({type:"morphostack-mesh-resize"},"*")})}document.addEventListener("click",e=>{const t=e.target;if(!(t instanceof Element))return;const q=t.closest<HTMLButtonElement>("[data-theatre-toggle]");if(!q)return;theatreState=reduceTheatreState(theatreState,{type:"toggle",viewer:q.dataset.theatreToggle as any});syncTheatre()});document.addEventListener("keydown",e=>{if(theatreState.active&&shouldExitTheatre(e.key)){theatreState=reduceTheatreState(theatreState,{type:"exit"});syncTheatre()}});window.addEventListener("resize",()=>{if(theatreState.active)syncTheatre()});
 const batchSummary = mustElement<HTMLDivElement>("batch-summary");
 const sweepSummary = mustElement<HTMLDivElement>("sweep-summary");
 const validationSummary = mustElement<HTMLDivElement>("validation-summary");
