@@ -1,0 +1,12 @@
+{
+  "corpus_id": "blocked-empty-poc",
+  "acquisitions": [],
+  "objects": [],
+  "holdout": {
+    "frozen": false,
+    "object_ids": [],
+    "notes": "Empty fixture — must BLOCKED"
+  },
+  "hausdorff95_limit_px": 4.0,
+  "incomplete_signoff_statement": "Touching-vesicle real-data sign-off incomplete. Synthetic and isolated-stack results do not establish accuracy on crowded or contacting vesicles."
+}

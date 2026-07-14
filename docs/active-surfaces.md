@@ -1,26 +1,39 @@
 # Active Surfaces Profile
 
-Experimental **surfel-based** refinement when threshold contours are unstable. Profile name: `active_surfaces`.
+Experimental **surfel-based** refinement when threshold contours are unstable.  
+CLI / API name: `active_surfaces`. UI label: **Experimental — slow 3D refine**.
 
 <p align="center">
   <img src="public/active-surfaces-sketch.jpg" alt="Active surfaces sketch" width="75%" />
 </p>
 
+## How this differs from Standard (`vesicle`)
+
+| | **Standard** | **Experimental (active surfaces)** |
+| --- | --- | --- |
+| Core idea | Threshold each slice → contour (optional skeleton) | Seed a 3D surface of particles → optimize → mask → contour |
+| Speed | Fast (seconds after stack is loaded) | Slow (tens of seconds to minutes) |
+| Seed | Recommended on crowded fields | **Required** |
+| Multi-vesicle field | Still Standard — seed the target object | Still **one** object only; not multi-label |
+
+**Do not** switch to Experimental just because the image has many vesicles. For multi-vesicle stacks, stay on **Standard**, use **Select Object** (and optional XY crop). See [usage.md — Modes](usage.md#modes-profiles).
+
 ## When to use
 
-- Weak or uneven membrane signal where thresholding leaks into neighbors.
+- Weak or uneven membrane signal where thresholding leaks or merges neighbors **after** seeding failed under Standard.
 - Single seeded object with moderate spacing from neighbors.
-- After an ROI crop narrows the field.
+- After a seed isolation crop or user ROI narrows the field.
 
 ## When to avoid
 
-- Dense touching objects without ROI isolation — pre-split helps but is not guaranteed.
+- Everyday GUV/vesicle work — use **Standard** first.
+- Dense touching objects without seed isolation — pre-split helps but is not guaranteed.
 - Default-voxel stacks where absolute mesh size will be published.
-- Fast batch jobs — optimization is intentionally slower than threshold contours (~1–2 minutes per stack is common).
+- Fast batch jobs — full Analyze uses ~100 + 300 optimization steps; mesh preview uses reduced “fast” steps but is still heavier than threshold.
 
 ## Requirements
 
-- An **object seed** (circle or polygon) is required.
+- An **object seed** (circle or polygon) is required (UI blocks Analyze/Mesh without it).
 - Prefer verified voxel calibration for any quantitative mesh claim.
 
 ## Default optimization parameters

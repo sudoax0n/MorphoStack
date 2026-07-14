@@ -173,10 +173,13 @@ def test_seeded_analyze_stack_sets_merge_flag_when_qc_suspect(monkeypatch):
         profile="vesicle",
     )
     assert analysis.tracking is not None
-    assert analysis.tracking.records[1].tracked is True
-    assert analysis.tracking.records[1].likely_neighbor_merge is True
-    assert analysis.tracking.records[1].merge_suspect is True
-    assert analysis.tracking.records[1].merge_rejected is False
+    rec1 = analysis.tracking.records[1]
+    # Packet 04 authority: merge_suspect is never measure/display-tracked.
+    assert rec1.tracked is False
+    assert rec1.likely_neighbor_merge is True
+    assert rec1.merge_suspect is True
+    assert rec1.merge_rejected is False
+    assert rec1.loss_reason == "merge_suspect"
     warnings = object_tracking_warnings(analysis.tracking)
     assert any(w["code"] == "likely_neighbor_merge" for w in warnings)
     assert not any(w["code"] == "merge_suspect_rejected" for w in warnings)

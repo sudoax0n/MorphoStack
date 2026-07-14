@@ -471,6 +471,78 @@ export function worldExtentUm(
   };
 }
 
+/** Packet 06: which live TF control is truthful for the current blend mode. */
+export type VolumeAppearanceControl = "opacity" | "black_level";
+
+export function appearanceControlForBlend(mode: VolumeBlendMode): VolumeAppearanceControl {
+  return mode === "composite" ? "opacity" : "black_level";
+}
+
+export function clamp01(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(1, value));
+}
+
+/**
+ * Map black-level fraction (0 = full window, ~1 = almost only brightest) to an
+ * intensity window that keeps the upper bound fixed.
+ */
+export function intensityWindowFromBlackLevel(
+  baseRange: [number, number],
+  blackLevel: number
+): [number, number] {
+  const lo0 = Number(baseRange[0]);
+  const hi0 = Number(baseRange[1]);
+  const span = hi0 - lo0 || 1;
+  const t = Math.min(0.95, clamp01(blackLevel));
+  return [lo0 + t * span, hi0];
+}
+
+/**
+ * Estimate parallel-projection AABB fill fractions for a near-square XY volume
+ * on a canvas of given CSS size (Scout 07 framing model).
+ */
+export function estimateAabbProjectedFill(
+  canvasWidthPx: number,
+  canvasHeightPx: number,
+  options: { padding?: number; projectedAspect?: number } = {}
+): {
+  canvasAspect: number;
+  fillWidth: number;
+  fillHeight: number;
+  heightLimited: boolean;
+} {
+  const padding = options.padding ?? 0.1;
+  const projectedAspect = options.projectedAspect ?? 1;
+  const w = Math.max(1e-9, canvasWidthPx);
+  const h = Math.max(1e-9, canvasHeightPx);
+  const canvasAspect = w / h;
+  const usable = Math.max(0, 1 - padding);
+  const heightLimited = canvasAspect > projectedAspect;
+  if (heightLimited) {
+    return {
+      canvasAspect,
+      fillWidth: (projectedAspect / canvasAspect) * usable,
+      fillHeight: usable,
+      heightLimited: true
+    };
+  }
+  return {
+    canvasAspect,
+    fillWidth: usable,
+    fillHeight: (canvasAspect / projectedAspect) * usable,
+    heightLimited: false
+  };
+}
+
+/** CSS host height used by the volume canvas wrap (must match styles.css). */
+export const VOLUME_CANVAS_HOST_HEIGHT_CSS = "min(58vh, 540px)";
+export const VOLUME_CANVAS_HOST_MIN_HEIGHT_PX = 320;
+/** Debounce for ResizeObserver → fitCamera (ms). */
+export const VOLUME_FIT_RESIZE_DEBOUNCE_MS = 80;
+/** Engineering budget for a single fitCamera CPU call (ms). */
+export const VOLUME_FIT_CPU_BUDGET_MS = 50;
+
 export function createTypedScalars(
   bytes: Uint8Array,
   dtype: string,
@@ -663,6 +735,11 @@ export type VolumeViewerMountOptions = {
   blendMode?: VolumeBlendMode;
   /** Composite opacity gain 0–1 (ignored for pure MIP). */
   opacityGain?: number;
+  /**
+   * MIP black-level fraction 0–1 (transfer-function only). Raises the low end of
+   * the intensity window; ignored for composite opacity gain path.
+   */
+  blackLevel?: number;
   maxBytes?: number;
   /** Interaction sample quality scale (higher = coarser while dragging). */
   interactionScale?: number;
@@ -683,9 +760,16 @@ export class VolumeViewerSession {
   private vtk: VtkBundle | null = null;
   private blendMode: VolumeBlendMode = "mip";
   private opacityGain = 0.35;
+  private blackLevel = 0;
+  /** Full data/spec range before black-level windowing. */
+  private baseScalarRange: [number, number] = [0, 255];
+  /** Active intensity window used by transfer functions. */
   private scalarRange: [number, number] = [0, 255];
   private meta: VolumeReadyMeta | null = null;
   private resizeObserver: ResizeObserver | null = null;
+  private resizeTimer: ReturnType<typeof setTimeout> | null = null;
+  private orientationApplied = false;
+  private lastFitMs = 0;
   private geometry: DisplayLevelGeometry | null = null;
   private seedPickEnabled = false;
   private onWorldPick: VolumeViewerMountOptions["onWorldPick"] = undefined;
@@ -711,6 +795,23 @@ export class VolumeViewerSession {
     return this.geometry;
   }
 
+  /** Last `fitCamera` wall time in ms (engineering metric). */
+  get lastFitDurationMs(): number {
+    return this.lastFitMs;
+  }
+
+  get currentBlackLevel(): number {
+    return this.blackLevel;
+  }
+
+  get currentIntensityWindow(): [number, number] {
+    return [this.scalarRange[0], this.scalarRange[1]];
+  }
+
+  get currentBaseScalarRange(): [number, number] {
+    return [this.baseScalarRange[0], this.baseScalarRange[1]];
+  }
+
   static async mount(options: VolumeViewerMountOptions): Promise<VolumeViewerSession> {
     const session = new VolumeViewerSession();
     await session._mount(options);
@@ -730,15 +831,17 @@ export class VolumeViewerSession {
     const expectedCount = dimX * dimY * dimZ;
     const bytes = decodeBase64Binary(options.payload.data_b64!);
     const scalars = createTypedScalars(bytes, validated.dtype, expectedCount);
-    this.scalarRange = estimateScalarRange(scalars.values);
+    this.baseScalarRange = estimateScalarRange(scalars.values);
     const windowFromSpec = options.payload.display_volume_spec?.intensity_window;
     if (windowFromSpec && windowFromSpec.length >= 2) {
       const lo = Number(windowFromSpec[0]);
       const hi = Number(windowFromSpec[1]);
       if (Number.isFinite(lo) && Number.isFinite(hi) && hi > lo) {
-        this.scalarRange = [lo, hi];
+        this.baseScalarRange = [lo, hi];
       }
     }
+    this.blackLevel = clamp01(options.blackLevel ?? 0);
+    this.scalarRange = intensityWindowFromBlackLevel(this.baseScalarRange, this.blackLevel);
 
     let factories;
     try {
@@ -798,22 +901,10 @@ export class VolumeViewerSession {
 
       const renderer = fullScreen.getRenderer();
       renderer.addVolume(volume);
-      renderer.resetCamera();
-      // Slight elevation so anisotropic Z is visible for navigation.
-      try {
-        renderer.getActiveCamera().elevation(25);
-        renderer.getActiveCamera().azimuth(20);
-      } catch {
-        /* cameras may vary */
-      }
-      renderer.resetCamera();
 
       const interactor = fullScreen.getRenderWindow().getInteractor();
       interactor.setDesiredUpdateRate(INTERACTION_FPS_TARGET);
       interactor.setStillUpdateRate(0.001);
-
-      fullScreen.resize();
-      fullScreen.getRenderWindow().render();
 
       this.vtk = {
         genericRenderWindow: fullScreen,
@@ -839,15 +930,22 @@ export class VolumeViewerSession {
         );
       }
 
+      // Packet 06: size the render window first, then fit full physical AABB.
+      // Initial orientation is applied once inside fitCamera.
+      this.fitCamera({ applyInitialOrientation: true });
+
       if (typeof ResizeObserver !== "undefined") {
         this.resizeObserver = new ResizeObserver(() => {
           if (this.disposed || !this.vtk) return;
-          try {
-            this.vtk.genericRenderWindow.resize();
-            this.vtk.genericRenderWindow.getRenderWindow().render();
-          } catch {
-            /* ignore resize after teardown */
+          if (this.resizeTimer != null) {
+            clearTimeout(this.resizeTimer);
           }
+          this.resizeTimer = setTimeout(() => {
+            this.resizeTimer = null;
+            if (this.disposed || !this.vtk) return;
+            // Idempotent refit: resize + reset camera/clip; no re-orient.
+            this.fitCamera();
+          }, VOLUME_FIT_RESIZE_DEBOUNCE_MS);
         });
         this.resizeObserver.observe(options.container);
       }
@@ -901,6 +999,7 @@ export class VolumeViewerSession {
     ctfun.addRGBPoint(hi, 1.0, 1.0, 0.95);
 
     if (this.blendMode === "mip") {
+      // MIP: intensity window / black level drive visibility; opacityGain unused.
       mapper.setBlendModeToMaximumIntensity();
       ofun.addPoint(lo, 0.0);
       ofun.addPoint(lo + 0.15 * span, 0.05);
@@ -915,6 +1014,50 @@ export class VolumeViewerSession {
     }
   }
 
+  /**
+   * Public idempotent camera fit (Packet 06).
+   * resize → resetCamera → resetClippingRange → render.
+   * Initial elevation/azimuth applied only once (or when forced).
+   * Does not reload pyramid data or re-upload scalars.
+   * @returns wall-clock ms spent in the fit (engineering metric).
+   */
+  fitCamera(options: { applyInitialOrientation?: boolean } = {}): number {
+    if (this.disposed || !this.vtk) return 0;
+    const t0 =
+      typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+    try {
+      const grw = this.vtk.genericRenderWindow;
+      grw.resize();
+      const renderer = grw.getRenderer();
+      const camera = renderer.getActiveCamera?.() ?? renderer.getActiveCamera();
+      const applyOrient =
+        options.applyInitialOrientation === true || !this.orientationApplied;
+      if (applyOrient && camera) {
+        try {
+          // Orient first so resetCamera places the eye along the tilted view axis.
+          camera.elevation(25);
+          camera.azimuth(20);
+        } catch {
+          /* cameras may vary */
+        }
+        this.orientationApplied = true;
+      }
+      renderer.resetCamera();
+      try {
+        renderer.resetCameraClippingRange?.();
+      } catch {
+        /* optional on some builds */
+      }
+      grw.getRenderWindow().render();
+    } catch {
+      /* ignore fit after teardown */
+    }
+    const t1 =
+      typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+    this.lastFitMs = Math.max(0, t1 - t0);
+    return this.lastFitMs;
+  }
+
   setBlendMode(mode: VolumeBlendMode): void {
     if (this.disposed || !this.vtk) return;
     this.blendMode = mode;
@@ -922,13 +1065,46 @@ export class VolumeViewerSession {
     if (this.meta) {
       this.meta = { ...this.meta, blendMode: mode };
     }
+    // TF-only; no pyramid refetch. Framing unchanged.
     this.vtk.genericRenderWindow.getRenderWindow().render();
   }
 
+  /**
+   * Composite opacity gain. Transfer-function only; no-op for MIP (use black level).
+   */
   setOpacityGain(gain: number): void {
     if (this.disposed || !this.vtk) return;
     this.opacityGain = Math.max(0.02, Math.min(1, gain));
     if (this.blendMode !== "composite") return;
+    this.applyTransferFunctions(this.vtk.ctfun, this.vtk.ofun, this.vtk.mapper);
+    this.vtk.genericRenderWindow.getRenderWindow().render();
+  }
+
+  /**
+   * Live intensity window (µm-independent scalar units). Transfer-function only;
+   * never re-uploads volume data or refetches pyramid levels.
+   */
+  setIntensityWindow(lo: number, hi: number): void {
+    if (this.disposed || !this.vtk) return;
+    const a = Number(lo);
+    const b = Number(hi);
+    if (!Number.isFinite(a) || !Number.isFinite(b) || b <= a) return;
+    this.scalarRange = [a, b];
+    // Keep blackLevel approximately consistent with the window low edge.
+    const span = this.baseScalarRange[1] - this.baseScalarRange[0] || 1;
+    this.blackLevel = clamp01((a - this.baseScalarRange[0]) / span);
+    this.applyTransferFunctions(this.vtk.ctfun, this.vtk.ofun, this.vtk.mapper);
+    this.vtk.genericRenderWindow.getRenderWindow().render();
+  }
+
+  /**
+   * MIP black level 0–1: raises the intensity window floor within baseScalarRange.
+   * Transfer-function only (works for both blend modes; primary control for MIP).
+   */
+  setBlackLevel(level: number): void {
+    if (this.disposed || !this.vtk) return;
+    this.blackLevel = clamp01(level);
+    this.scalarRange = intensityWindowFromBlackLevel(this.baseScalarRange, this.blackLevel);
     this.applyTransferFunctions(this.vtk.ctfun, this.vtk.ofun, this.vtk.mapper);
     this.vtk.genericRenderWindow.getRenderWindow().render();
   }
@@ -1093,6 +1269,11 @@ export class VolumeViewerSession {
     this.meta = null;
     this.geometry = null;
     this.seedPickEnabled = false;
+    this.orientationApplied = false;
+    if (this.resizeTimer != null) {
+      clearTimeout(this.resizeTimer);
+      this.resizeTimer = null;
+    }
     if (this.pickSub) {
       try {
         this.pickSub.unsubscribe();

@@ -30,6 +30,11 @@ from morphostack.core.seeded_vesicle import (
     SeededSliceResult,
     TrackingCancelled,
     TrackProgressEvent,
+    extend_track,
+    frame_is_terminal_exact,
+    furthest_accepted_frontier,
+    is_tracking_instrumentation_enabled,
+    record_tracking_observe_event,
     track_seeded_vesicle_stack,
 )
 from morphostack.core.stack_cache import (
@@ -176,8 +181,11 @@ class TrackingJobService:
     max_retained_jobs:
         Finished jobs kept for status-by-id (LRU by completion order).
     track_fn:
-        Injectable science entry (tests). Defaults to
+        Injectable full-walk science entry (tests). Defaults to
         :func:`~morphostack.core.seeded_vesicle.track_seeded_vesicle_stack`.
+    extend_fn:
+        Injectable frontier-extension entry (tests). Defaults to
+        :func:`~morphostack.core.seeded_vesicle.extend_track`.
     """
 
     def __init__(
@@ -187,6 +195,7 @@ class TrackingJobService:
         max_active_jobs: int = DEFAULT_MAX_ACTIVE_JOBS,
         max_retained_jobs: int = DEFAULT_MAX_RETAINED_JOBS,
         track_fn: Callable[..., list[SeededSliceResult]] | None = None,
+        extend_fn: Callable[..., list[SeededSliceResult]] | None = None,
     ) -> None:
         if max_active_jobs < 1:
             raise ValueError("max_active_jobs must be >= 1")
@@ -196,6 +205,7 @@ class TrackingJobService:
         self._max_active = int(max_active_jobs)
         self._max_retained = int(max_retained_jobs)
         self._track_fn = track_fn or track_seeded_vesicle_stack
+        self._extend_fn = extend_fn or extend_track
         self._lock = threading.RLock()
         # key -> active (non-terminal) job
         self._active_by_key: dict[TrackingCacheKey, _JobRecord] = {}
@@ -204,8 +214,9 @@ class TrackingJobService:
         # terminal retention order
         self._finished: OrderedDict[str, None] = OrderedDict()
         self._shutdown = False
-        # Count science invocations for single-flight tests.
+        # Count science invocations for single-flight / frontier-reuse tests.
         self.track_invocations = 0
+        self.extend_invocations = 0
         self._track_invocations_lock = threading.Lock()
 
     @property
@@ -237,7 +248,17 @@ class TrackingJobService:
                         raise ValueError("direction_priority must be None, +1, or -1")
                     existing.direction_priority = int(direction_priority)
                 existing.updated_at = _utc_now_iso()
-                return existing.snapshot(attached=True)
+                snap = existing.snapshot(attached=True)
+                if is_tracking_instrumentation_enabled():
+                    record_tracking_observe_event(
+                        "job_start",
+                        job_id=snap.job_id,
+                        key_revision=snap.tracking_key_revision,
+                        target_z=snap.requested_target_z,
+                        direction_priority=snap.direction_priority,
+                        attached=True,
+                    )
+                return snap
 
             # Capacity: cancel other active keys when at max (single-writer default).
             while len(self._active_by_key) >= self._max_active:
@@ -275,7 +296,17 @@ class TrackingJobService:
             )
             job.thread = thread
             thread.start()
-            return job.snapshot(attached=False)
+            snap = job.snapshot(attached=False)
+            if is_tracking_instrumentation_enabled():
+                record_tracking_observe_event(
+                    "job_start",
+                    job_id=snap.job_id,
+                    key_revision=snap.tracking_key_revision,
+                    target_z=snap.requested_target_z,
+                    direction_priority=snap.direction_priority,
+                    attached=False,
+                )
+            return snap
 
     def reprioritize(
         self,
@@ -295,7 +326,16 @@ class TrackingJobService:
                     raise ValueError("direction_priority must be None, +1, or -1")
                 job.direction_priority = int(direction_priority)
             job.updated_at = _utc_now_iso()
-            return job.snapshot()
+            snap = job.snapshot()
+        if is_tracking_instrumentation_enabled():
+            record_tracking_observe_event(
+                "job_reprioritize",
+                job_id=snap.job_id,
+                key_revision=snap.tracking_key_revision,
+                target_z=snap.requested_target_z,
+                direction_priority=snap.direction_priority,
+            )
+        return snap
 
     def cancel(self, job_id: str) -> TrackingJobSnapshot:
         with self._lock:
@@ -457,38 +497,129 @@ class TrackingJobService:
                     t = job.requested_target_z
                 return int(t) if t is not None else None
 
-            with self._track_invocations_lock:
-                self.track_invocations += 1
-
-            # If a target Z is (or becomes) set, walk that direction with a live
-            # stop; otherwise full bidirectional with live direction priority.
-            # Callables are re-evaluated at each safe frame boundary (packet 02).
+            # Packet 03: reuse exact cache frontiers — same-direction work extends
+            # from the closest accepted frame; opposite-side accepts are preserved
+            # via merge (never terminal put of unidirectional unreached placeholders).
+            cached = self._cache.get(job.key)
             with self._lock:
                 initial_target = job.requested_target_z
-            if initial_target is not None:
-                out = self._track_fn(
+
+            if (
+                cached is not None
+                and initial_target is not None
+                and 0 <= int(initial_target) < job.n
+                and frame_is_terminal_exact(cached[int(initial_target)])
+            ):
+                # Target already exact — complete without resegmenting.
+                out = list(cached)
+                with self._lock:
+                    if job.owner_token != owner:
+                        return
+                    if not self._still_owner(job):
+                        if job.state not in _TERMINAL:
+                            job.state = "cancelled"
+                            job.error_code = "cancelled"
+                            job.message = "cancelled_or_superseded"
+                            job.updated_at = _utc_now_iso()
+                            self._retain_finished_unlocked(job)
+                        return
+                    job._results = out
+                    job.available_exact_frames = {
+                        i
+                        for i, r in enumerate(out)
+                        if r is not None and r.method != "circle_seed_unreached"
+                    }
+                    committed = sorted(job.available_exact_frames)
+                    if committed:
+                        job.reached_low_z = committed[0]
+                        job.reached_high_z = committed[-1]
+                    job.state = "complete"
+                    job.updated_at = _utc_now_iso()
+                    self._cache.merge(job.key, list(out))
+                    self._finalize_unlocked(job)
+                    if is_tracking_instrumentation_enabled():
+                        record_tracking_observe_event(
+                            "job_complete",
+                            job_id=job.job_id,
+                            key_revision=tracking_key_revision(job.key),
+                            state="complete",
+                            reached_low_z=job.reached_low_z,
+                            reached_high_z=job.reached_high_z,
+                            available_exact_frames=sorted(job.available_exact_frames),
+                            reused_cache=True,
+                        )
+                return
+
+            use_extend = False
+            if cached is not None and initial_target is not None:
+                direction = 1 if int(initial_target) > job.seed_frame else -1
+                frontier = furthest_accepted_frontier(
+                    cached, seed_frame=job.seed_frame, direction=direction
+                )
+                if frontier is not None:
+                    # Extensible when the frontier has not yet reached the target.
+                    if (direction > 0 and frontier < int(initial_target)) or (
+                        direction < 0 and frontier > int(initial_target)
+                    ):
+                        use_extend = True
+                    elif (direction > 0 and frontier >= int(initial_target)) or (
+                        direction < 0 and frontier <= int(initial_target)
+                    ):
+                        # Accepted path already covers target (target may be gap).
+                        use_extend = True
+
+            from morphostack.core.seeded_vesicle import competitive_from_tracking_mode
+
+            job_competitive = competitive_from_tracking_mode(job.key.tracking_mode)
+
+            if use_extend and cached is not None:
+                with self._track_invocations_lock:
+                    self.extend_invocations += 1
+                    self.track_invocations += 1
+                out = self._extend_fn(
                     job.stack,
                     seed_x=job.seed_x,
                     seed_y=job.seed_y,
                     seed_frame=job.seed_frame,
                     seed_radius=job.seed_radius,
                     target_frame=live_target_frame,
+                    cached_results=cached,
                     on_progress=on_progress,
                     cancel_check=cancel_check,
                     direction_priority=live_direction_priority,
+                    competitive_isolation=job_competitive,
                 )
             else:
-                out = self._track_fn(
-                    job.stack,
-                    seed_x=job.seed_x,
-                    seed_y=job.seed_y,
-                    seed_frame=job.seed_frame,
-                    seed_radius=job.seed_radius,
-                    target_frame=None,
-                    on_progress=on_progress,
-                    cancel_check=cancel_check,
-                    direction_priority=live_direction_priority,
-                )
+                with self._track_invocations_lock:
+                    self.track_invocations += 1
+                # If a target Z is (or becomes) set, walk that direction with a live
+                # stop; otherwise full bidirectional with live direction priority.
+                if initial_target is not None:
+                    out = self._track_fn(
+                        job.stack,
+                        seed_x=job.seed_x,
+                        seed_y=job.seed_y,
+                        seed_frame=job.seed_frame,
+                        seed_radius=job.seed_radius,
+                        target_frame=live_target_frame,
+                        on_progress=on_progress,
+                        cancel_check=cancel_check,
+                        direction_priority=live_direction_priority,
+                        competitive_isolation=job_competitive,
+                    )
+                else:
+                    out = self._track_fn(
+                        job.stack,
+                        seed_x=job.seed_x,
+                        seed_y=job.seed_y,
+                        seed_frame=job.seed_frame,
+                        seed_radius=job.seed_radius,
+                        target_frame=None,
+                        on_progress=on_progress,
+                        cancel_check=cancel_check,
+                        direction_priority=live_direction_priority,
+                        competitive_isolation=job_competitive,
+                    )
             with self._lock:
                 # Successful science return: mark complete only if we still own the key.
                 # A superseded/cancelled job that lost ownership must not complete.
@@ -515,8 +646,19 @@ class TrackingJobService:
                     job.reached_high_z = committed[-1]
                 job.state = "complete"
                 job.updated_at = _utc_now_iso()
-                self._cache.put(job.key, list(out))
+                # Merge — never put — so opposite-side accepted frames survive.
+                self._cache.merge(job.key, list(out))
                 self._finalize_unlocked(job)
+                if is_tracking_instrumentation_enabled():
+                    record_tracking_observe_event(
+                        "job_complete",
+                        job_id=job.job_id,
+                        key_revision=tracking_key_revision(job.key),
+                        state="complete",
+                        reached_low_z=job.reached_low_z,
+                        reached_high_z=job.reached_high_z,
+                        available_exact_frames=sorted(job.available_exact_frames),
+                    )
         except TrackingCancelled as exc:
             with self._lock:
                 if job.owner_token != owner:

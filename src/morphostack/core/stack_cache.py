@@ -425,12 +425,67 @@ def _optional_str(value: Any) -> str | None:
     return text if text else None
 
 
+def _result_is_unreached(result: Any) -> bool:
+    """True for placeholder frames that must not clobber committed exact work."""
+    if result is None:
+        return True
+    if bool(getattr(result, "ok", False)):
+        return False
+    return str(getattr(result, "method", "")) == "circle_seed_unreached"
+
+
+def _result_is_accepted(result: Any) -> bool:
+    return result is not None and bool(getattr(result, "ok", False))
+
+
+def merge_tracking_frame(old: Any, new: Any) -> Any:
+    """Pick the survivor for one Z when merging directional tracking results.
+
+    Rules (Packet 03 independent frontiers):
+    - ``circle_seed_unreached`` never replaces any committed frame.
+    - Accepted (``ok``) frames are never replaced by non-accepted results.
+    - When both are accepted, keep the existing accepted frame (stable identity;
+      same-direction extension must not re-author authoritative masks).
+    - When neither is accepted and both are committed statuses (gap/cap/fail),
+      prefer the fresher ``new`` value.
+    """
+    if old is None:
+        return new
+    if new is None:
+        return old
+    old_unreached = _result_is_unreached(old)
+    new_unreached = _result_is_unreached(new)
+    if new_unreached and not old_unreached:
+        return old
+    if old_unreached and not new_unreached:
+        return new
+    old_ok = _result_is_accepted(old)
+    new_ok = _result_is_accepted(new)
+    if old_ok and not new_ok:
+        return old
+    if new_ok and not old_ok:
+        return new
+    if old_ok and new_ok:
+        # Preserve the first accepted authoritative mask for this Z.
+        return old
+    # Both non-accepted committed (or both unreached): fresher wins.
+    return new
+
+
 class TrackingResultCache:
     """LRU cache for exact ``SeededSliceResult`` lists from seeded Z tracking.
 
     Keyed by the full :class:`TrackingCacheKey` (source revision, seed, ROI/Z,
     shape, profile, exact mode, algorithm version). Stores only exact/committed
     results — never provisional one-plane overlays. Indexed by local frame.
+
+    Directional jobs must **merge** terminal results so opposite-side accepted
+    frames are never replaced by unidirectional ``circle_seed_unreached``
+    placeholders. Prefer :meth:`merge` for progressive and terminal writes;
+    :meth:`put` remains a full replace for cold insert / tests only.
+
+    Correction revision / audit (Packet 04) lives in a side map keyed by the
+    same :class:`TrackingCacheKey` and is cleared when the entry is evicted.
     """
 
     def __init__(self, maxsize: int = _DEFAULT_TRACKING_MAX_ENTRIES) -> None:
@@ -439,10 +494,12 @@ class TrackingResultCache:
         self._maxsize = int(maxsize)
         self._lock = Lock()
         self._entries: OrderedDict[TrackingCacheKey, list[Any]] = OrderedDict()
+        self._review: dict[TrackingCacheKey, Any] = {}
 
     def clear(self) -> None:
         with self._lock:
             self._entries.clear()
+            self._review.clear()
 
     def __len__(self) -> int:
         with self._lock:
@@ -458,15 +515,60 @@ class TrackingResultCache:
             # live cache entry under the lock.
             return list(cached)
 
+    def get_review_meta(self, key: TrackingCacheKey) -> Any:
+        """Return :class:`~morphostack.core.track_review.TrackingReviewMeta` or None."""
+        with self._lock:
+            meta = self._review.get(key)
+            if meta is None:
+                return None
+            # Shallow copy of container; events list is shared for audit continuity.
+            return meta
+
+    def set_review_meta(self, key: TrackingCacheKey, meta: Any) -> None:
+        with self._lock:
+            if key not in self._entries and key not in self._review:
+                # Allow meta attach only when we will put/merge, or after put.
+                pass
+            self._review[key] = meta
+
+    def correction_revision(self, key: TrackingCacheKey) -> int:
+        with self._lock:
+            meta = self._review.get(key)
+            if meta is None:
+                return 0
+            return int(getattr(meta, "correction_revision", 0) or 0)
+
+    def _evict_overflow_unlocked(self) -> None:
+        while len(self._entries) > self._maxsize:
+            old_key, _ = self._entries.popitem(last=False)
+            self._review.pop(old_key, None)
+
     def put(self, key: TrackingCacheKey, results: list[SeededSliceResult]) -> None:
+        """Replace the entire entry (cold insert / diagnostic). Prefer :meth:`merge`."""
         with self._lock:
             self._entries[key] = list(results)
             self._entries.move_to_end(key)
-            while len(self._entries) > self._maxsize:
-                self._entries.popitem(last=False)
+            self._evict_overflow_unlocked()
+        # Observe-only: never changes cache semantics.
+        try:
+            from morphostack.core.seeded_vesicle import (
+                is_tracking_instrumentation_enabled,
+                record_tracking_observe_event,
+            )
+
+            if is_tracking_instrumentation_enabled():
+                n_ok = sum(1 for r in results if getattr(r, "ok", False))
+                record_tracking_observe_event(
+                    "cache_put",
+                    key_revision=tracking_key_revision(key),
+                    n_frames=len(results),
+                    n_ok=int(n_ok),
+                )
+        except Exception:
+            pass
 
     def merge(self, key: TrackingCacheKey, results: list[SeededSliceResult]) -> None:
-        """Merge new results into an existing entry — keep best (ok=True) per frame."""
+        """Merge directional results — never clobber accepted or committed frames with unreached."""
         with self._lock:
             existing = self._entries.get(key)
             if existing is None:
@@ -477,19 +579,47 @@ class TrackingResultCache:
                 for i in range(n):
                     old = existing[i] if i < len(existing) else None
                     new = results[i] if i < len(results) else None
-                    if old is None:
-                        merged.append(new)
-                    elif new is None:
-                        merged.append(old)
-                    elif getattr(old, "ok", False) and not getattr(new, "ok", False):
-                        merged.append(old)
-                    else:
-                        # Prefer new when both ok or old failed (fresher track).
-                        merged.append(new if new is not None else old)
+                    # Manual anchors win over auto results for the same Z.
+                    if old is not None and str(getattr(old, "method", "")).startswith(
+                        "manual_anchor"
+                    ) and bool(getattr(old, "ok", False)):
+                        if not (
+                            new is not None
+                            and str(getattr(new, "method", "")).startswith("manual_anchor")
+                            and bool(getattr(new, "ok", False))
+                        ):
+                            merged.append(old)
+                            continue
+                    merged.append(merge_tracking_frame(old, new))
             self._entries[key] = merged
             self._entries.move_to_end(key)
-            while len(self._entries) > self._maxsize:
-                self._entries.popitem(last=False)
+            self._evict_overflow_unlocked()
+        # Observe-only: never changes merge policy or stored results.
+        try:
+            from morphostack.core.seeded_vesicle import (
+                is_tracking_instrumentation_enabled,
+                record_tracking_observe_event,
+            )
+
+            if is_tracking_instrumentation_enabled():
+                n_ok = sum(1 for r in results if getattr(r, "ok", False))
+                record_tracking_observe_event(
+                    "cache_merge",
+                    key_revision=tracking_key_revision(key),
+                    n_incoming=len(results),
+                    n_ok_incoming=int(n_ok),
+                )
+        except Exception:
+            pass
+
+    def replace_results(
+        self, key: TrackingCacheKey, results: list[SeededSliceResult]
+    ) -> None:
+        """Full replace used by correction apply (preserves review meta)."""
+        with self._lock:
+            self._entries[key] = list(results)
+            self._entries.move_to_end(key)
+            self._evict_overflow_unlocked()
 
 
 # Process-wide defaults used by the API layer.

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 from io import StringIO
 import json
 
@@ -8,6 +9,7 @@ import numpy as np
 from morphostack.core import VoxelSize, analyze_stack
 from morphostack.core.export import (
     BATCH_SUMMARY_COLUMNS,
+    CSV_COLUMNS,
     analysis_manifest,
     analysis_report_markdown,
     analysis_rows,
@@ -47,6 +49,7 @@ def test_analysis_rows_include_empty_and_valid_frames():
 
 
 def test_write_analysis_csv_writes_header_and_rows():
+    """Header order matches production CSV_COLUMNS (Packet 08 threshold provenance)."""
     stack = np.zeros((1, 8, 8), dtype=np.uint8)
     stack[0, 2:5, 1:4] = 200
     analysis = analyze_stack(
@@ -60,11 +63,41 @@ def test_write_analysis_csv_writes_header_and_rows():
     write_analysis_csv(analysis, buffer)
 
     csv_text = buffer.getvalue()
-    assert "frame_index,threshold,profile,method,excluded,has_contour" in csv_text
-    assert "bbox_width_um,bbox_height_um,aspect_ratio,elongation,deformation_index,extent,equivalent_diameter_um,solidity" in csv_text
-    assert "skel_ok,skel_perimeter_px,skel_perimeter_um" in csv_text
-    assert "mesh_surface_area_um2,mesh_volume_um3,mesh_equivalent_sphere_diameter_um,mesh_sphericity" in csv_text
-    assert "0,100.0,vesicle,fallback,False,True" in csv_text
+    lines = csv_text.splitlines()
+    assert lines, "CSV must include a header line"
+    # Exact column order = production schema authority (do not invent alternate order).
+    assert lines[0] == ",".join(CSV_COLUMNS)
+    assert CSV_COLUMNS[:9] == (
+        "frame_index",
+        "threshold",
+        "requested_threshold",
+        "effective_threshold",
+        "threshold_semantics",
+        "profile",
+        "method",
+        "excluded",
+        "has_contour",
+    )
+    assert "bbox_width_um,bbox_height_um,aspect_ratio,elongation,deformation_index,extent,equivalent_diameter_um,solidity" in lines[0]
+    assert "skel_ok,skel_perimeter_px,skel_perimeter_um" in lines[0]
+    assert "mesh_surface_area_um2,mesh_volume_um3,mesh_equivalent_sphere_diameter_um,mesh_sphericity" in lines[0]
+
+    rows = list(csv.DictReader(StringIO(csv_text)))
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["frame_index"] == "0"
+    assert float(row["threshold"]) == 100.0
+    assert float(row["requested_threshold"]) == 100.0
+    assert float(row["effective_threshold"]) == 100.0
+    assert row["threshold_semantics"] == "global_intensity"
+    assert row["profile"] == "vesicle"
+    assert row["method"] == "fallback"
+    assert row["excluded"] == "False"
+    assert row["has_contour"] == "True"
+    assert float(row["area_um2"]) == 9.0
+    assert float(row["aspect_ratio"]) == 1.0
+    # Representative row prefix (legacy + Packet 08 provenance columns).
+    assert "0,100.0,100.0,100.0,global_intensity,vesicle,fallback,False,True" in csv_text
 
 
 def test_analysis_manifest_records_run_settings():

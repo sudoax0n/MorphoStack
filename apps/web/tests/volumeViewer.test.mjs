@@ -162,9 +162,48 @@ async function main() {
   assert.match(m.fallbackMessage("no_webgl"), /WebGL/);
   assert.match(m.fallbackMessage("over_budget"), /budget/);
 
-  // --- disposal contract (no GPU): session not required for pure helpers ---
+  // --- Packet 06: appearance control contract ---
+  assert.equal(m.appearanceControlForBlend("mip"), "black_level");
+  assert.equal(m.appearanceControlForBlend("composite"), "opacity");
+
+  // Black level raises window floor; keeps hi fixed; never inverted.
+  const win0 = m.intensityWindowFromBlackLevel([0, 1000], 0);
+  assert.deepEqual(win0, [0, 1000]);
+  const winHalf = m.intensityWindowFromBlackLevel([0, 1000], 0.5);
+  assert.equal(winHalf[0], 500);
+  assert.equal(winHalf[1], 1000);
+  const winHigh = m.intensityWindowFromBlackLevel([100, 200], 0.95);
+  assert.ok(winHigh[0] < winHigh[1], "window must remain non-empty");
+  assert.equal(winHigh[1], 200);
+  assert.equal(m.clamp01(-1), 0);
+  assert.equal(m.clamp01(2), 1);
+
+  // Projected fill: taller host improves width fill for square AABB (Scout 07 model).
+  const oldHost = m.estimateAabbProjectedFill(1344, 378); // min(42vh,380) @ 1400×900
+  const newHost = m.estimateAabbProjectedFill(1344, 522); // min(58vh,540) @ 1400×900 ≈ 522
+  assert.ok(oldHost.heightLimited && newHost.heightLimited);
+  assert.ok(
+    newHost.fillWidth > oldHost.fillWidth + 0.04,
+    `fill width must improve materially: old=${oldHost.fillWidth.toFixed(3)} new=${newHost.fillWidth.toFixed(3)}`
+  );
+  assert.ok(newHost.fillHeight >= 0.85, "full physical AABB still height-fitted");
+  assert.ok(newHost.fillWidth < 1.0, "must not crop — fill width stays within canvas");
+
+  // CSS contract constants match styles intent
+  assert.match(m.VOLUME_CANVAS_HOST_HEIGHT_CSS, /58vh/);
+  assert.match(m.VOLUME_CANVAS_HOST_HEIGHT_CSS, /540px/);
+  assert.equal(m.VOLUME_CANVAS_HOST_MIN_HEIGHT_PX, 320);
+  assert.ok(m.VOLUME_FIT_CPU_BUDGET_MS <= 50);
+  assert.ok(m.VOLUME_FIT_RESIZE_DEBOUNCE_MS > 0);
+
+  // Session API surface (no GPU mount in unit tests)
   assert.equal(typeof m.VolumeViewerSession, "function");
   assert.equal(typeof m.detectWebGLSupport, "function");
+  const proto = m.VolumeViewerSession.prototype;
+  assert.equal(typeof proto.fitCamera, "function");
+  assert.equal(typeof proto.setBlackLevel, "function");
+  assert.equal(typeof proto.setIntensityWindow, "function");
+  assert.equal(typeof proto.setOpacityGain, "function");
 
   console.log("volumeViewer.test.mjs: all passed");
 }

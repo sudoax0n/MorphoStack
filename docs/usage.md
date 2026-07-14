@@ -6,13 +6,47 @@ How to run MorphoStack day-to-day: browser UI and CLI. For install, see [getting
   <img src="public/pipeline-concept.jpg" alt="Z-stack to mesh pipeline" width="90%" />
 </p>
 
-## Profiles
+## Modes (profiles)
 
-| Profile | Use when | Notes |
+The UI **Mode** selector maps to CLI `--profile` names. MorphoStack always analyzes **one object per run** (or the largest blob if you do not seed). It does **not** automatically label every vesicle in a field.
+
+| UI label | CLI `--profile` | What it does | Use for |
+| --- | --- | --- | --- |
+| **Standard — GUVs / vesicles** | `vesicle` | **With Select Object:** seeded lumen/outside segmentation (random walker) + Z centroid propagation (research-backed). **Without seed:** threshold + largest component. Optional skeleton. | Default for single or multi-vesicle stacks |
+| **Red blood cells (RBC)** | `rbc` | Same contour engine as Standard; RBC-oriented defaults | RBC / erythrocyte stacks |
+| **Experimental — slow 3D refine** | `active_surfaces` | Seeded surfel optimization → mask → contour → metrics / mesh | Only when Standard cannot lock a weak or leaky membrane |
+
+### Single vesicle vs multi-vesicle (which mode?)
+
+| Situation | Mode | Why |
 | --- | --- | --- |
-| `vesicle` | GUVs / membrane vesicles | Default threshold-contour path |
-| `rbc` | Red blood cell stacks | Same engine; RBC-specific metrics still evolving |
-| `active_surfaces` | Threshold leaks or weak edges | **Experimental**; requires object seed — [details](active-surfaces.md) |
+| **One vesicle** alone in the FOV | **Standard** | Threshold + contour is enough; seed optional |
+| **Many vesicles** (crowded CZI) — you want **one** of them | **Standard** + **Select Object** (and optional crop box) | Mode is still Standard; isolation is seed/ROI, not Experimental |
+| **RBC** stack | **RBC** | Same engine; choose RBC so runs are labeled correctly |
+| Threshold merges neighbors or membrane is too broken | **Experimental** *after* Select Object | Slow 3D refine; still one object only — [active-surfaces.md](active-surfaces.md) |
+
+**Important:** “Multi-vesicle” does **not** mean switch to Experimental. Multi means: stay on **Standard**, click **Select Object** on the vesicle you care about, optionally drag an XY crop, then Analyze / mesh.
+
+**Tracking notes (Standard + seed):**
+
+- Preview and Analyze **track** the seeded object across Z (overlap + area consistency). They do not keep a fixed click coordinate that can fall into a neighbor hole or merge.
+- Selection prefers components whose **exterior contour contains** the seed (works for hollow GUV rings) and **rejects** merge-sized blobs / dust relative to the seed-frame area.
+- Red overlay in preview is the **selected object only** when a seed is set (not every thresholded vesicle in the field).
+- If the object is lost mid-stack (touching neighbors, huge area jump), later frames stop claiming a false contour rather than painting a multi-vesicle cluster. Re-seed on a clearer slice or tighten the crop.
+
+```text
+Recommended lab path
+  Mode = Standard
+  → Inspect stack
+  → Select Object on target vesicle (required if more than one bright object)
+  → Threshold + Preview
+  → Analyze (CSV) / View 3D Mesh
+```
+
+### What each mode is *not*
+
+- **Standard / RBC** are not “measure every object in the image at once.” Use batch later or re-run with a new seed for another object.
+- **Experimental** is not faster and not multi-object. It is a heavier single-object alternative when threshold contours fail. Mesh preview uses reduced optimization steps; full Analyze uses quality defaults.
 
 ## Browser UI workflow
 
@@ -20,7 +54,7 @@ Start with `morphostack dev` (port **5173**) or `morphostack app` (port **8000**
 
 ### 1. Stack & calibration
 
-1. Choose a `.tif`, `.tiff`, `.lsm`, or `.czi` file.
+1. Prefer **Stack path** for large CZI/TIFF files (avoids re-upload). Or Choose File and **Inspect once** (server keeps a session).
 2. Calibration:
    - **Auto** — metadata when present
    - **Manual override** — known microscope spacing
@@ -29,18 +63,18 @@ Start with `morphostack dev` (port **5173**) or `morphostack app` (port **8000**
 
 ### 2. Preview & object selection
 
-1. Pick a **profile**.
-2. Optional **object seed** (crowded fields): **Select Object**, then circle-drag or polygon on the preview. Set radius / max track distance if needed.
+1. Leave **Mode** on **Standard** unless you have a reason to change it (see above).
+2. **Select Object** on the vesicle (circle-drag or polygon). Required for Experimental; strongly recommended on crowded fields for Standard/RBC.
 3. Optional **Z range** (`start` inclusive, `stop` exclusive) to drop empty top/bottom slices.
-4. Optional **XY ROI** — type bounds or drag a rectangle on preview.
-5. Scrub the frame slider; **Suggest Threshold** → **Preview**.
+4. Optional **XY crop** — drag a rectangle on preview when not in Select Object mode.
+5. Scrub the frame slider; **Suggest Threshold** → **Preview**. Optional **Enable skeleton** for centerline perimeter.
 
 ### 3. Analyze & export
 
 1. **Analyze** — read warnings (`default_voxel_size`, tracking loss, neighbor merge).
-2. Optional **Include 3D mesh** → **View 3D Mesh** (Plotly; may be decimated for speed).
+2. Optional **Include 3D mesh in Analyze** and/or **View 3D Mesh** (Plotly; may be decimated for speed).
 3. Download **CSV**, **manifest**, and **report**.
-4. After analyze, **Show tracked-object debug overlay** to review centroids.
+4. Advanced: tracked-centroid debug overlay after Analyze.
 
 ### 4. Batch & threshold sweep
 

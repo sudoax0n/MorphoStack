@@ -196,6 +196,8 @@ class AnalyzeRequest(BaseModel):
     excluded_frames: list[int] = Field(default_factory=list)
     enable_skeleton: bool = False
     skeleton_prune_pix: float = Field(default=1.0, ge=0)
+    # Packet 11: experimental competitive exact path (default off / legacy).
+    competitive_tracking: bool = False
 
 
 class MeshPreviewRequest(BaseModel):
@@ -263,6 +265,9 @@ class PreviewRequest(BaseModel):
     # Diagnostic rollback: run synchronous seed-to-target walk (pre-packet-04 policy).
     # Default False: exact path reads cache / single-flight job only (no sync walk).
     force_sync_exact: bool = False
+    # Packet 11: experimental competitive exact path (default off). Fast provisional
+    # preview stays the display path; this only affects exact seeded tracking identity.
+    competitive_tracking: bool = False
 
 
 class ThresholdRequest(BaseModel):
@@ -309,11 +314,33 @@ class TrackingJobStartRequest(BaseModel):
     z_range: ZRangeRequest | None = None
     target_z: int | None = None
     direction_priority: int | None = None  # +1 / -1 for full bidirectional only
+    competitive_tracking: bool = False
 
 
 class TrackingJobReprioritizeRequest(BaseModel):
     target_z: int | None = None
     direction_priority: int | None = None
+
+
+class TrackingCorrectionRequest(BaseModel):
+    """Manual review correction (Packet 04).
+
+    Actions:
+    - ``reject_frame``: mark frame uncertain; invalidate open intervals to next anchors
+    - ``accept_manual_anchor``: accept current plane seed segment as manual anchor
+    - ``reseed``: audit-only; client must use a new ObjectSeed (new cache identity)
+    """
+
+    path: str | None = None
+    stack_id: str | None = None
+    object_seed: ObjectSeedRequest
+    profile: str = DEFAULT_PROFILE
+    voxel: VoxelOverride | None = None
+    roi: ROIRequest | None = None
+    z_range: ZRangeRequest | None = None
+    competitive_tracking: bool = False
+    frame_index: int = Field(ge=0)
+    action: Literal["reject_frame", "accept_manual_anchor", "reseed"] = "accept_manual_anchor"
 
 
 def create_app(*, static_dir: Path | None = None) -> FastAPI:
@@ -596,6 +623,8 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
             )
             local_seed = transform.to_local_seed_object(seed)
             seed_r = effective_seed_radius(float(local_seed.radius) if local_seed.radius else None)
+            from morphostack.core.seeded_vesicle import exact_tracking_mode_token
+
             cache_key = make_tracking_cache_key(
                 stack_identity=stack_identity,
                 seed_x=float(local_seed.x),
@@ -606,6 +635,7 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
                 roi=roi,
                 z_range=z_range,
                 profile=request.profile,
+                tracking_mode=exact_tracking_mode_token(bool(request.competitive_tracking)),
             )
             snap = _tracking_service().start(
                 key=cache_key,
@@ -664,6 +694,215 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
         payload["process_local"] = True
         return payload
 
+    @app.post("/tracking/corrections")
+    def tracking_correction(request: TrackingCorrectionRequest) -> dict[str, object]:
+        """Apply a manual correction anchor / reject without full-stack wipe."""
+        from morphostack.core.seeded_vesicle import (
+            effective_seed_radius,
+            segment_slice_seeded,
+        )
+        from morphostack.core.stack_cache import (
+            default_tracking_cache,
+            make_tracking_cache_key,
+            tracking_key_revision,
+        )
+        from morphostack.core.track_review import (
+            TrackingReviewMeta,
+            apply_manual_correction,
+            classify_frame_authority,
+            frame_authority_payload,
+        )
+
+        try:
+            stack, _sha = resolve_stack(
+                path=request.path,
+                stack_id=request.stack_id,
+                voxel=request.voxel,
+            )
+            seed = to_object_seed(request.object_seed)
+            if seed is None:
+                raise ValueError("object_seed is required")
+            validate_object_seed_against_stack(
+                seed,
+                gray_shape=tuple(int(v) for v in stack.grayscale.shape),
+                current_source_revision=_stack_source_revision(
+                    path=request.path, stack_id=request.stack_id, stack=stack
+                ),
+            )
+            roi = to_rect_roi(request.roi)
+            z_range = to_z_range(request.z_range)
+            gray = stack.grayscale
+            if z_range is not None:
+                z0 = max(0, min(gray.shape[0], z_range.zmin))
+                z1 = max(0, min(gray.shape[0], z_range.zmax))
+                gray = gray[z0:z1]
+            if roi is not None:
+                from morphostack.core.pipeline import crop_stack_xy
+
+                gray = crop_stack_xy(gray, roi)
+            transform = StackViewTransform.create(
+                roi=roi, z_range=z_range, raw_shape=stack.grayscale.shape
+            )
+            local_seed = transform.to_local_seed_object(seed)
+            local_frame = int(request.frame_index) - transform.z_offset
+            if local_frame < 0 or local_frame >= gray.shape[0]:
+                raise ValueError("frame_index outside stack / Z range")
+            seed_r = effective_seed_radius(
+                float(local_seed.radius) if local_seed.radius else None
+            )
+            if request.stack_id:
+                stack_identity = f"session:{(request.stack_id or '').strip()}"
+            else:
+                from morphostack.core.stack_cache import path_source_identity
+
+                stack_identity = path_source_identity(stack.source_path)
+            from morphostack.core.seeded_vesicle import exact_tracking_mode_token as _mode_tok
+
+            cache_key = make_tracking_cache_key(
+                stack_identity=stack_identity,
+                seed_x=float(local_seed.x),
+                seed_y=float(local_seed.y),
+                seed_frame=int(local_seed.frame_index),
+                seed_radius=seed_r,
+                gray_shape=tuple(int(v) for v in gray.shape),
+                roi=roi,
+                z_range=z_range,
+                profile=request.profile,
+                tracking_mode=_mode_tok(bool(request.competitive_tracking)),
+            )
+            cached = default_tracking_cache.get(cache_key)
+            meta = default_tracking_cache.get_review_meta(cache_key) or TrackingReviewMeta()
+            anchor = None
+            operator_drawn = False
+            if request.action == "accept_manual_anchor":
+                # Manual measure authority requires a complete contour + solid_mask.
+                # Operator-drawn polygon is confirmed geometry; circle re-segment is
+                # automatic and must not launder merge_suspect into authority.
+                cx, cy = float(local_seed.x), float(local_seed.y)
+                if getattr(local_seed, "type", "circle") == "polygon" and local_seed.points:
+                    import numpy as np
+                    from morphostack.core.seeded_vesicle import SeededSliceResult
+
+                    pts = np.array(
+                        [[p.x, p.y] for p in local_seed.points], dtype=np.float64
+                    )
+                    if len(pts) < 3:
+                        raise ValueError(
+                            "accept_manual_anchor polygon requires at least 3 points"
+                        )
+                    from morphostack.core.metrics import (
+                        normalize_points,
+                        polygon_perimeter,
+                    )
+
+                    try:
+                        import cv2
+
+                        mask = np.zeros(gray[local_frame].shape, dtype=np.uint8)
+                        cv2.fillPoly(
+                            mask,
+                            [np.round(pts).astype(np.int32)],
+                            1,
+                        )
+                        solid = mask.astype(bool)
+                    except Exception as exc:
+                        raise ValueError(
+                            "accept_manual_anchor failed: polygon rasterization "
+                            f"did not produce a solid_mask ({exc})"
+                        ) from exc
+                    if not bool(solid.any()):
+                        raise ValueError(
+                            "accept_manual_anchor failed: polygon rasterization "
+                            "produced an empty solid_mask"
+                        )
+                    area = float(solid.sum())
+                    peri = float(polygon_perimeter(pts, x_scale=1.0, y_scale=1.0))
+                    center = (float(pts[:, 0].mean()), float(pts[:, 1].mean()))
+                    anchor = SeededSliceResult(
+                        normalize_points(pts),
+                        solid,
+                        center,
+                        area,
+                        peri,
+                        "manual_anchor",
+                        True,
+                        merge_suspect=False,
+                    )
+                    operator_drawn = True
+                if anchor is None:
+                    # Prefer the already-published exact result on this plane when
+                    # complete and not merge-suspect — avoid silent re-segment drift.
+                    if (
+                        cached is not None
+                        and 0 <= local_frame < len(cached)
+                        and cached[local_frame] is not None
+                        and cached[local_frame].ok
+                        and not bool(getattr(cached[local_frame], "merge_suspect", False))
+                        and cached[local_frame].solid_mask is not None
+                        and cached[local_frame].contour_xy is not None
+                    ):
+                        anchor = cached[local_frame]
+                    else:
+                        anchor = segment_slice_seeded(
+                            gray[local_frame],
+                            seed_x=cx,
+                            seed_y=cy,
+                            seed_radius=seed_r,
+                            competitive_isolation=bool(request.competitive_tracking),
+                        )
+                    if not anchor.ok:
+                        raise ValueError(
+                            "accept_manual_anchor failed: plane did not yield an accepted mask"
+                        )
+                    if bool(getattr(anchor, "merge_suspect", False)):
+                        raise ValueError(
+                            "accept_manual_anchor refuses merge_suspect automatic "
+                            "geometry; draw a polygon mask to confirm or reject the frame"
+                        )
+                    if anchor.solid_mask is None or anchor.contour_xy is None:
+                        raise ValueError(
+                            "accept_manual_anchor failed: automatic segment lacks "
+                            "complete solid_mask/contour"
+                        )
+            results, meta, event = apply_manual_correction(
+                cached,
+                n_frames=int(gray.shape[0]),
+                seed_frame=int(local_seed.frame_index),
+                seed_x=float(local_seed.x),
+                seed_y=float(local_seed.y),
+                frame_index=local_frame,
+                action=request.action,
+                anchor_result=anchor,
+                meta=meta,
+                operator_drawn=operator_drawn,
+            )
+            if request.action != "reseed":
+                default_tracking_cache.replace_results(cache_key, results)
+                default_tracking_cache.set_review_meta(cache_key, meta)
+            state, reason = classify_frame_authority(results[local_frame])
+            auth = frame_authority_payload(
+                results[local_frame], correction_revision=meta.correction_revision
+            )
+            return {
+                "ok": True,
+                "action": request.action,
+                "frame_index": int(request.frame_index),
+                "local_frame_index": local_frame,
+                "tracking_key_revision": tracking_key_revision(cache_key),
+                "correction_revision": meta.correction_revision,
+                "invalidated_low": event.invalidated_low,
+                "invalidated_high": event.invalidated_high,
+                "frame_authority": state,
+                "authority_reason": reason,
+                **auth,
+                "review": meta.to_json_dict(),
+                "process_local": True,
+            }
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @app.post("/inspect")
     def inspect_stack(request: InspectRequest) -> dict[str, object]:
         try:
@@ -717,6 +956,7 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
                 excluded_frames=request.excluded_frames,
                 enable_skeleton=request.enable_skeleton,
                 skeleton_prune_pix=request.skeleton_prune_pix,
+                competitive_tracking=bool(request.competitive_tracking),
             )
             
             print(f"=== DEBUG ANALYZE RESULT ===")
@@ -964,6 +1204,7 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
             tracking_job_payload: dict[str, object] | None = None
             exact_available = True
             exact_pending = False
+            frame_authority_fields: dict[str, object] = {}
 
             if local_seed is not None:
                 # Exact seeded path: cache/job subscription (packet 04). Shared with /upload/preview.
@@ -1001,6 +1242,7 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
                     force_sync_exact=bool(request.force_sync_exact),
                     tracking_service=job_svc,
                     tracking_cache=default_tracking_cache,
+                    competitive_tracking=bool(getattr(request, "competitive_tracking", False)),
                 )
                 if not exact_available:
                     preview_quality = "provisional"
@@ -1065,6 +1307,34 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
                     if thr_meta.get("effective_threshold") is not None
                     else float(request.threshold)
                 )
+                from morphostack.core.seeded_vesicle import effective_seed_radius as _esr
+                from morphostack.core.stack_cache import make_tracking_cache_key as _mtk
+                from morphostack.core.track_review import (
+                    display_as_tracked,
+                    frame_authority_payload,
+                )
+
+                _ck = _mtk(
+                    stack_identity=stack_identity,
+                    seed_x=float(local_seed.x),
+                    seed_y=float(local_seed.y),
+                    seed_frame=int(local_seed.frame_index),
+                    seed_radius=_esr(float(local_seed.radius) if local_seed.radius else None),
+                    gray_shape=tuple(int(v) for v in gray.shape),
+                    roi=roi,
+                    z_range=z_range,
+                    profile=request.profile,
+                )
+                corr_rev = int(default_tracking_cache.correction_revision(_ck))
+                frame_authority_fields = frame_authority_payload(
+                    None if sres.method == "exact_pending" else sres,
+                    preview_quality=preview_quality,
+                    exact_pending=bool(exact_pending) or sres.method == "exact_pending",
+                    correction_revision=corr_rev,
+                )
+                frame_auth = str(frame_authority_fields.get("frame_authority") or "unreached")
+                measure_ok = bool(frame_authority_fields.get("measure_authoritative"))
+
                 if (
                     sres.method != "exact_pending"
                     and sres.ok
@@ -1075,6 +1345,7 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
                     from morphostack.core.contours import contour_circularity
 
                     circ = contour_circularity(sres.contour_xy)
+                    # Paint contour for review even when uncertain; never label tracked.
                     seg = SegmentationPreview(
                         threshold=draw_thr,
                         contour=sres.contour_xy,
@@ -1086,7 +1357,7 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
                     skel_mask = None
                     skel_px = skel_um = None
                     skel_ok = False
-                    if request.enable_skeleton:
+                    if request.enable_skeleton and measure_ok:
                         try:
                             from morphostack.core.skeleton import measure_skeleton
 
@@ -1102,8 +1373,13 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
                                 skel_mask = None
                         except Exception:
                             skel_mask = None
-                    tracked_cx: float | None = float(sres.center_xy[0])
-                    tracked_cy: float | None = float(sres.center_xy[1])
+                    # Tracked center only for measure-authoritative states.
+                    tracked_cx: float | None = (
+                        float(sres.center_xy[0]) if display_as_tracked(frame_auth) else None
+                    )
+                    tracked_cy: float | None = (
+                        float(sres.center_xy[1]) if display_as_tracked(frame_auth) else None
+                    )
                     if request.show_selection:
                         # Green exterior contour only; HTML draws seed ROI + tracked center.
                         # No yellow PNG seed (would be confused with immutable user seed).
@@ -1223,6 +1499,12 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
         payload["exact_available"] = bool(exact_available) if local_seed is not None else True
         payload["exact_pending"] = bool(exact_pending)
         payload["tracking_job"] = tracking_job_payload
+        if frame_authority_fields:
+            payload.update(frame_authority_fields)
+        # Never claim tracked/exact measure when authority forbids it.
+        if payload.get("display_as_tracked") is False:
+            payload["tracked_center_x"] = None
+            payload["tracked_center_y"] = None
         return payload
 
     @app.post("/mesh-preview")
@@ -1657,6 +1939,7 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
         # Pure multipart (no stack_id) defaults to sync diagnostic so re-uploads
         # never share tracking cache. Session/stack_id uses subscription (packet 04).
         force_sync_exact: Annotated[bool | None, Form()] = None,
+        competitive_tracking: Annotated[bool, Form()] = False,
     ) -> dict[str, object]:
         """Multipart or session-backed preview.
 
@@ -1798,6 +2081,7 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
                         seed_frame=int(local_seed.frame_index),
                         seed_radius=seed_r,
                         target_frame=int(local_frame),
+                        competitive_isolation=bool(competitive_tracking),
                     )
                     sres = tracked[local_frame]
                     thr_meta = threshold_provenance(
@@ -1829,6 +2113,7 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
                         force_sync_exact=use_force_sync,
                         tracking_service=None if use_force_sync else _tracking_service(),
                         tracking_cache=default_tracking_cache,
+                        competitive_tracking=bool(competitive_tracking),
                     )
                     if not exact_available:
                         preview_quality = "provisional"
@@ -2477,6 +2762,7 @@ def obtain_exact_seeded_slice(
     force_sync_exact: bool,
     tracking_service,
     tracking_cache,
+    competitive_tracking: bool = False,
 ):
     """Resolve one exact seeded slice via cache/job (default) or diagnostic sync walk.
 
@@ -2487,12 +2773,14 @@ def obtain_exact_seeded_slice(
     """
     from morphostack.core.seeded_vesicle import (
         effective_seed_radius,
+        exact_tracking_mode_token,
         extend_track,
         track_seeded_vesicle_stack,
     )
     from morphostack.core.stack_cache import make_tracking_cache_key, tracking_key_revision
 
     seed_r = effective_seed_radius(float(local_seed.radius) if local_seed.radius else None)
+    use_competitive = bool(competitive_tracking)
     cache_key = make_tracking_cache_key(
         stack_identity=stack_identity,
         seed_x=float(local_seed.x),
@@ -2503,6 +2791,7 @@ def obtain_exact_seeded_slice(
         roi=roi,
         z_range=z_range,
         profile=profile,
+        tracking_mode=exact_tracking_mode_token(use_competitive),
     )
     tracking_profile = cache_key.profile
     tracking_mode = cache_key.tracking_mode
@@ -2526,6 +2815,7 @@ def obtain_exact_seeded_slice(
                 seed_radius=seed_r,
                 target_frame=int(local_frame),
                 cached_results=cached,
+                competitive_isolation=use_competitive,
             )
         else:
             tracked = track_seeded_vesicle_stack(
@@ -2535,6 +2825,7 @@ def obtain_exact_seeded_slice(
                 seed_frame=int(local_seed.frame_index),
                 seed_radius=seed_r,
                 target_frame=int(local_frame),
+                competitive_isolation=use_competitive,
             )
         tracking_cache.merge(cache_key, tracked)
         sres = tracked[local_frame]
@@ -2849,6 +3140,7 @@ def preview_payload(
     algorithm_version: str | None = None,
     tracking_key_revision: str | None = None,
     source_revision: str | None = None,
+    competitive_tracking: bool | None = None,
 ) -> dict[str, object]:
     """Build preview JSON.
 
@@ -2934,6 +3226,25 @@ def preview_payload(
         "algorithm_version": algorithm_version,
         "tracking_key_revision": tracking_key_revision,
     }
+    # Packet 11: report experimental competitive variant (never silent).
+    from morphostack.core.seeded_vesicle import (
+        COMPETITIVE_TRACKING_WARNING,
+        competitive_from_tracking_mode,
+    )
+
+    is_competitive = (
+        bool(competitive_tracking)
+        if competitive_tracking is not None
+        else competitive_from_tracking_mode(tracking_mode)
+    )
+    payload["competitive_tracking"] = bool(is_competitive)
+    if is_competitive:
+        payload["competitive_tracking_warning"] = COMPETITIVE_TRACKING_WARNING
+        # Provisional display must never be read as competitive exact science.
+        if preview_quality == "provisional":
+            payload["competitive_exact"] = False
+        else:
+            payload["competitive_exact"] = True
     if image_transport == "url":
         payload["image_url"] = f"/api/preview-image/{_store_preview_image(preview_image.png_bytes)}"
     else:

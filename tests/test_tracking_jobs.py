@@ -527,6 +527,103 @@ def test_stale_job_cannot_write_after_supersede(service: TrackingJobService):
     assert cached[1].method != "circle_seed_poison"
 
 
+def test_same_direction_extend_does_not_resegment_accepted(service: TrackingJobService):
+    """Target 3 then 6: second job extends from frontier; seed..3 not resegmented."""
+    import morphostack.core.seeded_vesicle as sv
+
+    n, h, w = 10, 64, 64
+    stack = np.zeros((n, h, w), dtype=np.float64)
+    for z in range(n):
+        stack[z] = _ring_frame(h, w, 32, 32, 10, 14)
+        stack[z, h - 1, w - 1] = 1000.0 + z
+    key = _key(gray_shape=stack.shape, seed_frame=2, seed_x=32.0, seed_y=32.0)
+
+    call_z: list[int] = []
+    real_segment = sv.segment_slice_seeded
+
+    def counting_segment(frame, **kwargs):
+        tag = float(np.asarray(frame)[h - 1, w - 1])
+        if tag >= 1000.0:
+            call_z.append(int(round(tag - 1000.0)))
+        return real_segment(frame, **kwargs)
+
+    sv.segment_slice_seeded = counting_segment  # type: ignore[assignment]
+    try:
+        j1 = service.start(
+            key=key, stack=stack, seed_x=32, seed_y=32, seed_frame=2, seed_radius=14, target_z=3
+        )
+        d1 = service.wait(j1.job_id, timeout=60)
+        assert d1.state == "complete"
+        after_first = list(call_z)
+        assert 2 in after_first and 3 in after_first
+
+        call_z.clear()
+        j2 = service.start(
+            key=key, stack=stack, seed_x=32, seed_y=32, seed_frame=2, seed_radius=14, target_z=6
+        )
+        d2 = service.wait(j2.job_id, timeout=60)
+        assert d2.state == "complete"
+        # Only frames past furthest accepted (3) may be segmented.
+        assert all(z > 3 for z in call_z), f"replayed accepted slices: {call_z}"
+        assert set(call_z) <= {4, 5, 6}
+        assert service.extend_invocations >= 1
+    finally:
+        sv.segment_slice_seeded = real_segment  # type: ignore[assignment]
+
+    cached = service.result_cache.get(key)
+    assert cached is not None
+    assert cached[2].ok and cached[3].ok and cached[6].ok
+
+
+def test_reverse_job_retains_opposite_accepted_frames(service: TrackingJobService):
+    """Walk high then reverse low — high-side exact frames survive terminal merge."""
+    n, h, w = 12, 64, 64
+    stack = np.stack([_ring_frame(h, w, 32, 32, 10, 14) for _ in range(n)], axis=0)
+    seed = 6
+    key = _key(gray_shape=stack.shape, seed_frame=seed, seed_x=32.0, seed_y=32.0)
+
+    j_hi = service.start(
+        key=key, stack=stack, seed_x=32, seed_y=32, seed_frame=seed, seed_radius=14, target_z=9
+    )
+    d_hi = service.wait(j_hi.job_id, timeout=60)
+    assert d_hi.state == "complete"
+    mid = service.result_cache.get(key)
+    assert mid is not None
+    assert mid[9].ok
+    hi_center = mid[9].center_xy
+    hi_area = mid[9].area_px
+
+    j_lo = service.start(
+        key=key, stack=stack, seed_x=32, seed_y=32, seed_frame=seed, seed_radius=14, target_z=3
+    )
+    d_lo = service.wait(j_lo.job_id, timeout=60)
+    assert d_lo.state == "complete"
+    final = service.result_cache.get(key)
+    assert final is not None
+    assert final[9].ok, "high-side accepted must survive reverse job"
+    assert final[9].center_xy == hi_center
+    assert final[9].area_px == hi_area
+    assert final[3].ok or final[3].method != "circle_seed_unreached"
+
+
+def test_target_already_cached_completes_without_science(service: TrackingJobService):
+    stack = _ring_stack(n=8)
+    key = _key(gray_shape=stack.shape, seed_frame=2)
+    j1 = service.start(
+        key=key, stack=stack, seed_x=32, seed_y=32, seed_frame=2, seed_radius=14, target_z=4
+    )
+    assert service.wait(j1.job_id, timeout=60).state == "complete"
+    inv_before = service.track_invocations
+    ext_before = service.extend_invocations
+    j2 = service.start(
+        key=key, stack=stack, seed_x=32, seed_y=32, seed_frame=2, seed_radius=14, target_z=4
+    )
+    d2 = service.wait(j2.job_id, timeout=30)
+    assert d2.state == "complete"
+    assert service.track_invocations == inv_before
+    assert service.extend_invocations == ext_before
+
+
 def test_api_tracking_job_lifecycle(tmp_path):
     tifffile = pytest.importorskip("tifffile")
     stack = (_ring_stack(n=5, h=48, w=48) * 200).astype(np.uint8)

@@ -1,0 +1,39 @@
+{
+  "algorithm_version": "test-1",
+  "bit_identical_rerun": true,
+  "by_object": {
+    "iso-1": [
+      {
+        "frame_index": 3,
+        "accepted": true,
+        "method": "circle_seed",
+        "merge_suspect": false,
+        "center_xy": [16, 16],
+        "area_px": 100,
+        "attempts": 1
+      }
+    ],
+    "contact-pair-a": [
+      {
+        "frame_index": 3,
+        "accepted": true,
+        "method": "circle_seed",
+        "merge_suspect": false,
+        "false_merge": false,
+        "center_xy": [10, 16],
+        "area_px": 80,
+        "attempts": 1
+      }
+    ]
+  },
+  "corrections": [],
+  "latencies": [
+    {
+      "object_id": "iso-1",
+      "provisional_p95_ms": 40.0,
+      "seed_exact_p95_ms": 500.0,
+      "cold": false,
+      "attempts_mean": 1.0
+    }
+  ]
+}

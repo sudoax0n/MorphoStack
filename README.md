@@ -10,13 +10,13 @@
 </table>
 
 <p align="center">
-  <strong>Local morphometry for microscopy Z-stacks</strong><br/>
-  Vesicles · GUVs · RBCs · seeded objects in crowded fields<br/>
-  CLI · FastAPI · browser UI · reproducible run bundles
+  <img src="docs/public/hero-banner.jpg" alt="MorphoStack hero — volumetric vesicle in a biophysics lab" width="100%" />
 </p>
 
 <p align="center">
-  <img src="docs/public/hero-banner.jpg" alt="MorphoStack hero — volumetric vesicle in a biophysics lab" width="100%" />
+  <strong>Local morphometry for microscopy Z-stacks</strong><br/>
+  Vesicles · GUVs · RBCs · seeded objects in crowded fields<br/>
+  CLI · FastAPI · browser UI · reproducible run bundles
 </p>
 
 <p align="center">
@@ -81,7 +81,7 @@ MorphoStack turns confocal (and related) **Z-stacks** into **2D shape metrics** 
 | Capability | Details |
 | --- | --- |
 | **Formats** | TIFF/TIF, LSM, CZI |
-| **Profiles** | `vesicle`, `rbc`, experimental `active_surfaces` |
+| **Modes** | **Standard** (`vesicle`, default), **RBC** (`rbc`), **Experimental** (`active_surfaces`, slow single-object refine) — multi-vesicle ⇒ Standard + seed, not Experimental ([docs](docs/usage.md#modes-profiles)) |
 | **Selection** | Z-range, rectangular ROI, circle/polygon **object seed**, frame exclusion |
 | **Analysis** | Threshold suggestion, sweeps, headless `analyze` / `batch` |
 | **3D** | Marching-cubes mesh, preview, export OBJ/STL/PLY/GLB + mask TIFF |
@@ -236,6 +236,6 @@ SPDX: `AGPL-3.0-only OR PolyForm-Noncommercial-1.0.0`
 ---
 
 <p align="center">
-  <img src="docs/public/logo-mark.jpg" width="96" alt="MorphoStack" /><br/>
+  <img src="docs/public/logo.png" width="72" height="72" alt="MorphoStack" /><br/>
   <sub>Measure the stack. Trust the units. Ship the run.</sub>
 </p>

@@ -21,20 +21,34 @@ MorphoStack is a **lab morphometry toolkit**. Treat outputs as exploratory until
 - UI debug overlay and manifest `tracking` fields show per-frame centroids and losses.
 - MorphoStack does **not** auto-segment every object in a crowded field.
 
-## Profiles
+## Profiles (modes)
 
-| Profile | Status |
-| --- | --- |
-| **Vesicle** | Primary threshold-contour path + optional mesh |
-| **RBC** | Same engine with RBC-oriented defaults; biconcavity/thickness metrics not validated |
-| **Active surfaces** | Experimental surfel refinement — compare to threshold before paper use |
+| Profile (CLI) | UI label | Status |
+| --- | --- | --- |
+| **vesicle** | Standard | Primary threshold-contour path + optional skeleton/mesh. Use for **single** and **multi-vesicle** fields (seed the target object). |
+| **rbc** | RBC | Same engine with RBC-oriented defaults; biconcavity/thickness metrics not validated |
+| **active_surfaces** | Experimental | Surfel refinement — slow, seed required, still one object. Not “multi mode.” Compare to Standard before paper use. |
+
+Choosing Experimental does not analyze every vesicle in the FOV. Multi-object fields still need one seed per run under Standard (or Experimental). See [usage.md — Modes](usage.md#modes-profiles).
 
 ## Mesh and export
 
-- Meshes come from marching cubes on aligned contour masks.
+- Primary 3D surface area and volume come from a calibrated, **unaligned**
+  Lewiner marching-cubes mesh of the filled contour stack. The calculation
+  preserves acquired XY positions and uses the active `(z, y, x)` voxel
+  spacing.
 - Empty or tiny contours → empty/skipped mesh.
+- Missing contours, incomplete stack coverage, or poor segmentation can still
+  bias 3D measurements; inspect the contour and mesh QC views.
+- `slice_integrated_volume_um3` is a trapezoidal integration of the calibrated
+  enclosed 2D areas through Z. It is a volume cross-check only, and is withheld
+  when there is an internal missing contour rather than silently bridging it.
+- Do **not** use `sum(perimeter * dz)` as membrane surface area. It ignores
+  sloped curvature between slices and systematically underestimates a sphere.
 - Exported geometry uses the **active** voxel calibration; uncalibrated exports are for shape review only.
-- Browser mesh preview may be decimated; use CSV/export files for numbers.
+- The browser preview uses full voxel sampling (`x1`, so a 0.5 µm active Z step
+  remains 0.5 µm). Its rendered faces may be simplified for responsiveness;
+  reported surface area and volume come from the complete triangulation before that display simplification.
 
 ## Crowded fields
 

@@ -33,7 +33,9 @@ frame metrics as a CSV file after analysis. Users can also download a JSON run
 manifest with source, source SHA-256, profile, voxel size, ROI, threshold, mesh
 settings, Z range, and quality warnings. The metrics include core 2D shape descriptors such as area,
 perimeter, circularity, aspect ratio, equivalent diameter, elongation, extent,
-and solidity. The profile selector currently supports vesicle and RBC analysis
+and solidity. The Mode selector supports Standard (`vesicle`), RBC (`rbc`), and
+Experimental active surfaces (`active_surfaces`). For multi-vesicle fields use
+Standard + Select Object; Experimental is a slow single-object fallback only.
 modes. The `Suggest` threshold control uses Otsu thresholding when available and
 falls back to a percentile suggestion.
 Z-range controls trim top/bottom stack slices before preview, threshold

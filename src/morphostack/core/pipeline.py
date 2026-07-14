@@ -800,6 +800,7 @@ def analyze_stack(
     excluded_frames: Sequence[int] | None = None,
     enable_skeleton: bool = False,
     skeleton_prune_pix: float = 1.0,
+    competitive_tracking: bool = False,
 ) -> StackAnalysis:
     """Analyze a grayscale Z-stack.
 
@@ -1055,6 +1056,7 @@ def analyze_stack(
                 seed_frame=int(local_seed.frame_index),
                 seed_radius=seed_r,
                 max_centroid_jump_px=jump_px,
+                competitive_isolation=bool(competitive_tracking),
             )
             frames_list = []
             track_records: list[FrameTrackingRecord] = []
@@ -1083,19 +1085,29 @@ def analyze_stack(
                     else float(ui_thr)
                 )
                 if sres.ok and sres.contour_xy is not None:
+                    from morphostack.core.track_review import is_measure_authoritative
+
                     global_contour = transform.to_global_contour(sres.contour_xy)
-                    metrics = _contour_metrics(sres.contour_xy, voxel_size)
+                    area_px = int(round(sres.area_px))
+                    area_merge = seed_area_px > 0 and area_px > seed_area_px * 2.5
+                    qc_merge = bool(getattr(sres, "merge_suspect", False))
+                    merge_suspect = bool(area_merge or qc_merge)
+                    # Packet 04: only exact_accepted / manual anchors measure.
+                    measure_ok = is_measure_authoritative(sres) and not merge_suspect
+                    metrics = (
+                        _contour_metrics(sres.contour_xy, voxel_size) if measure_ok else None
+                    )
                     circ = contour_circularity(sres.contour_xy)
                     preview = SegmentationPreview(
                         threshold=preview_thr,
-                        contour=global_contour,
-                        area_px2=float(sres.area_px),
-                        perimeter_px=float(sres.perimeter_px),
-                        circularity=circ,
+                        contour=global_contour if measure_ok else None,
+                        area_px2=float(sres.area_px) if measure_ok else 0.0,
+                        perimeter_px=float(sres.perimeter_px) if measure_ok else 0.0,
+                        circularity=circ if measure_ok else 0.0,
                         method=sres.method,
                     )
                     skel_um, skel_px, skel_ok = None, None, False
-                    if enable_skeleton and sres.solid_mask is not None:
+                    if measure_ok and enable_skeleton and sres.solid_mask is not None:
                         skel_um, skel_px, skel_ok = _skeleton_fields_for_frame(
                             sres.solid_mask.astype(np.float32),
                             threshold=0.5,
@@ -1107,7 +1119,7 @@ def analyze_stack(
                         frame_index=idx + frame_offset,
                         threshold=thr_meta["threshold"],  # type: ignore[arg-type]
                         profile=analysis_profile,
-                        contour=global_contour,
+                        contour=global_contour if measure_ok else None,
                         metrics=metrics,
                         preview=preview,
                         skel_perimeter_um=skel_um,
@@ -1119,7 +1131,6 @@ def analyze_stack(
                     )
                     gx = sres.center_xy[0] + transform.x_offset
                     gy = sres.center_xy[1] + transform.y_offset
-                    area_px = int(round(sres.area_px))
                     # ``arr`` is already Z/ROI-cropped; solid_mask is in that local frame.
                     touches_boundary = _solid_mask_touches_boundary(
                         sres.solid_mask, height=height_local, width=width_local
@@ -1130,20 +1141,20 @@ def analyze_stack(
                         seed_y=float(sres.center_xy[1]),
                         seed_radius=seed_r,
                     )
-                    # Match legacy area-jump rule, plus seeded QC merge suspicion when present.
-                    area_merge = seed_area_px > 0 and area_px > seed_area_px * 2.5
-                    qc_merge = bool(getattr(sres, "merge_suspect", False))
-                    merge_suspect = bool(area_merge or qc_merge)
                     track_records.append(
                         FrameTrackingRecord(
                             frame_index=idx + frame_offset,
-                            tracked=True,
-                            centroid_x=gx,
-                            centroid_y=gy,
-                            area_px=area_px,
+                            tracked=bool(measure_ok),
+                            centroid_x=gx if measure_ok else None,
+                            centroid_y=gy if measure_ok else None,
+                            area_px=area_px if measure_ok else 0,
                             touches_roi_boundary=touches_boundary,
                             likely_neighbor_merge=merge_suspect,
-                            loss_reason=None,
+                            loss_reason=(
+                                None
+                                if measure_ok
+                                else ("merge_suspect" if merge_suspect else "uncertain")
+                            ),
                             merge_suspect=merge_suspect,
                             merge_rejected=False,
                             touches_seed_disk=touches_disk,

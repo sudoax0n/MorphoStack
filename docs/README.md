@@ -13,6 +13,7 @@ Local morphometry for microscopy Z-stacks: vesicles, GUVs, RBCs, and seeded obje
 | [Metrics](metrics.md) | What every CSV column means |
 | [Methods](methods.md) | Paste-ready methods supplement |
 | [Limitations](limitations.md) | Calibration, tracking, profiles |
+| [Usage — Modes](usage.md#modes-profiles) | Standard vs RBC vs Experimental; single vs multi-vesicle |
 | [Active surfaces](active-surfaces.md) | Experimental profile notes |
 | [Validation](validation.md) | Regression runs & scripts |
 | [Troubleshooting](troubleshooting.md) | Common failures |

@@ -43,7 +43,11 @@ Frames with no valid contour omit metric values or carry analysis warnings depen
 
 ## 3D mesh metrics
 
-When `--mesh` / UI mesh is enabled, per-frame contour masks are stacked, optionally aligned, and meshed with **marching cubes**.
+When `--mesh` / UI mesh is enabled, MorphoStack rasterizes the filled contours
+into a 3D mask and measures a calibrated, **unaligned** Lewiner marching-cubes
+surface. These mesh measurements are the primary 3D surface-area and volume
+results: the stack keeps its acquired XY positions and uses the active `(z, y,
+x)` voxel spacing.
 
 | Column | Definition | Notes |
 | --- | --- | --- |
@@ -51,9 +55,20 @@ When `--mesh` / UI mesh is enabled, per-frame contour masks are stacked, optiona
 | `mesh_volume_um3` | Enclosed mesh volume | Sensitive to holes / missing slices |
 | `mesh_equivalent_sphere_diameter_um` | \((6V/\pi)^{1/3}\) | Equal-volume sphere |
 | `mesh_sphericity` | \(\pi^{1/3}(6V)^{2/3}/A\), capped at 1 | 1.0 ≈ sphere |
+| `slice_integrated_volume_um3` | Trapezoidal integration of calibrated 2D slice areas through Z | Volume cross-check, not the primary 3D volume |
+| `mesh_slice_volume_relative_difference` | Relative difference between mesh and slice-integrated volume | QC signal; review differences above 5% |
 
-Browser mesh preview may be **decimated for speed**. Trust CSV mesh columns (and exported mesh files) for numbers; use the viewer for QC.
+The slice-area cross-check uses
+\(\sum_i \tfrac{A_i + A_{i+1}}{2}\Delta z\). It is withheld rather than
+bridging an internal missing contour, and it does **not** estimate membrane
+surface area. In particular, `sum(perimeter_i * dz)` is not a valid
+surface-area measurement for a curved, closed vesicle.
 
+Browser mesh preview defaults to full voxel sampling (`x1`): with an active
+Z step of 0.5 µm, the preview is sampled at 0.5 µm in Z. To remain responsive,
+the renderer may show a simplified set of faces. Surface area and volume are
+measured from the complete marching-cubes triangulation before that display
+simplification; use the viewer for QC, not manual measurement.
 ## Frame exclusion
 
 Exclude bad slices via UI or repeated `--exclude-frame INDEX`.
@@ -67,9 +82,9 @@ Excluded frames:
 
 | Profile | Metrics engine | Caveat |
 | --- | --- | --- |
-| `vesicle` | Threshold contours + optional seed tracking | Primary path |
-| `rbc` | Same contour engine | No validated biconcavity/thickness suite yet |
-| `active_surfaces` | Surfel refinement → masks → same metric layer | Experimental; compare to threshold |
+| `vesicle` (UI: **Standard**) | Threshold contours + optional seed tracking + optional skeleton | Default for single **and** multi-vesicle (seed the target) |
+| `rbc` (UI: **RBC**) | Same contour engine | No validated biconcavity/thickness suite yet |
+| `active_surfaces` (UI: **Experimental**) | Surfel refinement → masks → same metric layer | Slow single-object fallback; not multi-label |
 
 ## Related
 

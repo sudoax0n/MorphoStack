@@ -28,9 +28,20 @@ Outputs under:
 
 - `validation/runs/synthetic-sphere/`
 - `validation/runs/synthetic-ellipsoid/`
-- `validation/runs/synthetic-touching-failure/` (negative / hard case)
+- `validation/runs/synthetic-touching-membranes/` (labelled multi-case hollow-ring suite; exit 0 only if all mandatory seeded identity cases pass)
 
 Sphere and ellipsoid regressions should **PASS** within their configured tolerances.
+
+The touching-membrane suite scores **target IoU, neighbour contamination, centroid
+error, coverage, and post-gap identity** on deterministic labelled fixtures.
+Residual seeded merge/contamination is a **failure**, not a successful
+“negative reference.” Unseeded merge is **not** required for a pass.
+
+**Synthetic limits vs real data:** synthetic rings prove computational identity
+gates only (including labelled contact-QC safety in
+`tests/test_contact_qc_labelled_safety.py`). A synthetic pass does **not**
+establish publication-grade biological validity. Real crowded CZI/LSM sign-off
+is manual and separate — [validation-real-czi-signoff.md](validation-real-czi-signoff.md).
 
 ## Crowded real stacks
 

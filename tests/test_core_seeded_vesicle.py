@@ -152,6 +152,42 @@ def test_extend_track_cache_hit():
     assert call_count["n"] == 0
 
 
+def test_proposal_state_rigid_translation_and_attempt_order():
+    """Prediction proposes centres; seed fallback only when not in a gap."""
+    from morphostack.core.seeded_vesicle import (
+        TrackProposalState,
+        proposal_attempt_centers,
+        proposal_state_from_result,
+    )
+
+    seed = SeededSliceResult(None, None, (40.0, 40.0), 100.0, 30.0, "circle_seed", True)
+    st = proposal_state_from_result(seed, frame_index=5, seed_radius=14.0)
+    assert st.cx == 40.0 and st.cy == 40.0
+    st2 = st.with_accepted(
+        center_xy=(42.0, 41.0), area_px=110.0, frame_index=6, seed_radius=14.0
+    )
+    assert st2.vx == pytest.approx(2.0)
+    assert st2.vy == pytest.approx(1.0)
+    pred = st2.predict_center(steps=1)
+    assert pred == pytest.approx((44.0, 42.0))
+    attempts = proposal_attempt_centers(
+        st2,
+        gap_count=0,
+        seed_xy=(40.0, 40.0),
+        seed_result_center=(40.0, 40.0),
+        include_seed_fallback=True,
+    )
+    assert attempts[0] == pytest.approx((44.0, 42.0))
+    gap_attempts = proposal_attempt_centers(
+        st2,
+        gap_count=1,
+        seed_xy=(40.0, 40.0),
+        seed_result_center=(40.0, 40.0),
+        include_seed_fallback=True,
+    )
+    assert (40.0, 40.0) not in gap_attempts
+
+
 def test_extend_track_extends_forward():
     """Track to 5 then extend to 8 — only segments frames past furthest ok."""
     h, w, n = 120, 120, 10

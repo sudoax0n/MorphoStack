@@ -56,7 +56,8 @@ class SliceQC:
 
 
 # ---------------------------------------------------------------------------
-# Packet 06 — instrumentation + staged QC policy switches
+# Neutral QC stage counters (Packet 06 opt-in staged policy deleted in Packet 10).
+# Production always runs full QC on the exact path; counters remain for profiling.
 # ---------------------------------------------------------------------------
 
 
@@ -91,10 +92,6 @@ class QCStageCounters:
 
 
 _QC_COUNTERS = QCStageCounters()
-# When True: full RANSAC/two-circle/DT only after cheap suspicion flags.
-# Packet-06 production default: False — A6 performance exit was not met;
-# keep instrumentation/switches for re-bench. Reference path = always full QC.
-_GATE_STAGED_FULL_QC: bool = False
 
 
 def reset_qc_stage_counters() -> None:
@@ -103,18 +100,6 @@ def reset_qc_stage_counters() -> None:
 
 def get_qc_stage_counters() -> dict[str, int]:
     return _QC_COUNTERS.as_dict()
-
-
-def set_qc_gating_policy(*, staged_full_qc: bool | None = None) -> dict[str, bool]:
-    """Configure QC escalation policy. None leaves the flag unchanged."""
-    global _GATE_STAGED_FULL_QC
-    if staged_full_qc is not None:
-        _GATE_STAGED_FULL_QC = bool(staged_full_qc)
-    return get_qc_gating_policy()
-
-
-def get_qc_gating_policy() -> dict[str, bool]:
-    return {"staged_full_qc": bool(_GATE_STAGED_FULL_QC)}
 
 
 def far_mass_fraction(
@@ -177,11 +162,6 @@ def cheap_suspicion_flags(
 def is_clean_frame_pre_refine(flags: tuple[str, ...] | list[str]) -> bool:
     """Pre-registered clean-frame rule: no cheap suspicion flags."""
     return len(flags) == 0
-
-def note_full_qc_skipped_clean() -> None:
-    """Record that staged policy skipped full RANSAC/two-circle/DT."""
-    _QC_COUNTERS.full_qc_skipped_clean += 1
-
 
 
 

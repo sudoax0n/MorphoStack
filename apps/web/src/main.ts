@@ -17,6 +17,7 @@ import {
   SeedMappingError,
   VolumeViewerError,
   VolumeViewerSession,
+  appearanceControlForBlend,
   fallbackMessage,
   geometryFromLevelPayload,
   isVolumeViewerEnabled,
@@ -30,6 +31,23 @@ import {
   type VolumeFallbackReason,
   type WorldPointUm
 } from "./volumeViewer";
+import {
+  isMeshPreviewMessage,
+  meshPreviewHtml,
+  type MeshPreviewMessage
+} from "./meshPreview";
+import {
+  clientToImagePointPure,
+  imageDisplayScalePure,
+  imageToClientPointPure,
+  type ImageBoxMetrics
+} from "./previewCoords";
+import {
+  COMPETITIVE_TRACKING_UI_WARNING,
+  competitiveTrackingControlState,
+  competitiveTrackingRequestValue,
+  correctionProfileValue
+} from "./competitiveTrackingUi";
 
 /** Shown as path-input placeholder; never treat as a real stack path. */
 const PATH_PLACEHOLDER = "D:\\lab-data\\sample.tif";
@@ -227,6 +245,19 @@ type PreviewResponse = {
   exact_available?: boolean;
   exact_pending?: boolean;
   tracking_job?: (TrackingJobBusyInfo & { job_id?: string }) | null;
+  /** Packet 04 review: never treat merge-suspect as tracked. */
+  frame_authority?:
+    | "provisional"
+    | "exact_accepted"
+    | "uncertain"
+    | "gap"
+    | "manually_anchored"
+    | "unreached";
+  authority_reason?: string | null;
+  measure_authoritative?: boolean;
+  display_as_tracked?: boolean;
+  merge_suspect?: boolean;
+  correction_revision?: number;
 };
 
 type MeshPreviewResponse = {
@@ -598,6 +629,22 @@ app.innerHTML = `
         <div class="button-row fieldset-actions">
           <button id="select-object-btn" class="secondary" type="button">Select Object</button>
           <button id="clear-object-btn" class="secondary" type="button">Clear Object</button>
+          <button
+            id="accept-anchor-btn"
+            class="secondary"
+            type="button"
+            title="Accept this slice as a manual correction anchor (invalidates only downstream exact frames)"
+          >
+            Accept as anchor
+          </button>
+          <button
+            id="reject-frame-btn"
+            class="secondary"
+            type="button"
+            title="Reject this slice; invalidate only the open directional interval"
+          >
+            Reject frame
+          </button>
           <span id="object-seed-status" class="inline-status">No object selected</span>
         </div>
         <div class="grid three" style="margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px;">
@@ -630,6 +677,18 @@ app.innerHTML = `
             <input id="show-selection-overlay" type="checkbox" checked />
             Show selection (green contour / tint)
           </label>
+        </div>
+        <div id="competitive-tracking-opt-in" class="competitive-tracking-opt-in" style="margin-top: 12px;" hidden>
+          <label class="checkbox-row">
+            <input id="competitive-tracking" type="checkbox" disabled />
+            Competitive tracking (experimental)
+          </label>
+          <p id="competitive-tracking-warning" class="fieldset-hint" style="margin-top: 4px; color: #8a4d00;">
+            Touching-vesicle real-data sign-off incomplete. Results require review and may not be publication-ready.
+            Default tracking is unchanged when this is off. Turn off to roll back to legacy exact path.
+            Vesicle + object seed only.
+          </p>
+          <p id="competitive-tracking-gate-hint" class="fieldset-hint muted" style="margin-top: 2px;" hidden></p>
         </div>
         <p class="fieldset-hint muted" style="margin-top: 6px;">
           Uncheck overlays to see the raw membrane; re-check to verify what is selected.
@@ -707,10 +766,15 @@ app.innerHTML = `
               <option value="composite">Alpha blend</option>
             </select>
           </label>
-          <label>
+          <label id="volume-opacity-label" hidden>
             Opacity
-            <input id="volume-opacity" type="range" min="0.05" max="1" step="0.05" value="0.35" />
+            <input id="volume-opacity" type="range" min="0.05" max="1" step="0.05" value="0.35" title="Composite alpha gain only" />
           </label>
+          <label id="volume-black-level-label">
+            Black level
+            <input id="volume-black-level" type="range" min="0" max="0.85" step="0.05" value="0" title="MIP intensity floor (transfer function only)" />
+          </label>
+          <button id="volume-fit-btn" class="secondary" type="button" title="Re-fit camera to full physical bounds">Fit view</button>
           <button id="volume-reload-btn" class="secondary" type="button">Load / refresh 3D</button>
           <button id="volume-seed-pick-btn" class="secondary" type="button" title="Click in the volume to set the same ObjectSeed as 2D">
             Pick seed in 3D
@@ -931,7 +995,10 @@ const volumeViewerStatus = mustElement<HTMLDivElement>("volume-viewer-status");
 const volumeViewerMeta = mustElement<HTMLDivElement>("volume-viewer-meta");
 const volumeViewerEnable = mustElement<HTMLInputElement>("volume-viewer-enable");
 const volumeBlendModeSelect = mustElement<HTMLSelectElement>("volume-blend-mode");
+const volumeOpacityLabel = mustElement<HTMLLabelElement>("volume-opacity-label");
 const volumeOpacityInput = mustElement<HTMLInputElement>("volume-opacity");
+const volumeBlackLevelLabel = mustElement<HTMLLabelElement>("volume-black-level-label");
+const volumeBlackLevelInput = mustElement<HTMLInputElement>("volume-black-level");
 const meshOutput = mustElement<HTMLDivElement>("mesh-output");
 const analysisSummary = mustElement<HTMLDivElement>("analysis-summary");
 const batchSummary = mustElement<HTMLDivElement>("batch-summary");
@@ -962,6 +1029,12 @@ let latestTracking: TrackingRecord[] | null = null;
 let latestBatch: BatchAnalyzeResponse | null = null;
 let latestSweep: SweepResponse | null = null;
 let latestMeshPreview: MeshPreviewResponse | null = null;
+/** Packet 07: single mesh iframe postMessage handler (generation-guarded). */
+let meshPreviewListenGen = 0;
+let meshPreviewMessageHandler: ((event: MessageEvent) => void) | null = null;
+window.addEventListener("message", (event: MessageEvent) => {
+  meshPreviewMessageHandler?.(event);
+});
 let inspectedFrameCount: number | null = null;
 let previewDebounce: number | null = null;
 let exactPreviewDebounce: number | null = null;
@@ -1001,6 +1074,15 @@ let excludedFrameIndices = new Set<number>();
 let selectObjectMode = false;
 let polygonPoints: { imgX: number; imgY: number }[] = [];
 let polygonClosed = false;
+/** Packet 08: last preview used for resize-driven overlay relayout. */
+let lastPreviewForOverlay: {
+  payload: PreviewResponse;
+  renderedRoi: RectRoi | null;
+} | null = null;
+let previewOverlayResizeObserver: ResizeObserver | null = null;
+let previewOverlayResizeTimer: number | null = null;
+/** Debounce for overlay reflow after image/container resize (ms). */
+const PREVIEW_OVERLAY_RESIZE_DEBOUNCE_MS = 75;
 /** Packet 12: isolated display-only volume session (never science authority). */
 let volumeSession: VolumeViewerSession | null = null;
 /** Monotonic token so stack switches cancel in-flight pyramid/volume loads. */
@@ -1015,6 +1097,7 @@ let volumeSeedPickMode = false;
 mustElement<HTMLSelectElement>("profile-input").addEventListener("change", () => {
   updateProfileHelp();
   updateObjectSeedStatus();
+  syncCompetitiveTrackingControl();
 });
 
 mustElement<HTMLInputElement>("file-input").addEventListener("change", () => {
@@ -1048,6 +1131,7 @@ volumeViewerEnable.addEventListener("change", () => {
 volumeBlendModeSelect.addEventListener("change", () => {
   const mode = readVolumeBlendMode();
   volumeSession?.setBlendMode(mode);
+  syncVolumeAppearanceControls();
   if (volumeSession?.readyMeta) {
     updateVolumeMetaLine(volumeSession.readyMeta);
   }
@@ -1056,8 +1140,24 @@ volumeBlendModeSelect.addEventListener("change", () => {
 volumeOpacityInput.addEventListener("input", () => {
   const gain = Number(volumeOpacityInput.value);
   if (Number.isFinite(gain)) {
+    // Composite-only TF gain; MIP uses black level (no pyramid refetch).
     volumeSession?.setOpacityGain(gain);
   }
+});
+
+volumeBlackLevelInput.addEventListener("input", () => {
+  const level = Number(volumeBlackLevelInput.value);
+  if (Number.isFinite(level)) {
+    // MIP intensity floor; TF-only, no pyramid refetch / volume re-upload.
+    volumeSession?.setBlackLevel(level);
+  }
+});
+
+mustElement<HTMLButtonElement>("volume-fit-btn").addEventListener("click", () => {
+  if (!volumeSession || volumeSession.isDisposed) return;
+  const ms = volumeSession.fitCamera();
+  volumeViewerStatus.textContent = `Fit ${ms.toFixed(1)} ms · ${NAVIGATION_ONLY_LABEL}`;
+  volumeViewerStatus.classList.remove("is-error");
 });
 
 mustElement<HTMLButtonElement>("volume-reload-btn").addEventListener("click", () => {
@@ -1158,6 +1258,13 @@ mustElement<HTMLButtonElement>("select-object-btn").addEventListener("click", ()
   }
 });
 
+const competitiveTrackingEl = document.getElementById("competitive-tracking");
+if (competitiveTrackingEl instanceof HTMLInputElement) {
+  competitiveTrackingEl.addEventListener("change", () => {
+    // Variant switch must not reuse the other mode's exact cache.
+    schedulePreview();
+  });
+}
 mustElement<HTMLInputElement>("show-tracking-debug").addEventListener("change", () => {
   updateTrackingDebugOverlay(globalPreviewFrameIndex(readLocalPreviewFrameIndex()), readRoi());
 });
@@ -1178,6 +1285,64 @@ mustElement<HTMLSelectElement>("object-seed-tool").addEventListener("change", ()
 
 mustElement<HTMLButtonElement>("clear-object-btn").addEventListener("click", () => {
   clearObjectSeed();
+});
+
+async function postTrackingCorrection(action: "accept_manual_anchor" | "reject_frame"): Promise<void> {
+  if (!selectedObjectSeed) {
+    logAction("Correction skipped", "Select an object seed first");
+    return;
+  }
+  let stackRef: { path?: string; stack_id?: string };
+  try {
+    const source = resolveStackSource();
+    if (source.kind === "path") {
+      stackRef = { path: source.path };
+    } else {
+      const stackId = await ensureUploadSession(source.file);
+      stackRef = { stack_id: stackId };
+    }
+  } catch {
+    logAction("Correction skipped", "Inspect a stack first");
+    return;
+  }
+  const body = {
+    ...stackRef,
+    object_seed: selectedObjectSeed,
+    profile: correctionProfileValue(readProfile()),
+    voxel: readVoxel(),
+    roi: readRoi(),
+    z_range: readZRange(),
+    frame_index: globalPreviewFrameIndex(readLocalPreviewFrameIndex()),
+    action,
+    competitive_tracking: readCompetitiveTracking()
+  };
+  try {
+    const t0 = performance.now();
+    const res = await apiPost<{
+      ok: boolean;
+      frame_authority?: string;
+      correction_revision?: number;
+      invalidated_low?: number | null;
+      invalidated_high?: number | null;
+      detail?: string;
+    }>("/api/tracking/corrections", body);
+    const ms = Math.round(performance.now() - t0);
+    logAction(
+      "Correction applied",
+      `${action} · authority=${res.frame_authority ?? "?"} · rev=${res.correction_revision ?? 0} · ` +
+        `invalidate=[${res.invalidated_low ?? "—"},${res.invalidated_high ?? "—"}] · ${ms} ms`
+    );
+    schedulePreview();
+  } catch (error) {
+    logAction("Correction failed", errorMessage(error, "general"));
+  }
+}
+
+mustElement<HTMLButtonElement>("accept-anchor-btn").addEventListener("click", () => {
+  void postTrackingCorrection("accept_manual_anchor");
+});
+mustElement<HTMLButtonElement>("reject-frame-btn").addEventListener("click", () => {
+  void postTrackingCorrection("reject_frame");
 });
 
 mustElement<HTMLButtonElement>("use-full-range-btn").addEventListener("click", () => {
@@ -1538,6 +1703,55 @@ function readShowSelectionOverlay(): boolean {
   return el instanceof HTMLInputElement ? el.checked : true;
 }
 
+/**
+ * Packet 11: experimental competitive exact path (default off).
+ * Only true for vesicle + object seed + checked control; forced false otherwise.
+ */
+function readCompetitiveTracking(): boolean {
+  const el = document.getElementById("competitive-tracking");
+  const checked = el instanceof HTMLInputElement ? el.checked : false;
+  let profile = "vesicle";
+  try {
+    profile = readProfile();
+  } catch {
+    profile = "vesicle";
+  }
+  return competitiveTrackingRequestValue(profile, selectedObjectSeed !== null, checked);
+}
+
+/** Show/enable experimental control only for seeded vesicle workflow. */
+function syncCompetitiveTrackingControl(): void {
+  const wrap = document.getElementById("competitive-tracking-opt-in");
+  const el = document.getElementById("competitive-tracking");
+  const hint = document.getElementById("competitive-tracking-gate-hint");
+  const warn = document.getElementById("competitive-tracking-warning");
+  if (!(wrap instanceof HTMLElement) || !(el instanceof HTMLInputElement)) {
+    return;
+  }
+  let profile = "vesicle";
+  try {
+    profile = readProfile();
+  } catch {
+    profile = "vesicle";
+  }
+  const state = competitiveTrackingControlState(profile, selectedObjectSeed !== null);
+  wrap.hidden = !state.visible;
+  el.disabled = !state.enabled;
+  if (!state.enabled) {
+    el.checked = false;
+  }
+  if (hint instanceof HTMLElement) {
+    hint.hidden = !state.reason || !state.visible;
+    hint.textContent = state.reason;
+  }
+  if (warn instanceof HTMLElement && state.visible && state.enabled) {
+    // Keep authority warning text stable for screenshots / lab honesty.
+    if (!warn.textContent?.includes("Touching-vesicle")) {
+      warn.textContent = COMPETITIVE_TRACKING_UI_WARNING;
+    }
+  }
+}
+
 function previewJsonBody(stackRef: { path?: string; stack_id?: string }): Record<string, unknown> {
   return {
     ...stackRef,
@@ -1551,7 +1765,8 @@ function previewJsonBody(stackRef: { path?: string; stack_id?: string }): Record
     enable_skeleton: readEnableSkeleton(),
     skeleton_prune_pix: readSkeletonPrunePix(),
     show_selection: readShowSelectionOverlay(),
-    image_transport: "url"
+    image_transport: "url",
+    competitive_tracking: readCompetitiveTracking()
   };
 }
 
@@ -2315,7 +2530,8 @@ async function analyzeStack(options: { keepExclusions?: boolean } = {}): Promise
         skeleton_prune_pix: readSkeletonPrunePix(),
         prefer_opencv: !mustElement<HTMLInputElement>("fallback-input").checked,
         object_seed: selectedObjectSeed,
-        excluded_frames: excluded
+        excluded_frames: excluded,
+        competitive_tracking: readCompetitiveTracking()
       });
     } else {
       const stackId = await ensureUploadSession(source.file, {
@@ -2336,7 +2552,8 @@ async function analyzeStack(options: { keepExclusions?: boolean } = {}): Promise
         skeleton_prune_pix: readSkeletonPrunePix(),
         prefer_opencv: !mustElement<HTMLInputElement>("fallback-input").checked,
         object_seed: selectedObjectSeed,
-        excluded_frames: excluded
+        excluded_frames: excluded,
+        competitive_tracking: readCompetitiveTracking()
       });
     }
     excludedFrameIndices = new Set(payload.excluded_frames ?? excluded);
@@ -2536,15 +2753,52 @@ function previewQualityCaption(payload: PreviewResponse): string {
     return "";
   }
   const requested = formatRequestedThreshold(payload);
-  if (quality === "provisional") {
+  const auth = payload.frame_authority;
+  const reason = payload.authority_reason ? ` · ${escapeHtml(String(payload.authority_reason))}` : "";
+  const rev =
+    typeof payload.correction_revision === "number" && payload.correction_revision > 0
+      ? ` · corr r${payload.correction_revision}`
+      : "";
+  if (quality === "provisional" || auth === "provisional") {
     return (
       `<br /><span class="preview-quality provisional">` +
       `Provisional overlay · requested threshold ${escapeHtml(requested)} · not the tracked contour` +
       `</span>`
     );
   }
+  // Packet 04: never label merge-suspect / uncertain / gap as tracked.
+  if (auth === "uncertain" || payload.merge_suspect || payload.display_as_tracked === false) {
+    if (auth === "gap") {
+      return (
+        `<br /><span class="preview-quality unavailable">` +
+        `Gap (honest) · not tracked${reason}${rev}` +
+        `</span>`
+      );
+    }
+    if (auth === "unreached") {
+      return (
+        `<br /><span class="preview-quality unavailable">` +
+        `Unreached · not tracked${reason}${rev}` +
+        `</span>`
+      );
+    }
+    return (
+      `<br /><span class="preview-quality unavailable">` +
+      `Uncertain · not tracked${reason}${rev} · requested ${escapeHtml(requested)}` +
+      `</span>`
+    );
+  }
+  if (auth === "manually_anchored") {
+    return (
+      `<br /><span class="preview-quality exact">` +
+      `Manual anchor (measure-authoritative)${rev} · requested ${escapeHtml(requested)}` +
+      `</span>`
+    );
+  }
   const sem = (payload.threshold_semantics || "").toLowerCase();
   const trackLost =
+    auth === "gap" ||
+    auth === "unreached" ||
     sem === "seeded_unavailable" ||
     payload.method.includes("lost") ||
     payload.method.includes("fail") ||
@@ -2562,7 +2816,7 @@ function previewQualityCaption(payload: PreviewResponse): string {
   if (sem === "polar_ridge") {
     return (
       `<br /><span class="preview-quality exact">` +
-      `Tracked contour · polar ridge (no scalar intensity gate) · requested ${escapeHtml(requested)}${cacheNote}` +
+      `Tracked contour · polar ridge (no scalar intensity gate) · requested ${escapeHtml(requested)}${cacheNote}${rev}` +
       `</span>`
     );
   }
@@ -2570,13 +2824,13 @@ function previewQualityCaption(payload: PreviewResponse): string {
   if (typeof eff === "number" && Number.isFinite(eff)) {
     return (
       `<br /><span class="preview-quality exact">` +
-      `Tracked contour · effective threshold ${escapeHtml(formatNumber(eff))} (seeded adaptive) · requested ${escapeHtml(requested)}${cacheNote}` +
+      `Tracked contour · effective threshold ${escapeHtml(formatNumber(eff))} (seeded adaptive) · requested ${escapeHtml(requested)}${cacheNote}${rev}` +
       `</span>`
     );
   }
   return (
     `<br /><span class="preview-quality exact">` +
-    `Tracked contour (authoritative) · requested ${escapeHtml(requested)}${cacheNote}` +
+    `Tracked contour (authoritative) · requested ${escapeHtml(requested)}${cacheNote}${rev}` +
     `</span>`
   );
 }
@@ -2631,10 +2885,12 @@ function renderPreview(payload: PreviewResponse, renderedRoi: RectRoi | null): v
   // (innerHTML wiped DOM).
   syncBusyOverlayDom();
   paintExactPreviewErrorDom();
+  lastPreviewForOverlay = { payload, renderedRoi };
   attachPreviewRoiSelector(payload, renderedRoi);
   updateTrackingDebugOverlay(payload.frame_index, renderedRoi);
   applyOverlayVisibility(renderedRoi);
   drawTrackedCenterOverlay(payload, renderedRoi);
+  bindPreviewOverlayResizeObserver();
 }
 
 /** Show/hide circle ROI, XY crop box, and re-request preview when selection visibility changes. */
@@ -2808,15 +3064,15 @@ function attachPreviewRoiSelector(payload: PreviewResponse, renderedRoi: RectRoi
 
   image.addEventListener("pointerdown", (event) => {
     event.preventDefault();
-    
-    const rect = image.getBoundingClientRect();
+
     const tool = mustElement<HTMLSelectElement>("object-seed-tool").value;
 
     if (selectObjectMode && tool === "polygon") {
-      // Polygon drawing mode click
-      const clickX = event.clientX - rect.left;
-      const clickY = event.clientY - rect.top;
-      
+      // Polygon drawing: canvas-local for hit tests (overlays are canvas-positioned).
+      const canvasRect = previewCanvasRect(image);
+      const clickX = event.clientX - canvasRect.left;
+      const clickY = event.clientY - canvasRect.top;
+
       const imgPt = clientToImagePoint(event.clientX, event.clientY, image);
 
       if (polygonClosed) {
@@ -2922,8 +3178,43 @@ function attachPreviewRoiSelector(payload: PreviewResponse, renderedRoi: RectRoi
   });
 }
 
+/** Image metrics for pure contain mapping (content box + border/padding). */
+function readImageBoxMetrics(image: HTMLImageElement): ImageBoxMetrics {
+  const style = window.getComputedStyle(image);
+  const borderLeft = parseFloat(style.borderLeftWidth) || 0;
+  const borderTop = parseFloat(style.borderTopWidth) || 0;
+  const paddingLeft = parseFloat(style.paddingLeft) || 0;
+  const paddingTop = parseFloat(style.paddingTop) || 0;
+  const paddingRight = parseFloat(style.paddingRight) || 0;
+  const paddingBottom = parseFloat(style.paddingBottom) || 0;
+  return {
+    wBox: image.clientWidth - paddingLeft - paddingRight,
+    hBox: image.clientHeight - paddingTop - paddingBottom,
+    wSrc: image.naturalWidth || image.width,
+    hSrc: image.naturalHeight || image.height,
+    borderLeft,
+    borderTop,
+    paddingLeft,
+    paddingTop
+  };
+}
+
+/**
+ * Overlay host is `.preview-canvas`; the img may be flex-centered inside it.
+ * Map image-local coords → canvas-local for absolute overlay layers.
+ */
+function imageOriginInCanvas(image: HTMLImageElement): { x: number; y: number } {
+  return { x: image.offsetLeft, y: image.offsetTop };
+}
+
+function previewCanvasRect(image: HTMLImageElement): DOMRect {
+  const canvas = image.closest(".preview-canvas") as HTMLElement | null;
+  return (canvas ?? image).getBoundingClientRect();
+}
+
+/** Pointer → canvas-local coords (overlays are canvas-positioned). */
 function pointerToClientPoint(event: PointerEvent, image: HTMLImageElement): { x: number; y: number; clientX: number; clientY: number } {
-  const rect = image.getBoundingClientRect();
+  const rect = previewCanvasRect(image);
   return {
     x: clamp(event.clientX - rect.left, 0, rect.width),
     y: clamp(event.clientY - rect.top, 0, rect.height),
@@ -2938,85 +3229,67 @@ function clientToImagePoint(
   image: HTMLImageElement
 ): { x: number; y: number } {
   const rect = image.getBoundingClientRect();
-  const style = window.getComputedStyle(image);
-
-  const borderLeft = parseFloat(style.borderLeftWidth) || 0;
-  const borderTop = parseFloat(style.borderTopWidth) || 0;
-  const paddingLeft = parseFloat(style.paddingLeft) || 0;
-  const paddingTop = parseFloat(style.paddingTop) || 0;
-  const paddingRight = parseFloat(style.paddingRight) || 0;
-  const paddingBottom = parseFloat(style.paddingBottom) || 0;
-
-  // content-box dimensions
-  const wBox = image.clientWidth - paddingLeft - paddingRight;
-  const hBox = image.clientHeight - paddingTop - paddingBottom;
-
-  const wSrc = image.naturalWidth || image.width;
-  const hSrc = image.naturalHeight || image.height;
-
-  if (wBox <= 0 || hBox <= 0 || wSrc <= 0 || hSrc <= 0) {
-    return { x: 0, y: 0 };
-  }
-
-  // contain logic
-  const scale = Math.min(wBox / wSrc, hBox / hSrc);
-  const wRendered = wSrc * scale;
-  const hRendered = hSrc * scale;
-
-  const xOffset = (wBox - wRendered) / 2;
-  const yOffset = (hBox - hRendered) / 2;
-
-  // Viewport client coord to content-box relative
-  const xContent = clientX - rect.left - borderLeft - paddingLeft;
-  const yContent = clientY - rect.top - borderTop - paddingTop;
-
-  const xImg = Math.round((xContent - xOffset) / scale);
-  const yImg = Math.round((yContent - yOffset) / scale);
-
-  return {
-    x: clamp(xImg, 0, wSrc - 1),
-    y: clamp(yImg, 0, hSrc - 1)
-  };
+  const metrics = readImageBoxMetrics(image);
+  return clientToImagePointPure(clientX, clientY, rect.left, rect.top, metrics);
 }
 
+/**
+ * Image pixels → canvas-local CSS px for overlay placement.
+ * Uses pure contain transform; adds img offset when flex-centered.
+ */
 function imageToClientPoint(
   imgX: number,
   imgY: number,
   image: HTMLImageElement
 ): { x: number; y: number } {
-  const style = window.getComputedStyle(image);
+  const metrics = readImageBoxMetrics(image);
+  const local = imageToClientPointPure(imgX, imgY, metrics);
+  const origin = imageOriginInCanvas(image);
+  return { x: local.x + origin.x, y: local.y + origin.y };
+}
 
-  const borderLeft = parseFloat(style.borderLeftWidth) || 0;
-  const borderTop = parseFloat(style.borderTopWidth) || 0;
-  const paddingLeft = parseFloat(style.paddingLeft) || 0;
-  const paddingTop = parseFloat(style.paddingTop) || 0;
-  const paddingRight = parseFloat(style.paddingRight) || 0;
-  const paddingBottom = parseFloat(style.paddingBottom) || 0;
-
-  const wBox = image.clientWidth - paddingLeft - paddingRight;
-  const hBox = image.clientHeight - paddingTop - paddingBottom;
-
-  const wSrc = image.naturalWidth || image.width;
-  const hSrc = image.naturalHeight || image.height;
-
-  if (wBox <= 0 || hBox <= 0 || wSrc <= 0 || hSrc <= 0) {
-    return { x: 0, y: 0 };
+/** Packet 08: re-place circle/polygon/tracked/debug overlays after layout change. */
+function relayoutPreviewOverlays(): void {
+  const state = lastPreviewForOverlay;
+  const image = document.getElementById("preview-image") as HTMLImageElement | null;
+  if (!state || !image || image.naturalWidth <= 0 || image.clientWidth <= 0) {
+    return;
   }
+  applyOverlayVisibility(state.renderedRoi);
+  drawTrackedCenterOverlay(state.payload, state.renderedRoi);
+  updateTrackingDebugOverlay(state.payload.frame_index, state.renderedRoi);
+  if (polygonPoints.length > 0) {
+    updatePolygonOverlay(image);
+  }
+}
 
-  const scale = Math.min(wBox / wSrc, hBox / hSrc);
-  const wRendered = wSrc * scale;
-  const hRendered = hSrc * scale;
-
-  const xOffset = (wBox - wRendered) / 2;
-  const yOffset = (hBox - hRendered) / 2;
-
-  const xContent = imgX * scale + xOffset;
-  const yContent = imgY * scale + yOffset;
-
-  return {
-    x: xContent + borderLeft + paddingLeft,
-    y: yContent + borderTop + paddingTop
-  };
+function bindPreviewOverlayResizeObserver(): void {
+  if (previewOverlayResizeObserver) {
+    previewOverlayResizeObserver.disconnect();
+    previewOverlayResizeObserver = null;
+  }
+  if (previewOverlayResizeTimer !== null) {
+    window.clearTimeout(previewOverlayResizeTimer);
+    previewOverlayResizeTimer = null;
+  }
+  const image = document.getElementById("preview-image") as HTMLImageElement | null;
+  const canvas = document.querySelector(".preview-canvas") as HTMLElement | null;
+  if (!image || typeof ResizeObserver === "undefined") {
+    return;
+  }
+  previewOverlayResizeObserver = new ResizeObserver(() => {
+    if (previewOverlayResizeTimer !== null) {
+      window.clearTimeout(previewOverlayResizeTimer);
+    }
+    previewOverlayResizeTimer = window.setTimeout(() => {
+      previewOverlayResizeTimer = null;
+      relayoutPreviewOverlays();
+    }, PREVIEW_OVERLAY_RESIZE_DEBOUNCE_MS);
+  });
+  previewOverlayResizeObserver.observe(image);
+  if (canvas) {
+    previewOverlayResizeObserver.observe(canvas);
+  }
 }
 
 function updatePolygonOverlay(image: HTMLImageElement, currentPointerClient?: { x: number; y: number }): void {
@@ -3042,8 +3315,8 @@ function updatePolygonOverlay(image: HTMLImageElement, currentPointerClient?: { 
   });
 
   if (currentPointerClient && !polygonClosed) {
-    // draw line to current cursor
-    const rect = image.getBoundingClientRect();
+    // Rubber-band in canvas space (viewport client → canvas-local).
+    const rect = previewCanvasRect(image);
     const relativeX = currentPointerClient.x - rect.left;
     const relativeY = currentPointerClient.y - rect.top;
     pathD += ` L ${relativeX} ${relativeY}`;
@@ -3092,19 +3365,8 @@ function imageRadiusToClientRadius(radiusImg: number, image: HTMLImageElement): 
 
 /** CSS-pixel scale for object-fit:contain preview (isotropic). */
 function imageDisplayScale(image: HTMLImageElement): number {
-  const style = window.getComputedStyle(image);
-  const paddingLeft = parseFloat(style.paddingLeft) || 0;
-  const paddingTop = parseFloat(style.paddingTop) || 0;
-  const paddingRight = parseFloat(style.paddingRight) || 0;
-  const paddingBottom = parseFloat(style.paddingBottom) || 0;
-  const wBox = image.clientWidth - paddingLeft - paddingRight;
-  const hBox = image.clientHeight - paddingTop - paddingBottom;
-  const wSrc = image.naturalWidth || image.width;
-  const hSrc = image.naturalHeight || image.height;
-  if (wBox <= 0 || hBox <= 0 || wSrc <= 0 || hSrc <= 0) {
-    return 0;
-  }
-  return Math.min(wBox / wSrc, hBox / hSrc);
+  const metrics = readImageBoxMetrics(image);
+  return imageDisplayScalePure(metrics.wBox, metrics.hBox, metrics.wSrc, metrics.hSrc);
 }
 
 function drawSelection(selection: HTMLDivElement, startX: number, startY: number, endX: number, endY: number): void {
@@ -3342,6 +3604,7 @@ function updateObjectSeedStatus(): void {
       status.className = "inline-status warn";
     }
   }
+  syncCompetitiveTrackingControl();
 }
 
 function updateFrameRange(): void {
@@ -3472,6 +3735,8 @@ function renderMeshPreview(payload: MeshPreviewResponse): void {
   const srcV = payload.source_vertex_count ?? payload.vertex_count;
   const srcF = payload.source_face_count ?? payload.face_count;
   const method = payload.display_method ?? payload.result_authority?.display_method ?? "weld_compact";
+  const tBuild0 =
+    typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
   meshOutput.className = "mesh-output";
   meshOutput.innerHTML = `
     <div>
@@ -3493,9 +3758,64 @@ function renderMeshPreview(payload: MeshPreviewResponse): void {
       <button id="download-mesh-html-btn" class="secondary" type="button">Display HTML</button>
       <span class="inline-status muted">Downloads are display/preview geometry only. Full scientific export uses server mesh-export (complete mesh).</span>
     </div>
+    <div id="mesh-preview-status" class="mesh-preview-status muted">Building display preview…</div>
     <iframe id="mesh-frame" title="3D display mesh preview"></iframe>
   `;
-  mustElement<HTMLIFrameElement>("mesh-frame").srcdoc = meshPreviewHtml(payload);
+  const statusEl = mustElement<HTMLDivElement>("mesh-preview-status");
+  const html = meshPreviewHtml(payload, {
+    formatNumber,
+    escapeHtml
+  });
+  const tBuild1 =
+    typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+  const buildMs = Math.max(0, tBuild1 - tBuild0);
+  statusEl.textContent = `Loading Plotly scene… (html build ${buildMs.toFixed(0)} ms, ${payload.vertex_count} v / ${payload.face_count} f)`;
+  statusEl.className = "mesh-preview-status muted";
+  const meshFrame = mustElement<HTMLIFrameElement>("mesh-frame");
+  // Iframe posts success/failure; never leave a silent blank scene.
+  // Accept only messages from this iframe's contentWindow (no cross-frame spoof).
+  meshPreviewListenGen += 1;
+  const listenGen = meshPreviewListenGen;
+  meshPreviewMessageHandler = (event: MessageEvent) => {
+    if (listenGen !== meshPreviewListenGen) return;
+    if (event.source !== meshFrame.contentWindow) return;
+    if (!isMeshPreviewMessage(event.data)) return;
+    const msg = event.data as MeshPreviewMessage;
+    const liveStatus = document.getElementById("mesh-preview-status");
+    if (!(liveStatus instanceof HTMLDivElement)) return;
+    if (msg.status === "ok") {
+      liveStatus.textContent =
+        `Preview ready · plot ${msg.plot_ms.toFixed(0)} ms` +
+        (msg.parse_ms != null ? ` · parse ${msg.parse_ms.toFixed(0)} ms` : "") +
+        ` · html ${buildMs.toFixed(0)} ms · display-only`;
+      liveStatus.className = "mesh-preview-status ok";
+      logAction(
+        "Mesh Preview Ready",
+        `plot_ms=${msg.plot_ms.toFixed(0)}, html_build_ms=${buildMs.toFixed(0)}, v=${msg.vertex_count}, f=${msg.face_count}`
+      );
+      publishMeshPreviewPerf({
+        ok: true,
+        html_build_ms: buildMs,
+        plot_ms: msg.plot_ms,
+        parse_ms: msg.parse_ms,
+        vertex_count: msg.vertex_count,
+        face_count: msg.face_count
+      });
+    } else {
+      liveStatus.textContent = `Preview failed (${msg.stage}): ${msg.message}`;
+      liveStatus.className = "mesh-preview-status warn";
+      logAction("Mesh Preview Failed", `${msg.stage}: ${msg.message}`);
+      publishMeshPreviewPerf({
+        ok: false,
+        html_build_ms: buildMs,
+        error: msg.message,
+        stage: msg.stage,
+        vertex_count: payload.vertex_count,
+        face_count: payload.face_count
+      });
+    }
+  };
+  meshFrame.srcdoc = html;
   mustElement<HTMLButtonElement>("download-mesh-obj-btn").addEventListener("click", () => {
     downloadLatestMeshFile("obj");
   });
@@ -3513,113 +3833,26 @@ function renderMeshPreview(payload: MeshPreviewResponse): void {
   });
 }
 
-function meshPreviewHtml(payload: MeshPreviewResponse): string {
-  const bounds = meshBounds(payload.vertices);
-  const x = payload.vertices.map((vertex) => vertex[0] - bounds.xmin);
-  const y = payload.vertices.map((vertex) => vertex[1] - bounds.ymin);
-  const z = payload.vertices.map((vertex) => vertex[2] - bounds.zmin);
-  const i = payload.faces.map((face) => face[0]);
-  const j = payload.faces.map((face) => face[1]);
-  const k = payload.faces.map((face) => face[2]);
-  const title = payload.source_path.split(/[\\/]/).pop() ?? "MorphoStack mesh";
-  return `<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <title>${escapeHtml(title)} — MorphoStack mesh</title>
-  <style>
-    html, body { width: 100%; height: 100%; margin: 0; background: #0f172a; color: #e5e7eb; font-family: system-ui, sans-serif; }
-    #toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 10px; background: #111827; border-bottom: 1px solid rgba(255,255,255,0.08); }
-    #toolbar button, #toolbar label { font-size: 12px; }
-    #toolbar button { background: #1f2937; color: #e5e7eb; border: 1px solid rgba(255,255,255,0.12); border-radius: 6px; padding: 4px 8px; cursor: pointer; }
-    #toolbar button:hover { background: #374151; }
-    #toolbar input[type="range"] { width: 120px; vertical-align: middle; }
-    #plot { width: 100%; height: calc(100% - 44px); }
-    .meta { font-size: 11px; color: #9ca3af; margin-left: auto; }
-  </style>
-  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
-</head>
-<body>
-  <div id="toolbar">
-    <button type="button" data-camera="iso">Iso</button>
-    <button type="button" data-camera="front">Front</button>
-    <button type="button" data-camera="side">Side</button>
-    <button type="button" data-camera="top">Top</button>
-    <label>Opacity <input id="opacity-range" type="range" min="0.2" max="1" step="0.05" value="0.88" /></label>
-    <button id="download-png-btn" type="button">Download PNG</button>
-    <span class="meta">Display preview · scientific SA ${formatNumber(payload.surface_area_um2)} um2 · V ${formatNumber(payload.volume_um3)} um3 (complete mesh)</span>
-  </div>
-  <div id="plot"></div>
-  <script>
-    const trace = {
-      type: "mesh3d",
-      x: ${JSON.stringify(x)},
-      y: ${JSON.stringify(y)},
-      z: ${JSON.stringify(z)},
-      i: ${JSON.stringify(i)},
-      j: ${JSON.stringify(j)},
-      k: ${JSON.stringify(k)},
-      color: "#38bdf8",
-      opacity: 0.88,
-      flatshading: true
-    };
-    const layout = {
-      margin: { l: 0, r: 0, t: 0, b: 0 },
-      paper_bgcolor: "#0f172a",
-      plot_bgcolor: "#0f172a",
-      font: { color: "#e5e7eb" },
-      scene: {
-        aspectmode: "auto",
-        xaxis: { title: "X (um)", nticks: 4, color: "#e5e7eb", gridcolor: "rgba(255,255,255,0.18)", backgroundcolor: "#111827" },
-        yaxis: { title: "Y (um)", nticks: 4, color: "#e5e7eb", gridcolor: "rgba(255,255,255,0.18)", backgroundcolor: "#111827" },
-        zaxis: { title: "Z (um)", nticks: 4, color: "#e5e7eb", gridcolor: "rgba(255,255,255,0.18)", backgroundcolor: "#111827" }
-      }
-    };
-    const cameras = {
-      iso: { eye: { x: 1.6, y: 1.6, z: 1.2 } },
-      front: { eye: { x: 0, y: 2.2, z: 0 } },
-      side: { eye: { x: 2.2, y: 0, z: 0 } },
-      top: { eye: { x: 0, y: 0, z: 2.2 } }
-    };
-    Plotly.newPlot("plot", [trace], layout, { responsive: true, displaylogo: false });
-    document.querySelectorAll("[data-camera]").forEach((button) => {
-      button.addEventListener("click", () => {
-        const key = button.getAttribute("data-camera");
-        if (!key || !cameras[key]) return;
-        Plotly.relayout("plot", { "scene.camera": cameras[key] });
-      });
-    });
-    document.getElementById("opacity-range").addEventListener("input", (event) => {
-      const value = Number(event.target.value);
-      Plotly.restyle("plot", { opacity: value });
-    });
-    document.getElementById("download-png-btn").addEventListener("click", async () => {
-      const dataUrl = await Plotly.toImage("plot", { format: "png", width: 1400, height: 900, scale: 2 });
-      const anchor = document.createElement("a");
-      anchor.href = dataUrl;
-      anchor.download = "morphostack-mesh.png";
-      document.body.append(anchor);
-      anchor.click();
-      anchor.remove();
-    });
-  </script>
-</body>
-</html>`;
-}
+type MeshPreviewPerfRecord = {
+  ok: boolean;
+  html_build_ms?: number;
+  plot_ms?: number;
+  parse_ms?: number;
+  vertex_count?: number;
+  face_count?: number;
+  error?: string;
+  stage?: string;
+};
 
-function meshBounds(vertices: number[][]): {
-  xmin: number;
-  ymin: number;
-  zmin: number;
-} {
-  return vertices.reduce(
-    (bounds, vertex) => ({
-      xmin: Math.min(bounds.xmin, vertex[0]),
-      ymin: Math.min(bounds.ymin, vertex[1]),
-      zmin: Math.min(bounds.zmin, vertex[2])
-    }),
-    { xmin: Number.POSITIVE_INFINITY, ymin: Number.POSITIVE_INFINITY, zmin: Number.POSITIVE_INFINITY }
-  );
+function publishMeshPreviewPerf(record: MeshPreviewPerfRecord): void {
+  const w = window as Window & { __morphostackMeshPreviewPerf?: MeshPreviewPerfRecord[] };
+  if (!Array.isArray(w.__morphostackMeshPreviewPerf)) {
+    w.__morphostackMeshPreviewPerf = [];
+  }
+  w.__morphostackMeshPreviewPerf.push(record);
+  if (w.__morphostackMeshPreviewPerf.length > 16) {
+    w.__morphostackMeshPreviewPerf.splice(0, w.__morphostackMeshPreviewPerf.length - 16);
+  }
 }
 
 function syncExcludedFramesFromTable(): void {
@@ -4119,7 +4352,7 @@ function downloadLatestMeshHtml(): void {
     return;
   }
 
-  const html = meshPreviewHtml(latestMeshPreview);
+  const html = meshPreviewHtml(latestMeshPreview, { formatNumber, escapeHtml });
   const blob = new Blob([html], { type: "text/html;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
@@ -4611,6 +4844,19 @@ function readVolumeBlendMode(): VolumeBlendMode {
   return volumeBlendModeSelect.value === "composite" ? "composite" : "mip";
 }
 
+/** Show composite Opacity vs MIP Black level — never a dead control for the active blend. */
+function syncVolumeAppearanceControls(): void {
+  const control = appearanceControlForBlend(readVolumeBlendMode());
+  const showOpacity = control === "opacity";
+  volumeOpacityLabel.hidden = !showOpacity;
+  volumeBlackLevelLabel.hidden = showOpacity;
+  volumeOpacityInput.disabled = !showOpacity;
+  volumeBlackLevelInput.disabled = showOpacity;
+}
+
+// Initial control visibility matches default MIP blend.
+syncVolumeAppearanceControls();
+
 function disposeVolumeViewer(reason?: string): void {
   volumeLoadGen += 1;
   volumeSeedPickMode = false;
@@ -4934,6 +5180,7 @@ async function loadVolumeViewer(options: { reason: string } = { reason: "manual"
       payload: levelPayload,
       blendMode: readVolumeBlendMode(),
       opacityGain: Number(volumeOpacityInput.value) || 0.35,
+      blackLevel: Number(volumeBlackLevelInput.value) || 0,
       maxBytes: DEFAULT_VOLUME_MAX_BYTES,
       sourceShapeZyx: inspectedSourceShape ?? undefined,
       sourceVoxelSize: srcVoxel,
@@ -4950,9 +5197,12 @@ async function loadVolumeViewer(options: { reason: string } = { reason: "manual"
     lastDisplayLevelPayload = levelPayload;
     const meta = session.readyMeta;
     volumeViewerPanel.dataset.state = "ready";
+    syncVolumeAppearanceControls();
+    // Second fit after host is un-hidden so CSS size is final (idempotent).
+    const fitMs = session.fitCamera();
     volumeViewerStatus.textContent = meta
-      ? `Ready · level ${meta.level} · ${NAVIGATION_ONLY_LABEL}`
-      : `Ready · ${NAVIGATION_ONLY_LABEL}`;
+      ? `Ready · level ${meta.level} · fit ${fitMs.toFixed(0)} ms · ${NAVIGATION_ONLY_LABEL}`
+      : `Ready · fit ${fitMs.toFixed(0)} ms · ${NAVIGATION_ONLY_LABEL}`;
     volumeViewerStatus.classList.remove("is-error");
     volumeViewerFallback.hidden = true;
     volumeViewerCanvasWrap.hidden = false;

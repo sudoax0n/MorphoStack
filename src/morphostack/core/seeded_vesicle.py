@@ -11,9 +11,13 @@ centroid (GUVs float), and applies IoU + multi-feature continuity gates.
 
 from __future__ import annotations
 
+import hashlib
 import math
+import threading
+import time
+from collections import defaultdict
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 import numpy as np
@@ -59,44 +63,15 @@ def _gaussian(image: np.ndarray, sigma: float = 1.0) -> np.ndarray:
         return np.asarray(image, dtype=np.float64)
 
 
-# Bilateral backend selection (packet 05 experiment).
-# Default remains skimage: OpenCV substitution was rejected on mask IoU parity
-# (G-A5). OpenCV is retained as an opt-in path for re-bench / re-review only.
-BilateralBackend = Literal["skimage", "opencv", "auto"]
-_BILATERAL_BACKEND: BilateralBackend = "skimage"
-_LAST_BILATERAL_IMPL: str = "none"
+# Production bilateral: skimage only (Packet 05 OpenCV experiment REJECTED / Packet 10 deleted).
+# Historical reject evidence: architecture-reset packet-05-bilateral/.
 
 
-def set_bilateral_backend(backend: BilateralBackend) -> None:
-    """Select denoise implementation for exact seeded crops.
+def _bilateral(img: np.ndarray, sigma_spatial: float = 1.5) -> np.ndarray:
+    """Edge-preserving bilateral filter (skimage denoise_bilateral).
 
-    ``skimage`` — reference / production default (scientific baseline).
-    ``opencv`` — OpenCV float path only; raises if unsupported then falls back.
-    ``auto`` — try OpenCV when supported, else skimage (explicit fallback).
+    Peak-normalizes, filters, then restores peak. On failure falls back to Gaussian.
     """
-    global _BILATERAL_BACKEND
-    if backend not in ("skimage", "opencv", "auto"):
-        raise ValueError(f"unsupported bilateral backend: {backend!r}")
-    _BILATERAL_BACKEND = backend
-
-
-def get_bilateral_backend() -> BilateralBackend:
-    return _BILATERAL_BACKEND
-
-
-def last_bilateral_impl() -> str:
-    """Which implementation last ran: skimage | opencv | gaussian_fallback | none."""
-    return _LAST_BILATERAL_IMPL
-
-
-def _bilateral_win_size(sigma_spatial: float) -> int:
-    """Match skimage.restoration.denoise_bilateral default window sizing."""
-    return max(5, 2 * int(math.ceil(3.0 * float(sigma_spatial))) + 1)
-
-
-def _bilateral_skimage(img: np.ndarray, sigma_spatial: float = 1.5) -> np.ndarray:
-    """Reference bilateral: skimage denoise_bilateral on peak-normalized float."""
-    global _LAST_BILATERAL_IMPL
     try:
         from skimage.restoration import denoise_bilateral
 
@@ -106,92 +81,14 @@ def _bilateral_skimage(img: np.ndarray, sigma_spatial: float = 1.5) -> np.ndarra
             img_f = img_f / peak
         # sigma_color=None -> image.std() on the normalized image (skimage default).
         out = denoise_bilateral(img_f, sigma_spatial=float(sigma_spatial), channel_axis=None)
-        _LAST_BILATERAL_IMPL = "skimage"
         return np.asarray(out, dtype=np.float64) * (peak if peak > 0 else 1.0)
     except Exception:
-        _LAST_BILATERAL_IMPL = "gaussian_fallback"
         return _gaussian(img, sigma=float(sigma_spatial))
 
 
-def _opencv_bilateral_supported(img: np.ndarray) -> bool:
-    """OpenCV bilateralFilter: 2D finite array, 8-bit or float, CPU only."""
-    try:
-        import cv2  # noqa: F401
-    except Exception:
-        return False
-    arr = np.asarray(img)
-    if arr.ndim != 2 or arr.size == 0:
-        return False
-    if arr.dtype.kind not in "iuf":
-        return False
-    if not np.isfinite(arr).all():
-        return False
-    return True
-
-
-def _bilateral_opencv(img: np.ndarray, sigma_spatial: float = 1.5) -> np.ndarray:
-    """OpenCV bilateral mapped toward skimage units (float32, no uint8 coercion).
-
-    Parameter mapping (not identical algorithms):
-    - Input scaled by peak to [0, 1] float32 (matches skimage [0,1] domain).
-    - ``sigmaSpace`` = ``sigma_spatial`` (pixels).
-    - ``sigmaColor`` = std of the normalized crop (skimage default when
-      ``sigma_color=None``).
-    - ``d`` = skimage ``win_size`` = max(5, 2*ceil(3*sigma_spatial)+1).
-    - ``borderType`` = BORDER_CONSTANT (skimage mode='constant', cval=0).
-    Output restored by peak. Does not quantize to uint8.
-    """
-    global _LAST_BILATERAL_IMPL
-    import cv2
-
-    if not _opencv_bilateral_supported(img):
-        raise ValueError("opencv bilateral unsupported for this array")
-
-    img_f = np.asarray(img, dtype=np.float64)
-    peak = float(np.max(img_f)) if img_f.size else 0.0
-    if peak <= 0.0:
-        _LAST_BILATERAL_IMPL = "opencv"
-        return img_f.copy()
-
-    # Preserve source precision: float32 in [0,1], not uint8.
-    src = np.ascontiguousarray(img_f / peak, dtype=np.float32)
-    d = int(_bilateral_win_size(sigma_spatial))
-    sigma_space = float(sigma_spatial)
-    sigma_color = float(np.std(src))
-    if not np.isfinite(sigma_color) or sigma_color <= 0.0:
-        # Flat / empty crop: no color mixing; still run kernel for stability.
-        sigma_color = 1e-6
-
-    out = cv2.bilateralFilter(
-        src,
-        d=d,
-        sigmaColor=sigma_color,
-        sigmaSpace=sigma_space,
-        borderType=cv2.BORDER_CONSTANT,
-    )
-    _LAST_BILATERAL_IMPL = "opencv"
-    return np.asarray(out, dtype=np.float64) * peak
-
-
-def _bilateral(img: np.ndarray, sigma_spatial: float = 1.5) -> np.ndarray:
-    """Edge-preserving bilateral filter. Better than Gaussian for membrane images.
-
-    Backend is ``get_bilateral_backend()`` (default ``skimage``). OpenCV is only
-    used for ``opencv`` / ``auto`` and only when dtype/shape are supported;
-    otherwise falls back to skimage explicitly (see ``last_bilateral_impl()``).
-    """
-    backend = _BILATERAL_BACKEND
-    if backend in ("opencv", "auto") and _opencv_bilateral_supported(img):
-        try:
-            return _bilateral_opencv(img, sigma_spatial=sigma_spatial)
-        except Exception:
-            # Explicit fallback — never silent Gaussian when OpenCV was requested.
-            return _bilateral_skimage(img, sigma_spatial=sigma_spatial)
-    return _bilateral_skimage(img, sigma_spatial=sigma_spatial)
-
-
 # ---------------------------------------------------------------------------
-# Packet 06 — exact-path stage counters + MorphGAC clean-frame gate
+# Neutral exact-path stage counters (Packet 01 profiling / attribution).
+# Opt-in staged-QC / MorphGAC-skip science switches deleted (Packet 06 REJECT / Packet 10).
 # ---------------------------------------------------------------------------
 
 
@@ -238,11 +135,6 @@ class ExactPathCounters:
 
 
 _EXACT_PATH_COUNTERS = ExactPathCounters()
-# Skip MorphGAC only when pre-registered clean-frame rule holds.
-# Packet-06 production default: False (always MorphGAC when refine=True).
-# Rejected for cap/gap identity regressions and A6 performance exit miss.
-# Instrumentation still records skips when the switch is enabled for re-bench.
-_GATE_SKIP_MORPHGAC_CLEAN: bool = False
 
 
 def reset_exact_path_counters() -> None:
@@ -251,42 +143,6 @@ def reset_exact_path_counters() -> None:
 
 def get_exact_path_counters() -> dict[str, int]:
     return _EXACT_PATH_COUNTERS.as_dict()
-
-
-def set_exact_path_gating_policy(*, skip_morphgac_when_clean: bool | None = None) -> dict[str, bool]:
-    """Configure MorphGAC clean-frame gate. None leaves the flag unchanged."""
-    global _GATE_SKIP_MORPHGAC_CLEAN
-    if skip_morphgac_when_clean is not None:
-        _GATE_SKIP_MORPHGAC_CLEAN = bool(skip_morphgac_when_clean)
-    return get_exact_path_gating_policy()
-
-
-def get_exact_path_gating_policy() -> dict[str, bool]:
-    return {"skip_morphgac_when_clean": bool(_GATE_SKIP_MORPHGAC_CLEAN)}
-
-
-def set_qc_refinement_gating(
-    *,
-    staged_full_qc: bool | None = None,
-    skip_morphgac_when_clean: bool | None = None,
-) -> dict[str, bool]:
-    """Combined packet-06 policy switch (slice_qc + MorphGAC).
-
-    Reference/rollback path: both False (full QC + MorphGAC always on exact path).
-    """
-    from morphostack.core.slice_qc import set_qc_gating_policy
-
-    set_qc_gating_policy(staged_full_qc=staged_full_qc)
-    set_exact_path_gating_policy(skip_morphgac_when_clean=skip_morphgac_when_clean)
-    return get_qc_refinement_gating()
-
-
-def get_qc_refinement_gating() -> dict[str, bool]:
-    from morphostack.core.slice_qc import get_qc_gating_policy
-
-    out = dict(get_qc_gating_policy())
-    out.update(get_exact_path_gating_policy())
-    return out
 
 
 def reset_qc_refinement_counters() -> None:
@@ -303,6 +159,255 @@ def get_qc_refinement_counters() -> dict[str, int]:
     out.update(get_exact_path_counters())
     return out
 
+
+# ---------------------------------------------------------------------------
+# Packet 02 / 11 — competitive polar + multi-label RW isolation
+# ---------------------------------------------------------------------------
+# Production default: OFF (legacy). Packet 11 exposes request/job-scoped opt-in;
+# do not flip this process-global around concurrent API work.
+# Prefer explicit ``competitive_isolation=`` on segment/track/extend.
+
+_COMPETITIVE_ISOLATION_ENABLED: bool = False
+
+# Distinct cache/job identity tokens (never share entries across variants).
+SEEDED_EXACT_MODE_LEGACY: str = "seeded_exact_legacy"
+SEEDED_EXACT_MODE_COMPETITIVE: str = "seeded_exact_competitive_v1"
+# Honest UI/API warning (Packet 05/11 real-data gate incomplete).
+COMPETITIVE_TRACKING_WARNING: str = "Touching-vesicle real-data sign-off incomplete."
+
+
+def set_competitive_isolation_enabled(enabled: bool = True) -> bool:
+    """Process-global test/diagnostic switch. Prefer request-scoped args in API."""
+    global _COMPETITIVE_ISOLATION_ENABLED
+    _COMPETITIVE_ISOLATION_ENABLED = bool(enabled)
+    return _COMPETITIVE_ISOLATION_ENABLED
+
+
+def is_competitive_isolation_enabled() -> bool:
+    return bool(_COMPETITIVE_ISOLATION_ENABLED)
+
+
+def exact_tracking_mode_token(competitive: bool) -> str:
+    """Stable tracking_mode for TrackingCacheKey / manifests."""
+    return SEEDED_EXACT_MODE_COMPETITIVE if competitive else SEEDED_EXACT_MODE_LEGACY
+
+
+def competitive_from_tracking_mode(mode: str | None) -> bool:
+    """True only for the explicit competitive experimental mode token."""
+    token = str(mode or "").strip()
+    return token == SEEDED_EXACT_MODE_COMPETITIVE
+
+
+def resolve_competitive_isolation(competitive_isolation: bool | None) -> bool:
+    """Resolve segment/track competitive flag (explicit arg wins over process global)."""
+    if competitive_isolation is not None:
+        return bool(competitive_isolation)
+    return is_competitive_isolation_enabled()
+
+
+# ---------------------------------------------------------------------------
+# Tracking recovery Packet 01 — neutral stage/decision instrumentation
+# ---------------------------------------------------------------------------
+# Off by default. When disabled, scientific outputs must match the uninstrumented
+# path bit-for-bit (no extra allocations on the hot path beyond a bool load).
+# When enabled, records stage timings, association decisions, frame commits, and
+# optional cache/job observe events without changing masks/methods/statuses.
+
+
+@dataclass
+class _TrackingInstrState:
+    """Mutable process-local collector (enabled sessions only)."""
+
+    enabled: bool = False
+    stages: dict[str, list[float]] = field(default_factory=lambda: defaultdict(list))
+    events: list[dict[str, Any]] = field(default_factory=list)
+    decisions: list[dict[str, Any]] = field(default_factory=list)
+    frames: list[dict[str, Any]] = field(default_factory=list)
+    segment_calls: int = 0
+    wall_t0: float | None = None
+
+    def clear(self) -> None:
+        self.stages = defaultdict(list)
+        self.events = []
+        self.decisions = []
+        self.frames = []
+        self.segment_calls = 0
+        self.wall_t0 = None
+
+
+_INSTR_LOCK = threading.Lock()
+_INSTR = _TrackingInstrState()
+# Module-level flag: one bool load on the hot path (no attribute/lock when off).
+_INSTR_ENABLED: bool = False
+
+
+def enable_tracking_instrumentation(enabled: bool = True) -> bool:
+    """Enable or disable neutral tracking instrumentation. Returns new state."""
+    global _INSTR_ENABLED
+    with _INSTR_LOCK:
+        _INSTR.enabled = bool(enabled)
+        _INSTR_ENABLED = _INSTR.enabled
+        if not _INSTR.enabled:
+            _INSTR.clear()
+        elif _INSTR.wall_t0 is None:
+            _INSTR.wall_t0 = time.perf_counter()
+        return _INSTR.enabled
+
+
+def is_tracking_instrumentation_enabled() -> bool:
+    return _INSTR_ENABLED
+
+
+def reset_tracking_instrumentation() -> None:
+    """Clear collected events/timings; leaves enabled flag unchanged."""
+    global _INSTR_ENABLED
+    with _INSTR_LOCK:
+        was = _INSTR.enabled
+        _INSTR.clear()
+        if was:
+            _INSTR.wall_t0 = time.perf_counter()
+            _INSTR.enabled = True
+            _INSTR_ENABLED = True
+        else:
+            _INSTR_ENABLED = False
+
+
+def _instr_on() -> bool:
+    return _INSTR_ENABLED
+
+
+def _instr_record_stage(name: str, ms: float, **extra: Any) -> None:
+    """Accumulate stage timing without locking (GIL-safe list append).
+
+    Sparse ``emit_event`` markers are rare and take the lock.
+    """
+    if not _INSTR_ENABLED:
+        return
+    _INSTR.stages[str(name)].append(float(ms))
+    if not extra.get("emit_event"):
+        return
+    with _INSTR_LOCK:
+        if not _INSTR.enabled:
+            return
+        ev: dict[str, Any] = {
+            "kind": "stage",
+            "stage": str(name),
+            "ms": float(ms),
+        }
+        for k, v in extra.items():
+            if k != "emit_event":
+                ev[k] = v
+        if _INSTR.wall_t0 is not None:
+            ev["t_ms"] = (time.perf_counter() - _INSTR.wall_t0) * 1000.0
+        _INSTR.events.append(ev)
+
+
+def _instr_record_event(kind: str, **payload: Any) -> None:
+    """Observe-only event (cache/job/track). No-op when instrumentation is off."""
+    if not _INSTR_ENABLED:
+        return
+    with _INSTR_LOCK:
+        if not _INSTR.enabled:
+            return
+        ev: dict[str, Any] = {"kind": str(kind)}
+        if _INSTR.wall_t0 is not None:
+            ev["t_ms"] = (time.perf_counter() - _INSTR.wall_t0) * 1000.0
+        ev.update(payload)
+        _INSTR.events.append(ev)
+
+
+def record_tracking_observe_event(kind: str, **payload: Any) -> None:
+    """Public observe hook for cache/job layers (no science side effects)."""
+    _instr_record_event(kind, **payload)
+
+
+def _instr_qc_snapshot(qc: SliceQC | None) -> dict[str, Any] | None:
+    if qc is None:
+        return None
+    return {
+        "circularity": float(qc.circularity),
+        "eta": float(qc.eta),
+        "edge_support": float(qc.edge_support),
+        "inlier_frac": float(qc.inlier_frac),
+        "defect_depth_norm": float(qc.defect_depth_norm),
+        "flat_contact_frac": float(qc.flat_contact_frac),
+        "delta_bic": float(qc.delta_bic),
+        "n_dt_markers": int(qc.n_dt_markers),
+        "merge_suspect": bool(qc.merge_suspect),
+        "strong_two_circle": bool(qc.strong_two_circle),
+        "fitted_radius": float(qc.fitted_radius),
+        "cheap": bool(qc.cheap),
+    }
+
+
+def _instr_result_snapshot(res: SeededSliceResult) -> dict[str, Any]:
+    return {
+        "ok": bool(res.ok),
+        "method": str(res.method),
+        "area_px": float(res.area_px),
+        "center": [float(res.center_xy[0]), float(res.center_xy[1])],
+        "merge_suspect": bool(res.merge_suspect),
+        "qc": _instr_qc_snapshot(res.qc),
+        "effective_threshold": (
+            float(res.effective_threshold) if res.effective_threshold is not None else None
+        ),
+    }
+
+
+def _instr_mask_fingerprint(mask: np.ndarray | None) -> str | None:
+    """Stable content fingerprint for scientific parity checks."""
+    if mask is None:
+        return None
+    arr = np.ascontiguousarray(np.asarray(mask, dtype=np.uint8))
+    digest = hashlib.sha256(arr.tobytes()).hexdigest()[:16]
+    return f"{arr.shape[0]}x{arr.shape[1]}:{digest}"
+
+
+def scientific_result_fingerprint(res: SeededSliceResult) -> dict[str, Any]:
+    """JSON-safe scientific identity of one slice result (for off/on parity)."""
+    return {
+        "ok": bool(res.ok),
+        "method": str(res.method),
+        "area_px": float(res.area_px),
+        "perimeter_px": float(res.perimeter_px),
+        "center": [float(res.center_xy[0]), float(res.center_xy[1])],
+        "merge_suspect": bool(res.merge_suspect),
+        "mask_fp": _instr_mask_fingerprint(res.solid_mask),
+        "qc": _instr_qc_snapshot(res.qc),
+        "effective_threshold": (
+            float(res.effective_threshold) if res.effective_threshold is not None else None
+        ),
+    }
+
+
+def get_tracking_instrumentation() -> dict[str, Any]:
+    """Return a JSON-safe snapshot of the current instrumentation collector."""
+    with _INSTR_LOCK:
+        stage_summary: dict[str, Any] = {}
+        for name, vals in sorted(_INSTR.stages.items()):
+            if not vals:
+                continue
+            a = np.asarray(vals, dtype=np.float64)
+            stage_summary[name] = {
+                "n": int(a.size),
+                "sum_ms": float(a.sum()),
+                "mean_ms": float(a.mean()),
+                "median_ms": float(np.median(a)),
+                "p95_ms": float(np.percentile(a, 95)) if a.size else 0.0,
+                "max_ms": float(a.max()),
+                "min_ms": float(a.min()),
+            }
+        return {
+            "enabled": bool(_INSTR.enabled),
+            "segment_calls": int(_INSTR.segment_calls),
+            "stage_summary": stage_summary,
+            "decision_count": len(_INSTR.decisions),
+            "frame_count": len(_INSTR.frames),
+            "event_count": len(_INSTR.events),
+            "decisions": list(_INSTR.decisions),
+            "frames": list(_INSTR.frames),
+            "events": list(_INSTR.events),
+        }
 
 
 def _crop_bounds(
@@ -403,36 +508,50 @@ def _is_vesicle_cap(
 ) -> bool:
     """Detect if this slice is at a vesicle pole (cap).
 
-    True when mean intensity inside the segmented mask is not significantly
-    above background inside the disk (no real membrane signal).
+    True when the membrane boundary is not significantly brighter than a *local*
+    exterior annulus. Whole-disk background is avoided: in crowded FOVs bright
+    neighbours inflate the disk mean and cause false caps (Packet 02).
     """
     if solid_mask is None or np.count_nonzero(solid_mask) == 0:
         return False
-    arr = np.asarray(slice_2d)
+    arr = np.asarray(slice_2d, dtype=np.float64)
     solid = np.asarray(solid_mask, dtype=bool)
     disk = np.asarray(disk_mask, dtype=bool)
     if solid.shape != arr.shape or disk.shape != arr.shape:
         return False
     # Restrict solid to disk for fair comparison
     solid_in = solid & disk
-    bg_mask = disk & ~solid_in
-    if np.count_nonzero(solid_in) == 0 or np.count_nonzero(bg_mask) == 0:
+    if np.count_nonzero(solid_in) == 0:
         return False
 
     # Extract boundary ring of width ~3 pixels using binary erosion to represent
     # the true membrane, avoiding the dark vesicle lumen from diluting the fg signal.
-    from scipy.ndimage import binary_erosion
-    eroded = binary_erosion(solid_in, iterations=3)
+    from scipy.ndimage import binary_dilation, binary_erosion
+
+    struct = np.ones((3, 3), dtype=bool)
+    eroded = binary_erosion(solid_in, structure=struct, iterations=3)
     if np.count_nonzero(solid_in & ~eroded) == 0:
-        eroded = binary_erosion(solid_in, iterations=1)
+        eroded = binary_erosion(solid_in, structure=struct, iterations=1)
     boundary = solid_in & ~eroded
     if np.count_nonzero(boundary) > 0:
         fg_val = float(np.mean(arr[boundary]))
     else:
         fg_val = float(np.mean(arr[solid_in]))
 
+    # Local exterior annulus (just outside the solid), not the whole crop disk.
+    exterior = binary_dilation(solid_in, structure=struct, iterations=4) & ~solid_in
+    bg_mask = exterior & disk
+    if np.count_nonzero(bg_mask) < 16:
+        bg_mask = exterior
+    if np.count_nonzero(bg_mask) < 12:
+        bg_mask = disk & ~solid_in
+    if np.count_nonzero(bg_mask) == 0:
+        return False
+
     bg_mean = float(np.mean(arr[bg_mask]))
-    return fg_val < bg_mean * float(threshold)
+    # Inclusive threshold: synthetic poles use membrane≈1.2× flat exterior and
+    # must still register as caps (see test_cap_detection_stops_at_pole).
+    return fg_val <= bg_mean * float(threshold)
 
 
 def _adaptive_threshold_sparse(values: np.ndarray) -> float | None:
@@ -956,6 +1075,7 @@ def segment_slice_seeded(
     refine: bool = True,
     ref_area: float | None = None,
     fast_preview: bool = False,
+    competitive_isolation: bool | None = None,
 ) -> SeededSliceResult:
     """Segment one slice with a user circle (cx, cy, R) in full-image coords.
 
@@ -964,7 +1084,17 @@ def segment_slice_seeded(
     skips the costly bilateral denoise and MorphGAC refinement. Leave it
     false for analysis and tracking so scientific results retain their current
     behaviour.
+
+    ``competitive_isolation``: when True, use Packet 02 polar/RW isolation for
+    this call only. When None, fall back to the process-global test flag
+    (default off). API/jobs must pass an explicit bool — never toggle the global
+    around concurrent requests.
     """
+    _instr = _INSTR_ENABLED
+    _t_seg0 = time.perf_counter() if _instr else 0.0
+    if _instr:
+        _INSTR.segment_calls += 1
+
     arr = np.asarray(frame)
     if arr.ndim != 2:
         raise ValueError("segment_slice_seeded expects a 2D frame")
@@ -978,101 +1108,188 @@ def segment_slice_seeded(
     crop_raw = np.asarray(arr[y0:y1, x0:x1], dtype=np.float64)
     # Interactive rendering needs a faithful local selection quickly; the
     # expensive edge-preserving filter is reserved for scientific results.
-    crop = crop_raw if fast_preview else _bilateral(crop_raw, sigma_spatial=1.5)
+    if fast_preview:
+        crop = crop_raw
+    else:
+        if _instr:
+            _t0 = time.perf_counter()
+        crop = _bilateral(crop_raw, sigma_spatial=1.5)
+        if _instr:
+            _instr_record_stage("bilateral", (time.perf_counter() - _t0) * 1000.0)
 
     local_cx = sx - x0
     local_cy = sy - y0
     disk_r = R * 1.15
     disk = _disk_mask(crop.shape, local_cx, local_cy, disk_r)
 
-    # Primary: adaptive threshold inside hard disk (not the UI slider).
-    disk_vals = crop[disk]
-    thr = _adaptive_threshold_sparse(disk_vals)
     solid: np.ndarray | None = None
     method = "circle_seed_fail"
     # Provenance: intensity gate actually applied for threshold-based methods.
     effective_threshold: float | None = None
+    thr: float | None = None
+    competitive_used = False
+    use_competitive = resolve_competitive_isolation(competitive_isolation)
 
-    if thr is not None:
-        used_thr = float(thr)
-        fg = (crop >= used_thr) & disk
-        disk_area = float(np.count_nonzero(disk))
-        fg_area = float(np.count_nonzero(fg))
-        if fg_area > 0.92 * disk_area and disk_area > 0:
-            p_hi = float(np.percentile(disk_vals, 92))
-            if p_hi > float(np.min(disk_vals)) + 1e-12:
-                used_thr = p_hi
-                fg = (crop >= used_thr) & disk
-                fg_area = float(np.count_nonzero(fg))
-        if fg_area > 0:
-            solid = _pick_component_in_disk(fg, disk, local_cx, local_cy, R, ref_area=ref_area, cheap=fast_preview)
-            if solid is not None:
-                method = "circle_seed"
-                effective_threshold = used_thr
+    # Packet 02/11: request-scoped competitive polar + multi-label RW path.
+    # When enabled, threshold/CC is no longer authoritative isolation.
+    if not fast_preview and use_competitive:
+        from morphostack.core.competitive_isolation import isolate_competitive
 
-    # Polar-DP fallback only when threshold/CC path produced nothing.
-    if solid is None:
-        try:
-            from morphostack.core.polar_dp import segment_slice_polar_dp
-
-            # n_angles: at least 1 px arc spacing to avoid jagged Viterbi paths.
-            _n_angles = max(360, int(2.0 * np.pi * R))
-            # Clamp search band to disk boundary so Viterbi cannot reach neighbor membranes.
-            _safe_band = max(0.10, min(0.20, (disk_r - R) / max(R, 1.0)))
-            polar = segment_slice_polar_dp(
-                crop_raw,
-                local_cx,
-                local_cy,
-                R,
-                search_band=_safe_band,
-                n_angles=_n_angles,
-                smoothness_penalty=3.0,
-                max_jump=2,
+        if _instr:
+            _t0 = time.perf_counter()
+        cres = isolate_competitive(
+            crop,
+            crop_raw,
+            disk,
+            local_cx,
+            local_cy,
+            R,
+            ref_area=ref_area,
+        )
+        if _instr:
+            _instr_record_stage(
+                "competitive_isolation",
+                (time.perf_counter() - _t0) * 1000.0,
+                ok=bool(cres.ok),
+                reason=cres.reject_reason,
             )
-            if polar.ok and polar.solid_mask is not None:
-                solid = np.asarray(polar.solid_mask, dtype=bool) & disk
-                if np.count_nonzero(solid) >= 16:
-                    method = "polar_dp"
-                    effective_threshold = None  # ridge path; no intensity gate
-                else:
-                    solid = None
-        except Exception:
-            solid = None
+            if _INSTR_ENABLED:
+                _instr_record_event(
+                    "competitive_decision",
+                    ok=bool(cres.ok),
+                    method=str(cres.method),
+                    reject_reason=cres.reject_reason,
+                    target_prob_mean=float(cres.target_prob_mean),
+                    competitor_margin=float(cres.competitor_margin),
+                    n_neighbor_labels=int(cres.n_neighbor_labels),
+                    polar_ok=bool(cres.polar_ok),
+                )
+        competitive_used = True
+        if cres.ok and cres.solid is not None:
+            solid = np.asarray(cres.solid, dtype=bool) & disk
+            method = str(cres.method)
+            effective_threshold = None
+        else:
+            # Fail closed: do not fall through to unsafe threshold pick.
+            if _instr:
+                _instr_record_stage(
+                    "segment_total",
+                    (time.perf_counter() - _t_seg0) * 1000.0,
+                    method="circle_seed_merge_reject",
+                    ok=False,
+                )
+            return SeededSliceResult(
+                None,
+                None,
+                (sx, sy),
+                0.0,
+                0.0,
+                "circle_seed_merge_reject",
+                False,
+                merge_suspect=True,
+            )
 
-    if solid is None and thr is not None:
-        solid = _try_rw_ws_in_disk(crop, disk, local_cx, local_cy, R)
-        if solid is not None:
-            sa = float(np.count_nonzero(solid))
-            if ref_area is not None and ref_area > 0 and (sa < ref_area * 0.2 or sa > ref_area * 2.5):
+    if not competitive_used:
+        # Primary (legacy default): adaptive threshold inside hard disk.
+        disk_vals = crop[disk]
+        if _instr:
+            _t0 = time.perf_counter()
+        thr = _adaptive_threshold_sparse(disk_vals)
+        if _instr:
+            _instr_record_stage("adaptive_threshold", (time.perf_counter() - _t0) * 1000.0)
+
+        if thr is not None:
+            used_thr = float(thr)
+            fg = (crop >= used_thr) & disk
+            disk_area = float(np.count_nonzero(disk))
+            fg_area = float(np.count_nonzero(fg))
+            if fg_area > 0.92 * disk_area and disk_area > 0:
+                p_hi = float(np.percentile(disk_vals, 92))
+                if p_hi > float(np.min(disk_vals)) + 1e-12:
+                    used_thr = p_hi
+                    fg = (crop >= used_thr) & disk
+                    fg_area = float(np.count_nonzero(fg))
+            if fg_area > 0:
+                if _instr:
+                    _t0 = time.perf_counter()
+                solid = _pick_component_in_disk(
+                    fg, disk, local_cx, local_cy, R, ref_area=ref_area, cheap=fast_preview
+                )
+                if _instr:
+                    _instr_record_stage("pick_component", (time.perf_counter() - _t0) * 1000.0)
+                if solid is not None:
+                    method = "circle_seed"
+                    effective_threshold = used_thr
+
+        # Polar-DP fallback only when threshold/CC path produced nothing.
+        if solid is None:
+            try:
+                from morphostack.core.polar_dp import segment_slice_polar_dp
+
+                # n_angles: at least 1 px arc spacing to avoid jagged Viterbi paths.
+                _n_angles = max(360, int(2.0 * np.pi * R))
+                # Clamp search band to disk boundary so Viterbi cannot reach neighbor membranes.
+                _safe_band = max(0.10, min(0.20, (disk_r - R) / max(R, 1.0)))
+                if _instr:
+                    _t0 = time.perf_counter()
+                polar = segment_slice_polar_dp(
+                    crop_raw,
+                    local_cx,
+                    local_cy,
+                    R,
+                    search_band=_safe_band,
+                    n_angles=_n_angles,
+                    smoothness_penalty=3.0,
+                    max_jump=2,
+                )
+                if _instr:
+                    _instr_record_stage("polar_dp", (time.perf_counter() - _t0) * 1000.0)
+                if polar.ok and polar.solid_mask is not None:
+                    solid = np.asarray(polar.solid_mask, dtype=bool) & disk
+                    if np.count_nonzero(solid) >= 16:
+                        method = "polar_dp"
+                        effective_threshold = None  # ridge path; no intensity gate
+                    else:
+                        solid = None
+            except Exception:
                 solid = None
-            else:
-                method = "circle_seed_rw"
-                effective_threshold = float(thr)
+
+        if solid is None and thr is not None:
+            if _instr:
+                _t0 = time.perf_counter()
+            solid = _try_rw_ws_in_disk(crop, disk, local_cx, local_cy, R)
+            if _instr:
+                _instr_record_stage("rw_ws", (time.perf_counter() - _t0) * 1000.0)
+            if solid is not None:
+                sa = float(np.count_nonzero(solid))
+                if ref_area is not None and ref_area > 0 and (sa < ref_area * 0.2 or sa > ref_area * 2.5):
+                    solid = None
+                else:
+                    method = "circle_seed_rw"
+                    effective_threshold = float(thr)
 
     if solid is None:
+        if _instr:
+            _instr_record_stage("segment_total", (time.perf_counter() - _t_seg0) * 1000.0, method="circle_seed_fail", ok=False)
         return SeededSliceResult(None, None, (sx, sy), 0.0, 0.0, "circle_seed_fail", False)
 
     solid = _fill_holes(solid) & disk
     if not np.any(solid):
+        if _instr:
+            _instr_record_stage("segment_total", (time.perf_counter() - _t_seg0) * 1000.0, method="circle_seed_fail", ok=False)
         return SeededSliceResult(None, None, (sx, sy), 0.0, 0.0, "circle_seed_fail", False)
 
     # --- Post-segmentation QC + fail-closed contact handling (exact path) ---
-    # Packet 06 ladder:
-    #   1) always cheap circularity/edge (+ far-mass flags)
-    #   2) named suspicion flags
-    #   3) full RANSAC/two-circle/DT only when suspicion or staged gate off
-    #   4) MorphGAC only when not clean (if skip-clean gate on) or always if gate off
-    #   5) full post-refine QC whenever MorphGAC runs
-    #   6) fail-closed multi-body/contact rejection retained
+    # Production path (Packet 06 REJECT / Packet 10 deleted opt-in gates):
+    #   full RANSAC/two-circle/DT QC; MorphGAC when refine=True (except competitive
+    #   isolation, which already hard-gated multi-body); fail-closed retained.
     # fast_preview: cheap diagnostics only; never run full RANSAC/two-circle/repair.
     from morphostack.core.slice_qc import (
         accept_as_is,
         cheap_suspicion_flags,
         compute_slice_qc,
         fail_closed,
-        get_qc_gating_policy,
         is_clean_frame_pre_refine,
-        note_full_qc_skipped_clean,
         repair_improves,
         should_attempt_polar_repair,
         should_attempt_split,
@@ -1083,73 +1300,71 @@ def segment_slice_seeded(
     clean_pre_refine = False
     suspicion: tuple[str, ...] = ()
 
-    if fast_preview:
-        qc = compute_slice_qc(
-            solid,
-            qc_img,
+    def _run_qc(mask_in: np.ndarray, image_in: np.ndarray, *, cheap: bool) -> SliceQC:
+        if _instr:
+            _t0 = time.perf_counter()
+        out_qc = compute_slice_qc(
+            mask_in,
+            image_in,
             seed_x=local_cx,
             seed_y=local_cy,
             seed_radius=R,
-            cheap=True,
+            cheap=cheap,
         )
-    else:
-        staged = bool(get_qc_gating_policy().get("staged_full_qc", False))
-        if staged:
-            # Stage 1: cheap circularity/edge first, then named suspicion flags.
-            qc = compute_slice_qc(
-                solid,
-                qc_img,
-                seed_x=local_cx,
-                seed_y=local_cy,
-                seed_radius=R,
-                cheap=True,
+        if _instr:
+            _instr_record_stage(
+                "qc_cheap" if cheap else "qc_full",
+                (time.perf_counter() - _t0) * 1000.0,
             )
-            suspicion = cheap_suspicion_flags(
-                qc,
-                solid,
-                seed_x=local_cx,
-                seed_y=local_cy,
-                seed_radius=R,
-                ref_area=ref_area,
-            )
-            clean_pre_refine = is_clean_frame_pre_refine(suspicion)
-            # Stage 2–3: full RANSAC/two-circle/DT only when not clean.
-            if clean_pre_refine:
-                _EXACT_PATH_COUNTERS.full_qc_skipped_clean += 1
-                _EXACT_PATH_COUNTERS.clean_frame_hits += 1
-                note_full_qc_skipped_clean()
-            else:
-                _EXACT_PATH_COUNTERS.suspicion_escalations += 1
-                qc = compute_slice_qc(
-                    solid,
-                    crop,
-                    seed_x=local_cx,
-                    seed_y=local_cy,
-                    seed_radius=R,
-                    cheap=False,
-                )
-        else:
-            # Reference/rollback path: full QC only (no cheap preamble).
-            qc = compute_slice_qc(
-                solid,
-                crop,
-                seed_x=local_cx,
-                seed_y=local_cy,
-                seed_radius=R,
-                cheap=False,
-            )
-            suspicion = cheap_suspicion_flags(
-                qc,
-                solid,
-                seed_x=local_cx,
-                seed_y=local_cy,
-                seed_radius=R,
-                ref_area=ref_area,
-            )
-            # MorphGAC skip (if enabled) still uses the same clean-frame rule.
-            clean_pre_refine = is_clean_frame_pre_refine(suspicion)
+        return out_qc
 
-        if not clean_pre_refine and not accept_as_is(qc):
+    def _reject_merge(qc_obj: SliceQC) -> SeededSliceResult:
+        if _instr:
+            _instr_record_stage(
+                "segment_total",
+                (time.perf_counter() - _t_seg0) * 1000.0,
+                method="circle_seed_merge_reject",
+                ok=False,
+            )
+            _instr_record_event(
+                "qc_decision",
+                decision="merge_reject",
+                method="circle_seed_merge_reject",
+                qc=_instr_qc_snapshot(qc_obj),
+            )
+        return SeededSliceResult(
+            None,
+            None,
+            (sx, sy),
+            0.0,
+            0.0,
+            "circle_seed_merge_reject",
+            False,
+            merge_suspect=True,
+            qc=qc_obj,
+        )
+
+    if fast_preview:
+        qc = _run_qc(solid, qc_img, cheap=True)
+    else:
+        # Full QC only (no staged cheap-first gate — experiment deleted).
+        qc = _run_qc(solid, crop, cheap=False)
+        suspicion = cheap_suspicion_flags(
+            qc,
+            solid,
+            seed_x=local_cx,
+            seed_y=local_cy,
+            seed_radius=R,
+            ref_area=ref_area,
+        )
+        clean_pre_refine = is_clean_frame_pre_refine(suspicion)
+
+        # Competitive isolation already applied hard multi-body / star-convex gates.
+        # Do not re-run legacy split/polar repair or discard the solid on soft QC —
+        # that destroyed continuity (Packet 02 R20 flip-flop / false reject).
+        if competitive_used:
+            pass
+        elif not clean_pre_refine and not accept_as_is(qc):
 
             # 1) Thin-neck / multi-marker: marker-controlled watershed child only.
             if should_attempt_split(qc):
@@ -1157,25 +1372,25 @@ def segment_slice_seeded(
                     from morphostack.core.object_select import attempt_seeded_split
 
                     _EXACT_PATH_COUNTERS.split_attempts += 1
+                    if _instr:
+                        _t0 = time.perf_counter()
                     split = attempt_seeded_split(
                         solid,
                         seed_x=local_cx,
                         seed_y=local_cy,
                         seed_radius=R,
                     )
+                    if _instr:
+                        _instr_record_stage(
+                            "attempt_seeded_split",
+                            (time.perf_counter() - _t0) * 1000.0,
+                        )
                 except Exception:
                     split = None
                 if split is not None:
                     split = _fill_holes(np.asarray(split, dtype=bool)) & disk
                     if np.count_nonzero(split) >= 16:
-                        qc_split = compute_slice_qc(
-                            split,
-                            crop,
-                            seed_x=local_cx,
-                            seed_y=local_cy,
-                            seed_radius=R,
-                            cheap=False,
-                        )
+                        qc_split = _run_qc(split, crop, cheap=False)
                         if repair_improves(qc, qc_split) or not qc_split.merge_suspect:
                             solid = split
                             qc = qc_split
@@ -1190,6 +1405,8 @@ def segment_slice_seeded(
                     _EXACT_PATH_COUNTERS.polar_repair_attempts += 1
                     _n_angles = max(360, int(2.0 * np.pi * R))
                     _safe_band = max(0.10, min(0.20, (disk_r - R) / max(R, 1.0)))
+                    if _instr:
+                        _t0 = time.perf_counter()
                     polar = segment_slice_polar_dp(
                         crop_raw,
                         local_cx,
@@ -1200,18 +1417,16 @@ def segment_slice_seeded(
                         smoothness_penalty=3.0,
                         max_jump=2,
                     )
+                    if _instr:
+                        _instr_record_stage(
+                            "polar_repair",
+                            (time.perf_counter() - _t0) * 1000.0,
+                        )
                     if polar.ok and polar.solid_mask is not None:
                         repaired = np.asarray(polar.solid_mask, dtype=bool) & disk
                         repaired = _fill_holes(repaired) & disk
                         if np.count_nonzero(repaired) >= 16:
-                            qc_rep = compute_slice_qc(
-                                repaired,
-                                crop,
-                                seed_x=local_cx,
-                                seed_y=local_cy,
-                                seed_radius=R,
-                                cheap=False,
-                            )
+                            qc_rep = _run_qc(repaired, crop, cheap=False)
                             # Centroid drift guard relative to current proposal.
                             ys, xs = np.where(repaired)
                             rcx, rcy = float(xs.mean()), float(ys.mean())
@@ -1228,85 +1443,52 @@ def segment_slice_seeded(
             # 3) Fail closed: unresolved strong merge → no contour (track gap).
             if fail_closed(qc):
                 _EXACT_PATH_COUNTERS.merge_rejects += 1
-                return SeededSliceResult(
-                    None,
-                    None,
-                    (sx, sy),
-                    0.0,
-                    0.0,
-                    "circle_seed_merge_reject",
-                    False,
-                    merge_suspect=True,
-                    qc=qc,
-                )
+                return _reject_merge(qc)
         elif clean_pre_refine and float(qc.edge_support) < 0.25:
             # Cheap-path collapsed membrane (fail_closed ignores cheap bundles).
             _EXACT_PATH_COUNTERS.merge_rejects += 1
-            return SeededSliceResult(
-                None,
-                None,
-                (sx, sy),
-                0.0,
-                0.0,
-                "circle_seed_merge_reject",
-                False,
-                merge_suspect=True,
-                qc=qc,
-            )
+            return _reject_merge(qc)
 
-    # Stage 4: MorphGAC — skip only under pre-registered clean-frame rule.
+    # MorphGAC when refine=True. Competitive isolation already hard-gated
+    # multi-body/star-convex; skip MorphGAC there (Packet 02 continuity).
+    # Packet 06 MorphGAC-skip-when-clean switch deleted (science REJECT).
     run_morphgac = bool(refine and not fast_preview)
-    if run_morphgac and _GATE_SKIP_MORPHGAC_CLEAN and clean_pre_refine:
-        _EXACT_PATH_COUNTERS.morphgac_skipped_clean += 1
+    if run_morphgac and competitive_used:
         run_morphgac = False
+        _EXACT_PATH_COUNTERS.morphgac_skipped_clean += 1
 
     if run_morphgac:
         _EXACT_PATH_COUNTERS.morphgac_calls += 1
+        if _instr:
+            _t0 = time.perf_counter()
         solid = _refine_contour_morphgac(crop, solid, disk_mask=disk) & disk
+        if _instr:
+            _instr_record_stage("morphgac", (time.perf_counter() - _t0) * 1000.0)
         if not np.any(solid):
+            if _instr:
+                _instr_record_stage(
+                    "segment_total",
+                    (time.perf_counter() - _t_seg0) * 1000.0,
+                    method="circle_seed_fail",
+                    ok=False,
+                )
             return SeededSliceResult(None, None, (sx, sy), 0.0, 0.0, "circle_seed_fail", False)
         # Stage 5: full post-refine QC whenever MorphGAC runs.
-        qc = compute_slice_qc(
-            solid,
-            crop,
-            seed_x=local_cx,
-            seed_y=local_cy,
-            seed_radius=R,
-            cheap=False,
-        )
+        qc = _run_qc(solid, crop, cheap=False)
         if fail_closed(qc):
             _EXACT_PATH_COUNTERS.merge_rejects += 1
-            return SeededSliceResult(
-                None,
-                None,
-                (sx, sy),
-                0.0,
-                0.0,
-                "circle_seed_merge_reject",
-                False,
-                merge_suspect=True,
-                qc=qc,
-            )
+            return _reject_merge(qc)
 
     # Final identity guard: composite multi-body evidence only.
     # Seed radius is not biological ground truth — scale far-mass against
     # max(user R, area-derived radius from ref_area when available).
-    if solid is not None and not fast_preview and qc is not None:
+    # Competitive path already applied star-convex / multi-body hard gates.
+    if solid is not None and not fast_preview and qc is not None and not competitive_used:
         from morphostack.core.slice_qc import fail_closed as _fail_closed
 
         if _fail_closed(qc):
             _EXACT_PATH_COUNTERS.merge_rejects += 1
-            return SeededSliceResult(
-                None,
-                None,
-                (sx, sy),
-                0.0,
-                0.0,
-                "circle_seed_merge_reject",
-                False,
-                merge_suspect=True,
-                qc=qc,
-            )
+            return _reject_merge(qc)
         solid_area = float(np.count_nonzero(solid))
         r_area = math.sqrt(max(solid_area, 1.0) / math.pi)
         r_ref = (
@@ -1354,17 +1536,7 @@ def segment_slice_seeded(
             )
         if peaks_plus or far_plus:
             _EXACT_PATH_COUNTERS.merge_rejects += 1
-            return SeededSliceResult(
-                None,
-                None,
-                (sx, sy),
-                0.0,
-                0.0,
-                "circle_seed_merge_reject",
-                False,
-                merge_suspect=True,
-                qc=qc,
-            )
+            return _reject_merge(qc)
 
     # Polar repair overwrites method; clear intensity gate if repair was polar.
     if method == "polar_dp_repair":
@@ -1372,6 +1544,14 @@ def segment_slice_seeded(
 
     if not fast_preview:
         _EXACT_PATH_COUNTERS.accepted += 1
+
+    if _instr:
+        _instr_record_stage(
+            "segment_total",
+            (time.perf_counter() - _t_seg0) * 1000.0,
+            method=method,
+            ok=True,
+        )
 
     return _result_from_solid(
         solid,
@@ -1391,8 +1571,10 @@ def segment_slice_seeded(
 # Packet 06 keeps production gates off (reference full QC + MorphGAC); no v2 bump.
 EXACT_TRACKING_ALGORITHM_VERSION: str = "1"
 
-# Canonical mode token for authoritative seeded Z tracking (not provisional).
-EXACT_TRACKING_MODE: str = "seeded_exact"
+# Canonical *default* mode token (legacy / non-competitive). Competitive uses
+# :data:`SEEDED_EXACT_MODE_COMPETITIVE` via request/job-scoped opt-in (Packet 11).
+# Renamed from historical ``seeded_exact`` so variant keys never collide.
+EXACT_TRACKING_MODE: str = SEEDED_EXACT_MODE_LEGACY
 
 # Progress marker on :class:`TrackProgressEvent` after a frame is committed.
 TrackProgressMarker = Literal["partial", "complete", "cancelled"]
@@ -1406,6 +1588,126 @@ ProgressCallback = Callable[["TrackProgressEvent"], None]
 # Live scheduling hints: constants or callables re-read at safe Z boundaries.
 DirectionPriorityHint = int | Callable[[], int | None] | None
 TargetFrameHint = int | Callable[[], int | None] | None
+
+
+@dataclass(frozen=True)
+class TrackProposalState:
+    """Small deterministic per-frontier state for rigid-translation proposals.
+
+    Prediction only proposes seed centres and gates association — it never
+    creates an accepted mask without a real segmentation pass.
+    """
+
+    cx: float
+    cy: float
+    radius: float
+    area_px: float
+    vx: float = 0.0
+    vy: float = 0.0
+    frame_index: int = 0
+
+    def predict_center(self, *, steps: int = 1) -> tuple[float, float]:
+        s = max(1, int(steps))
+        return (float(self.cx) + float(self.vx) * s, float(self.cy) + float(self.vy) * s)
+
+    def with_accepted(
+        self,
+        *,
+        center_xy: tuple[float, float],
+        area_px: float,
+        frame_index: int,
+        seed_radius: float,
+    ) -> TrackProposalState:
+        """Update state after an accepted frame (EMA area, finite-diff velocity)."""
+        cx, cy = float(center_xy[0]), float(center_xy[1])
+        area = max(float(area_px), 1.0)
+        r_obs = float(np.sqrt(area / np.pi)) if area > 1.0 else float(seed_radius)
+        # Keep radius near user R while tracking observed scale for proposals.
+        r_seed = max(float(seed_radius), 1.0)
+        radius = float(max(0.5 * r_seed, min(1.6 * r_seed, r_obs)))
+        df = int(frame_index) - int(self.frame_index)
+        if df != 0:
+            vx = (cx - float(self.cx)) / float(df)
+            vy = (cy - float(self.cy)) / float(df)
+        else:
+            vx, vy = float(self.vx), float(self.vy)
+        area_ema = 0.7 * float(self.area_px) + 0.3 * area
+        return TrackProposalState(
+            cx=cx,
+            cy=cy,
+            radius=radius,
+            area_px=max(area_ema, 1.0),
+            vx=float(vx),
+            vy=float(vy),
+            frame_index=int(frame_index),
+        )
+
+
+def proposal_state_from_result(
+    result: SeededSliceResult,
+    *,
+    frame_index: int,
+    seed_radius: float,
+    prior: TrackProposalState | None = None,
+) -> TrackProposalState:
+    """Build or update proposal state from an accepted (or seed) result."""
+    r0 = max(float(seed_radius), 1.0)
+    area = max(float(result.area_px), 1.0)
+    r_obs = float(np.sqrt(area / np.pi)) if area > 1.0 else r0
+    radius = float(max(0.5 * r0, min(1.6 * r0, r_obs)))
+    base = TrackProposalState(
+        cx=float(result.center_xy[0]),
+        cy=float(result.center_xy[1]),
+        radius=radius,
+        area_px=area,
+        vx=0.0,
+        vy=0.0,
+        frame_index=int(frame_index),
+    )
+    if prior is None:
+        return base
+    return prior.with_accepted(
+        center_xy=result.center_xy,
+        area_px=result.area_px,
+        frame_index=frame_index,
+        seed_radius=seed_radius,
+    )
+
+
+def proposal_attempt_centers(
+    state: TrackProposalState,
+    *,
+    gap_count: int,
+    seed_xy: tuple[float, float],
+    seed_result_center: tuple[float, float] | None,
+    include_seed_fallback: bool,
+) -> list[tuple[float, float]]:
+    """Ordered proposal centres: rigid prediction first; seed only as fallback.
+
+    Identity is never accepted from prediction alone — callers still segment and
+    run association gates on each proposal.
+    """
+    steps = max(1, int(gap_count) + 1)
+    predicted = state.predict_center(steps=steps)
+    last = (float(state.cx), float(state.cy))
+    ordered: list[tuple[float, float]] = [predicted, last]
+    if gap_count > 0:
+        # After a loss, do not offer the original seed (neighbour steal risk).
+        return _dedupe_centers(ordered)
+    if include_seed_fallback:
+        ordered.append((float(seed_xy[0]), float(seed_xy[1])))
+        if seed_result_center is not None:
+            ordered.append((float(seed_result_center[0]), float(seed_result_center[1])))
+    return _dedupe_centers(ordered)
+
+
+def _dedupe_centers(centers: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    out: list[tuple[float, float]] = []
+    for cx, cy in centers:
+        if any(abs(cx - ox) < 1e-6 and abs(cy - oy) < 1e-6 for ox, oy in out):
+            continue
+        out.append((float(cx), float(cy)))
+    return out
 
 
 def _resolve_direction_priority(hint: DirectionPriorityHint) -> int | None:
@@ -1557,9 +1859,28 @@ def _emit_track_progress(
     marker: TrackProgressMarker,
 ) -> None:
     """Invoke progress callback after commit. Exceptions propagate; state stays consistent."""
-    if on_progress is None:
+    if on_progress is None and not _INSTR_ENABLED:
         return
     low, high = _frontiers_from_results(results, seed_frame=seed_frame)
+    if _INSTR_ENABLED:
+        # Lightweight frame row (no full QC blob — QC is available on SeededSliceResult).
+        _INSTR.frames.append(
+            {
+                "frame_index": int(frame_index),
+                "marker": str(marker),
+                "reached_low_z": int(low),
+                "reached_high_z": int(high),
+                "ok": bool(result.ok),
+                "method": str(result.method),
+                "area_px": float(result.area_px),
+                "center": [float(result.center_xy[0]), float(result.center_xy[1])],
+                "merge_suspect": bool(result.merge_suspect),
+                "n_dt_markers": int(result.qc.n_dt_markers) if result.qc is not None else None,
+                "eta": float(result.qc.eta) if result.qc is not None else None,
+            }
+        )
+    if on_progress is None:
+        return
     event = TrackProgressEvent(
         frame_index=int(frame_index),
         result=_result_for_progress(result),
@@ -1571,6 +1892,35 @@ def _emit_track_progress(
     # re-raising cannot corrupt track state; callers see a consistent partial list
     # if they catch and materialize, or the exception stops the walk.
     on_progress(event)
+
+
+def _instr_record_association(
+    *,
+    z: int,
+    accepted: bool,
+    cand: SeededSliceResult,
+    search_radius: float | None,
+    seed_x: float,
+    seed_y: float,
+    gap_count: int,
+) -> None:
+    if not _INSTR_ENABLED:
+        return
+    # Lightweight decision row (no full QC blob) — QC lives on accepted frames.
+    _INSTR.decisions.append(
+        {
+            "z": int(z),
+            "accepted": bool(accepted),
+            "search_radius": float(search_radius) if search_radius is not None else None,
+            "attempt_center": [float(seed_x), float(seed_y)],
+            "gap_count": int(gap_count),
+            "ok": bool(cand.ok),
+            "method": str(cand.method),
+            "area_px": float(cand.area_px),
+            "center": [float(cand.center_xy[0]), float(cand.center_xy[1])],
+            "merge_suspect": bool(cand.merge_suspect),
+        }
+    )
 
 
 def track_seeded_vesicle_stack(
@@ -1587,6 +1937,7 @@ def track_seeded_vesicle_stack(
     on_progress: ProgressCallback | None = None,
     cancel_check: CancelCheck | None = None,
     direction_priority: DirectionPriorityHint = None,
+    competitive_isolation: bool | None = None,
 ) -> list[SeededSliceResult]:
     """Z tracking with user circle radius R.
 
@@ -1606,14 +1957,18 @@ def track_seeded_vesicle_stack(
       Constant ``None`` keeps legacy order (``+1`` then ``-1``).
     - ``target_frame``: may also be a callable re-read at safe Z boundaries so a
       unidirectional stop can extend toward a farther target without a new walk.
+    - ``competitive_isolation``: request-scoped Packet 02/11 experimental path.
+      Default None uses process-global test flag (off). Jobs pass an explicit bool.
 
     Uninterruptible stage: once ``segment_slice_seeded`` begins for a candidate it
     runs to completion; cancel is acknowledged before the next candidate/Z.
 
     Cache/job identity for this path uses
-    :data:`EXACT_TRACKING_ALGORITHM_VERSION` and :data:`EXACT_TRACKING_MODE`.
+    :data:`EXACT_TRACKING_ALGORITHM_VERSION` and
+    :func:`exact_tracking_mode_token`.
     """
     del min_area_ratio  # replaced by IoU + multi-feature score; keep param for API compat
+    use_competitive = resolve_competitive_isolation(competitive_isolation)
     arr = np.asarray(stack)
     if arr.ndim != 3:
         raise ValueError("track_seeded_vesicle_stack expects (z, y, x)")
@@ -1644,6 +1999,7 @@ def track_seeded_vesicle_stack(
         seed_x=seed_x,
         seed_y=seed_y,
         seed_radius=R,
+        competitive_isolation=use_competitive,
     )
     results[seed_frame] = first
     if not first.ok:
@@ -1694,15 +2050,14 @@ def track_seeded_vesicle_stack(
         )
 
     def _new_walk_state(direction: int) -> dict[str, Any]:
-        cx0, cy0 = first.center_xy
+        prop0 = proposal_state_from_result(first, frame_index=seed_frame, seed_radius=R)
         return {
             "direction": int(direction),
+            "proposal": prop0,
             "ref_area": float(seed_ref_area),
-            "cx": float(cx0),
-            "cy": float(cy0),
             "anchor_x": float(seed_x),
             "anchor_y": float(seed_y),
-            "recent_centers": [(cx0, cy0, seed_frame)],
+            "recent_centers": [(prop0.cx, prop0.cy, seed_frame)],
             "last_valid": first,
             "gap_count": 0,
             "z": seed_frame + int(direction),
@@ -1735,38 +2090,41 @@ def track_seeded_vesicle_stack(
         )
 
         ref_area = float(state["ref_area"])
-        cx = float(state["cx"])
-        cy = float(state["cy"])
-        anchor_x = float(state["anchor_x"])
-        anchor_y = float(state["anchor_y"])
+        prop: TrackProposalState = state["proposal"]
+        cx, cy = float(prop.cx), float(prop.cy)
         recent_centers: list[tuple[float, float, int]] = state["recent_centers"]
         last_valid = state["last_valid"]
         gap_count = int(state["gap_count"])
 
+        # Rigid translation proposal from deterministic center/radius/area state.
+        # Sync velocity from recent_centers when available (same as prior path).
         vel = _per_frame_velocity(recent_centers)
-        extrapolated: tuple[float, float] | None = None
         if vel is not None:
-            dx, dy = vel
-            steps = gap_count + 1
-            extrapolated = (cx + dx * steps, cy + dy * steps)
+            prop = TrackProposalState(
+                cx=prop.cx,
+                cy=prop.cy,
+                radius=prop.radius,
+                area_px=prop.area_px,
+                vx=float(vel[0]),
+                vy=float(vel[1]),
+                frame_index=prop.frame_index,
+            )
+            state["proposal"] = prop
 
-        if gap_count > 0:
-            # Do not fall back to the original seed after a loss: a nearby
-            # vesicle there can otherwise steal the tracked identity.
-            attempts = [extrapolated] if extrapolated is not None else [(cx, cy)]
-        else:
-            attempts = [
-                (cx, cy),
-                (anchor_x, anchor_y),
-                (first.center_xy[0], first.center_xy[1]),
-            ]
-            if extrapolated is not None:
-                attempts = [extrapolated] + attempts
+        attempts = proposal_attempt_centers(
+            prop,
+            gap_count=gap_count,
+            seed_xy=(float(seed_x), float(seed_y)),
+            seed_result_center=(float(first.center_xy[0]), float(first.center_xy[1])),
+            include_seed_fallback=True,
+        )
+        predicted = prop.predict_center(steps=max(1, gap_count + 1))
 
         prev_z = z - direction
         prev = results[prev_z] if 0 <= prev_z < n else None
         association_prev = prev if (prev is not None and prev.ok) else last_valid
-        expected_center = extrapolated if gap_count > 0 else None
+        # Prediction gates association after gaps only — never auto-accepts.
+        expected_center = predicted if gap_count > 0 else None
         expected_tolerance = (
             _gap_reacquisition_tolerance(vel, gap_count=gap_count, radius=R)
             if gap_count > 0
@@ -1791,8 +2149,9 @@ def track_seeded_vesicle_stack(
                     seed_y=ty,
                     seed_radius=use_r,
                     ref_area=ref_area,
+                    competitive_isolation=use_competitive,
                 )
-                if not _candidate_accepted(
+                accepted = _candidate_accepted(
                     cand,
                     prev=association_prev,
                     ref_area=ref_area,
@@ -1802,7 +2161,17 @@ def track_seeded_vesicle_stack(
                     expected_center_tolerance=expected_tolerance,
                     search_radius=use_r,
                     nominal_radius=R,
-                ):
+                )
+                _instr_record_association(
+                    z=z,
+                    accepted=accepted,
+                    cand=cand,
+                    search_radius=use_r,
+                    seed_x=tx,
+                    seed_y=ty,
+                    gap_count=gap_count,
+                )
+                if not accepted:
                     continue
                 res = cand
                 break
@@ -1814,6 +2183,8 @@ def track_seeded_vesicle_stack(
                 None, None, (cx, cy), 0.0, 0.0, "circle_seed_gap", False
             )
             _commit_frame(z, gap_res)
+            if _instr_on():
+                _instr_record_event("gap", z=int(z), gap_count=int(gap_count) + 1)
             gap_count += 1
             if gap_count > MAX_CONSECUTIVE_TRACK_GAPS:
                 state["active"] = False
@@ -1822,11 +2193,19 @@ def track_seeded_vesicle_stack(
             state["z"] = z + direction
             return
 
-        # Cap stop: membrane signal collapsed vs local background
+        # Cap stop: membrane signal collapsed vs local background.
+        # Competitive fills can look "dim vs crowded exterior" while area stays
+        # stable mid-band — require intensity collapse *and* area collapse so we
+        # do not abort a healthy track (Packet 02 false-cap at Z57/Z58).
         curr_r = np.sqrt(res.area_px / np.pi) if res.area_px > 10.0 else R
         disk_r = max(curr_r * 1.35, curr_r + 15.0)
         full_disk = _disk_mask(arr[z].shape, res.center_xy[0], res.center_xy[1], disk_r)
-        if _is_vesicle_cap(arr[z], res.solid_mask, full_disk):
+        intensity_cap = _is_vesicle_cap(arr[z], res.solid_mask, full_disk)
+        area_stable = float(res.area_px) >= 0.55 * float(ref_area) if ref_area > 0 else False
+        is_cap = bool(intensity_cap) and not (
+            str(res.method).startswith("competitive") and area_stable
+        )
+        if is_cap:
             cap_res = SeededSliceResult(
                 res.contour_xy,
                 res.solid_mask,
@@ -1840,19 +2219,25 @@ def track_seeded_vesicle_stack(
                 effective_threshold=res.effective_threshold,
             )
             _commit_frame(z, cap_res)
+            if _instr_on():
+                _instr_record_event("cap", z=int(z), method="cap_detected")
             state["active"] = False
             return
 
         _commit_frame(z, res)
-        cx, cy = res.center_xy
-        recent_centers.append((cx, cy, z))
+        prop = prop.with_accepted(
+            center_xy=res.center_xy,
+            area_px=res.area_px,
+            frame_index=z,
+            seed_radius=R,
+        )
+        recent_centers.append((prop.cx, prop.cy, z))
         if len(recent_centers) > 3:
             recent_centers = recent_centers[-3:]
-        state["cx"] = float(cx)
-        state["cy"] = float(cy)
+        state["proposal"] = prop
         state["last_valid"] = res
         state["recent_centers"] = recent_centers
-        state["ref_area"] = 0.7 * ref_area + 0.3 * res.area_px
+        state["ref_area"] = float(prop.area_px)
         state["gap_count"] = 0
         state["z"] = z + direction
 
@@ -1911,6 +2296,41 @@ def track_seeded_vesicle_stack(
     return out
 
 
+def furthest_accepted_frontier(
+    results: list[SeededSliceResult],
+    *,
+    seed_frame: int,
+    direction: int,
+) -> int | None:
+    """Inclusive furthest accepted (ok) Z from the seed along ``direction`` (±1)."""
+    n = len(results)
+    if seed_frame < 0 or seed_frame >= n:
+        return None
+    furthest: int | None = seed_frame if results[seed_frame].ok else None
+    if direction > 0:
+        for z in range(seed_frame, n):
+            if results[z].ok:
+                furthest = z
+            elif z > seed_frame and results[z].method == "circle_seed_unreached":
+                break
+    else:
+        for z in range(seed_frame, -1, -1):
+            if results[z].ok:
+                furthest = z
+            elif z < seed_frame and results[z].method == "circle_seed_unreached":
+                break
+    return furthest
+
+
+def frame_is_terminal_exact(result: SeededSliceResult | None) -> bool:
+    """True when a cache slot is already an exact commit (not an unreached placeholder)."""
+    if result is None:
+        return False
+    if result.ok:
+        return True
+    return str(result.method) != "circle_seed_unreached"
+
+
 def extend_track(
     stack: np.ndarray,
     *,
@@ -1918,31 +2338,36 @@ def extend_track(
     seed_y: float,
     seed_frame: int,
     seed_radius: float | None = None,
-    target_frame: int,
+    target_frame: TargetFrameHint,
     cached_results: list[SeededSliceResult],
     max_centroid_jump_px: float | None = None,
     max_area_ratio: float = 2.2,
     min_area_ratio: float = 0.25,
     on_progress: ProgressCallback | None = None,
     cancel_check: CancelCheck | None = None,
-    direction_priority: int | None = None,
+    direction_priority: DirectionPriorityHint = None,
+    competitive_isolation: bool | None = None,
 ) -> list[SeededSliceResult]:
-    """Extend a previously cached tracking result to reach ``target_frame``.
+    """Extend a previously cached tracking result toward ``target_frame``.
 
-    Progressive controls match :func:`track_seeded_vesicle_stack`. Direction is
-    fixed by ``target_frame`` relative to the seed; ``direction_priority`` is
-    accepted for API symmetry and ignored for single-direction extension.
+    Progressive controls match :func:`track_seeded_vesicle_stack`. Extends from
+    the closest accepted frontier in the target direction; does not resegment
+    already accepted frames. ``target_frame`` may be a live callable re-read at
+    each safe Z boundary. ``direction_priority`` is accepted for API symmetry
+    and ignored for single-direction extension. ``competitive_isolation`` must
+    match the variant that produced ``cached_results``.
     """
     del min_area_ratio  # API compat; gating uses IoU + score
     del direction_priority  # single-direction extension; scheduling fixed by target
+    use_competitive = resolve_competitive_isolation(competitive_isolation)
     arr = np.asarray(stack)
     if arr.ndim != 3:
         raise ValueError("extend_track expects (z, y, x)")
     n = arr.shape[0]
     if seed_frame < 0 or seed_frame >= n:
         raise ValueError("seed_frame out of range")
-    if target_frame < 0 or target_frame >= n:
-        raise ValueError("target_frame out of range")
+    if not callable(target_frame):
+        _resolve_target_frame(target_frame, n=n)
 
     results: list[SeededSliceResult] = list(cached_results)
     while len(results) < n:
@@ -1957,28 +2382,19 @@ def extend_track(
     # Work on a nullable-compatible view for cancel materialization helpers.
     results_opt: list[SeededSliceResult | None] = list(results)
 
-    existing = results[target_frame]
-    if existing.ok or existing.method != "circle_seed_unreached":
+    tf0 = _resolve_target_frame(target_frame, n=n)
+    if tf0 is None or tf0 == seed_frame:
         return results
 
-    if target_frame == seed_frame:
+    existing = results[tf0]
+    if frame_is_terminal_exact(existing):
         return results
 
-    direction = 1 if target_frame > seed_frame else -1
+    direction = 1 if tf0 > seed_frame else -1
 
-    furthest_ok = seed_frame if results[seed_frame].ok else None
-    if direction > 0:
-        for z in range(seed_frame, n):
-            if results[z].ok:
-                furthest_ok = z
-            elif z > seed_frame and results[z].method == "circle_seed_unreached":
-                break
-    else:
-        for z in range(seed_frame, -1, -1):
-            if results[z].ok:
-                furthest_ok = z
-            elif z < seed_frame and results[z].method == "circle_seed_unreached":
-                break
+    furthest_ok = furthest_accepted_frontier(
+        results, seed_frame=seed_frame, direction=direction
+    )
 
     if furthest_ok is None:
         return track_seeded_vesicle_stack(
@@ -1992,10 +2408,11 @@ def extend_track(
             target_frame=target_frame,
             on_progress=on_progress,
             cancel_check=cancel_check,
+            competitive_isolation=use_competitive,
         )
 
-    if (direction > 0 and furthest_ok >= target_frame) or (
-        direction < 0 and furthest_ok <= target_frame
+    if (direction > 0 and furthest_ok >= tf0) or (
+        direction < 0 and furthest_ok <= tf0
     ):
         return results
 
@@ -2014,9 +2431,8 @@ def extend_track(
         jump = max(1.25 * R, 60.0)
 
     start = results[furthest_ok]
-    cx, cy = start.center_xy
-    anchor_x, anchor_y = float(seed_x), float(seed_y)
-    ref_area = max(start.area_px, 1.0)
+    prop = proposal_state_from_result(start, frame_index=furthest_ok, seed_radius=R)
+    ref_area = max(float(prop.area_px), 1.0)
     recent_centers: list[tuple[float, float, int]] = []
     last_valid = start
     if direction > 0:
@@ -2028,7 +2444,10 @@ def extend_track(
             if results[z].ok:
                 recent_centers.append((results[z].center_xy[0], results[z].center_xy[1], z))
     if not recent_centers:
-        recent_centers.append((cx, cy, furthest_ok))
+        recent_centers.append((prop.cx, prop.cy, furthest_ok))
+    seed_center = (
+        results[seed_frame].center_xy if results[seed_frame].ok else None
+    )
 
     # Chronological last commit in this extend call (not max-Z frontier).
     last_committed_z: int | None = None
@@ -2052,9 +2471,17 @@ def extend_track(
     gap_count = 0
     z = furthest_ok + direction
     while 0 <= z < n:
-        if direction > 0 and z > target_frame:
+        tf = _resolve_target_frame(target_frame, n=n)
+        if tf is None:
             break
-        if direction < 0 and z < target_frame:
+        # Cross-seed target: stop this frontier (opposite side is a separate extend).
+        if direction > 0 and tf < seed_frame:
+            break
+        if direction < 0 and tf > seed_frame:
+            break
+        if direction > 0 and z > tf:
+            break
+        if direction < 0 and z < tf:
             break
 
         _raise_if_cancelled(
@@ -2067,9 +2494,14 @@ def extend_track(
         )
 
         if results[z].ok:
-            cx, cy = results[z].center_xy
-            ref_area = 0.7 * ref_area + 0.3 * results[z].area_px
-            recent_centers.append((cx, cy, z))
+            prop = prop.with_accepted(
+                center_xy=results[z].center_xy,
+                area_px=results[z].area_px,
+                frame_index=z,
+                seed_radius=R,
+            )
+            ref_area = float(prop.area_px)
+            recent_centers.append((prop.cx, prop.cy, z))
             if len(recent_centers) > 3:
                 recent_centers = recent_centers[-3:]
             gap_count = 0
@@ -2077,28 +2509,30 @@ def extend_track(
             continue
 
         vel = _per_frame_velocity(recent_centers)
-        extrapolated: tuple[float, float] | None = None
         if vel is not None:
-            dx, dy = vel
-            steps = gap_count + 1
-            extrapolated = (cx + dx * steps, cy + dy * steps)
+            prop = TrackProposalState(
+                cx=prop.cx,
+                cy=prop.cy,
+                radius=prop.radius,
+                area_px=prop.area_px,
+                vx=float(vel[0]),
+                vy=float(vel[1]),
+                frame_index=prop.frame_index,
+            )
 
-        if gap_count > 0:
-            attempts = [extrapolated] if extrapolated is not None else [(cx, cy)]
-        else:
-            attempts = [
-                (cx, cy),
-                (anchor_x, anchor_y),
-            ]
-            if results[seed_frame].ok:
-                attempts.append(results[seed_frame].center_xy)
-            if extrapolated is not None:
-                attempts = [extrapolated] + attempts
+        attempts = proposal_attempt_centers(
+            prop,
+            gap_count=gap_count,
+            seed_xy=(float(seed_x), float(seed_y)),
+            seed_result_center=seed_center,
+            include_seed_fallback=True,
+        )
+        predicted = prop.predict_center(steps=max(1, gap_count + 1))
 
         prev_z = z - direction
         prev = results[prev_z] if 0 <= prev_z < n else None
         association_prev = prev if (prev is not None and prev.ok) else last_valid
-        expected_center = extrapolated if gap_count > 0 else None
+        expected_center = predicted if gap_count > 0 else None
         expected_tolerance = (
             _gap_reacquisition_tolerance(vel, gap_count=gap_count, radius=R)
             if gap_count > 0
@@ -2121,8 +2555,9 @@ def extend_track(
                     seed_y=ty,
                     seed_radius=use_r,
                     ref_area=ref_area,
+                    competitive_isolation=use_competitive,
                 )
-                if not _candidate_accepted(
+                accepted = _candidate_accepted(
                     cand,
                     prev=association_prev,
                     ref_area=ref_area,
@@ -2132,7 +2567,17 @@ def extend_track(
                     expected_center_tolerance=expected_tolerance,
                     search_radius=use_r,
                     nominal_radius=R,
-                ):
+                )
+                _instr_record_association(
+                    z=z,
+                    accepted=accepted,
+                    cand=cand,
+                    search_radius=use_r,
+                    seed_x=tx,
+                    seed_y=ty,
+                    gap_count=gap_count,
+                )
+                if not accepted:
                     continue
                 res = cand
                 break
@@ -2142,9 +2587,11 @@ def extend_track(
         if res is None:
             if results[z].method == "circle_seed_unreached":
                 gap_res = SeededSliceResult(
-                    None, None, (cx, cy), 0.0, 0.0, "circle_seed_gap", False
+                    None, None, (prop.cx, prop.cy), 0.0, 0.0, "circle_seed_gap", False
                 )
                 _commit_extend(z, gap_res)
+                if _instr_on():
+                    _instr_record_event("gap", z=int(z), gap_count=int(gap_count) + 1)
             gap_count += 1
             if gap_count > MAX_CONSECUTIVE_TRACK_GAPS:
                 break
@@ -2154,7 +2601,12 @@ def extend_track(
         curr_r = np.sqrt(res.area_px / np.pi) if res.area_px > 10.0 else R
         disk_r = max(curr_r * 1.35, curr_r + 15.0)
         full_disk = _disk_mask(arr[z].shape, res.center_xy[0], res.center_xy[1], disk_r)
-        if _is_vesicle_cap(arr[z], res.solid_mask, full_disk):
+        intensity_cap = _is_vesicle_cap(arr[z], res.solid_mask, full_disk)
+        area_stable = float(res.area_px) >= 0.55 * float(ref_area) if ref_area > 0 else False
+        is_cap = bool(intensity_cap) and not (
+            str(res.method).startswith("competitive") and area_stable
+        )
+        if is_cap:
             cap_res = SeededSliceResult(
                 res.contour_xy,
                 res.solid_mask,
@@ -2168,15 +2620,22 @@ def extend_track(
                 effective_threshold=res.effective_threshold,
             )
             _commit_extend(z, cap_res)
+            if _instr_on():
+                _instr_record_event("cap", z=int(z), method="cap_detected")
             break
 
         _commit_extend(z, res)
-        cx, cy = res.center_xy
+        prop = prop.with_accepted(
+            center_xy=res.center_xy,
+            area_px=res.area_px,
+            frame_index=z,
+            seed_radius=R,
+        )
         last_valid = res
-        recent_centers.append((cx, cy, z))
+        recent_centers.append((prop.cx, prop.cy, z))
         if len(recent_centers) > 3:
             recent_centers = recent_centers[-3:]
-        ref_area = 0.7 * ref_area + 0.3 * res.area_px
+        ref_area = float(prop.area_px)
         gap_count = 0
         z += direction
 

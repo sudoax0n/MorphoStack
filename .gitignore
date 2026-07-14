@@ -49,6 +49,7 @@ runs/
 *.key
 
 # --- Local tooling (not product source) ---
+.agent-runs/
 .clones/
 mcps/
 scratch/

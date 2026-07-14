@@ -23,10 +23,10 @@ validation/
 │   ├── rbc-image32-crowded-two-objects/
 │   ├── synthetic-sphere/  # Known-geometry sphere regression
 │   ├── synthetic-ellipsoid/ # Known-geometry ellipsoid regression
-│   └── synthetic-touching-failure/ # Documented threshold-merge negative case
-│       ├── metrics.csv
-│       ├── manifest.json
-│       └── report.md
+│   └── synthetic-touching-membranes/ # Multi-case labelled rings; aggregate PASS only
+│       ├── summary.json
+│       ├── <case_id>.json
+│       └── README.md
 ├── reports/               # Comparison and checklist reports
 │   └── dopc-vs-reference.md
 └── data-notes/            # Notes about specific datasets

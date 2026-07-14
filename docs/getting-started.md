@@ -73,11 +73,23 @@ Outputs next to (or under) your chosen paths:
 
 Use `--bundle-dir runs` to write `metrics.csv` + `manifest.json` + `report.md` into one folder.
 
+## Which mode should I use?
+
+| Goal | Mode (UI) | CLI |
+| --- | --- | --- |
+| Single GUV / vesicle | **Standard** | `--profile vesicle` (default) |
+| One vesicle in a **crowded** field | **Standard** + object seed | `--profile vesicle` + `--seed-x/y/frame` |
+| Red blood cells | **RBC** | `--profile rbc` |
+| Threshold cannot hold the membrane | **Experimental** (slow) | `--profile active_surfaces` + seed |
+
+Crowded multi-vesicle images still use **Standard** — pick the object with a seed. Experimental is not “multi mode”; it is a slow single-object refine. Details: [usage.md](usage.md#modes-profiles).
+
 ## Crowded field (one object)
 
 ```bash
 morphostack analyze path/to/crowded.czi \
   --threshold 190 \
+  --profile vesicle \
   --seed-x 360 --seed-y 517 --seed-frame 105 \
   --mesh --mesh-export mesh.obj \
   --bundle-dir runs

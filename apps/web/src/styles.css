@@ -652,7 +652,22 @@ legend {
   min-height: 340px;
   border: 1px solid #d8e0ec;
   border-radius: 6px;
-  background: #ffffff;
+  background: #0f172a;
+}
+
+/* Packet 07: parent surface for iframe Plotly success/failure (never silent blank). */
+.mesh-preview-status {
+  font-size: 0.88rem;
+  line-height: 1.4;
+}
+
+.mesh-preview-status.ok {
+  color: #166534;
+}
+
+.mesh-preview-status.warn {
+  color: #9a3412;
+  font-weight: 600;
 }
 
 /* Packet 12: optional calibrated volume navigation (display-only). */
@@ -726,11 +741,13 @@ legend {
   min-width: 8rem;
 }
 
+/* Packet 06: taller host so square XY AABB fills more of the wide panel
+   (Scout 07: old min(42vh,380) was height-limited with ~0.22–0.27 width fill). */
 .volume-viewer-canvas-wrap {
   position: relative;
   width: 100%;
-  height: min(42vh, 380px);
-  min-height: 240px;
+  height: min(58vh, 540px);
+  min-height: 320px;
   border: 1px solid #1e293b;
   border-radius: 6px;
   background: #0b1220;
@@ -768,10 +785,10 @@ legend {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
+/* Packet 08: single 2D contain sizing authority (no dual 320/480 caps).
+   Width fills the panel so small stacks UPSCALES within the viewport; height follows
+   aspect until max-height clamps, then object-fit:contain letterboxes (no crop/stretch). */
 .preview-output img {
-  width: 100%;
-  max-height: 320px;
-  object-fit: contain;
   image-rendering: pixelated;
   border: 1px solid #d8e0ec;
   border-radius: 6px;
@@ -780,19 +797,22 @@ legend {
 
 .preview-canvas {
   position: relative;
-  display: inline-block;
+  display: block;
+  width: 100%;
   max-width: 100%;
   justify-self: stretch;
   touch-action: none;
   overflow: hidden; /* keep circle ROI on the image, not over captions */
 }
 
+/* One rule: fill available width, cap height at min(70vh, 720px), isotropic contain. */
 .preview-canvas img {
   display: block;
   width: 100%;
-  max-height: 480px;
   height: auto;
+  max-height: min(70vh, 720px);
   object-fit: contain;
+  object-position: center;
   user-select: none;
   background: #0f172a;
 }
