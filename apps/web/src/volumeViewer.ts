@@ -1,3 +1,14 @@
+import {
+  AUTO_VOLUME_TONE,
+  RESET_VOLUME_TONE,
+  buildVolumeTransferPoints,
+  estimateVolumeWindows,
+  fractionsFromWindow,
+  sanitizeVolumeTone,
+  windowFromFractions,
+  type VolumeToneSettings
+} from "./volumeTransfer.ts";
+
 /**
  * Contained, display-only browser volume navigation (Milestone B / packet 12).
  *
@@ -733,8 +744,14 @@ export type VolumeViewerMountOptions = {
   container: HTMLElement;
   payload: DisplayLevelResponse;
   blendMode?: VolumeBlendMode;
-  /** Composite opacity gain 0–1 (ignored for pure MIP). */
+  /** Display-only opacity/density gain (0–4). */
   opacityGain?: number;
+  /** Display-only brightness in exposure stops (−4 to +8 EV). */
+  exposureEv?: number;
+  /** Display-only transfer-function contrast (0.25–4). */
+  contrast?: number;
+  /** Display-only transfer-function gamma (0.2–4). */
+  gamma?: number;
   /**
    * MIP black-level fraction 0–1 (transfer-function only). Raises the low end of
    * the intensity window; ignored for composite opacity gain path.
@@ -759,10 +776,12 @@ export class VolumeViewerSession {
   private disposed = false;
   private vtk: VtkBundle | null = null;
   private blendMode: VolumeBlendMode = "mip";
-  private opacityGain = 0.35;
+  private tone: VolumeToneSettings = { ...AUTO_VOLUME_TONE };
   private blackLevel = 0;
-  /** Full data/spec range before black-level windowing. */
+  /** Full finite sampled data range before display windowing. */
   private baseScalarRange: [number, number] = [0, 255];
+  /** Robust sampled data window used by Auto. */
+  private autoScalarRange: [number, number] = [0, 255];
   /** Active intensity window used by transfer functions. */
   private scalarRange: [number, number] = [0, 255];
   private meta: VolumeReadyMeta | null = null;
@@ -812,6 +831,14 @@ export class VolumeViewerSession {
     return [this.baseScalarRange[0], this.baseScalarRange[1]];
   }
 
+  get currentTone(): VolumeToneSettings {
+    return { ...this.tone };
+  }
+
+  get currentWindowFractions(): [number, number] {
+    return fractionsFromWindow(this.baseScalarRange, this.scalarRange);
+  }
+
   static async mount(options: VolumeViewerMountOptions): Promise<VolumeViewerSession> {
     const session = new VolumeViewerSession();
     await session._mount(options);
@@ -831,17 +858,22 @@ export class VolumeViewerSession {
     const expectedCount = dimX * dimY * dimZ;
     const bytes = decodeBase64Binary(options.payload.data_b64!);
     const scalars = createTypedScalars(bytes, validated.dtype, expectedCount);
-    this.baseScalarRange = estimateScalarRange(scalars.values);
-    const windowFromSpec = options.payload.display_volume_spec?.intensity_window;
-    if (windowFromSpec && windowFromSpec.length >= 2) {
-      const lo = Number(windowFromSpec[0]);
-      const hi = Number(windowFromSpec[1]);
-      if (Number.isFinite(lo) && Number.isFinite(hi) && hi > lo) {
-        this.baseScalarRange = [lo, hi];
-      }
-    }
+    const sampledWindows = estimateVolumeWindows(
+      scalars.values as unknown as ArrayLike<number>
+    );
+    this.baseScalarRange = sampledWindows.full;
+    this.autoScalarRange = sampledWindows.auto;
+    this.tone = sanitizeVolumeTone({
+      opacityGain: options.opacityGain,
+      exposureEv: options.exposureEv,
+      contrast: options.contrast,
+      gamma: options.gamma
+    });
     this.blackLevel = clamp01(options.blackLevel ?? 0);
-    this.scalarRange = intensityWindowFromBlackLevel(this.baseScalarRange, this.blackLevel);
+    this.scalarRange =
+      this.blackLevel > 0
+        ? intensityWindowFromBlackLevel(this.baseScalarRange, this.blackLevel)
+        : [...this.autoScalarRange];
 
     let factories;
     try {
@@ -889,7 +921,6 @@ export class VolumeViewerSession {
       const ctfun = factories.vtkColorTransferFunction.newInstance();
       const ofun = factories.vtkPiecewiseFunction.newInstance();
       this.blendMode = options.blendMode ?? "mip";
-      this.opacityGain = options.opacityGain ?? 0.35;
       this.applyTransferFunctions(ctfun, ofun, mapper);
 
       volume.getProperty().setRGBTransferFunction(0, ctfun);
@@ -988,29 +1019,17 @@ export class VolumeViewerSession {
   }
 
   private applyTransferFunctions(ctfun: VtkAny, ofun: VtkAny, mapper: VtkAny): void {
-    const [lo, hi] = this.scalarRange;
-    const span = hi - lo || 1;
     ctfun.removeAllPoints();
     ofun.removeAllPoints();
-    // Cyan–white fluorescence-like ramp for navigation (not a scientific LUT claim).
-    ctfun.addRGBPoint(lo, 0.0, 0.05, 0.12);
-    ctfun.addRGBPoint(lo + 0.35 * span, 0.05, 0.45, 0.55);
-    ctfun.addRGBPoint(lo + 0.7 * span, 0.35, 0.9, 0.75);
-    ctfun.addRGBPoint(hi, 1.0, 1.0, 0.95);
-
+    const points = buildVolumeTransferPoints(this.scalarRange, this.tone);
+    for (const point of points) {
+      ctfun.addRGBPoint(point.scalar, point.red, point.green, point.blue);
+      ofun.addPoint(point.scalar, point.opacity);
+    }
     if (this.blendMode === "mip") {
-      // MIP: intensity window / black level drive visibility; opacityGain unused.
       mapper.setBlendModeToMaximumIntensity();
-      ofun.addPoint(lo, 0.0);
-      ofun.addPoint(lo + 0.15 * span, 0.05);
-      ofun.addPoint(hi, 1.0);
     } else {
       mapper.setBlendModeToComposite();
-      const g = Math.max(0.02, Math.min(1, this.opacityGain));
-      ofun.addPoint(lo, 0.0);
-      ofun.addPoint(lo + 0.25 * span, 0.02 * g);
-      ofun.addPoint(lo + 0.55 * span, 0.25 * g);
-      ofun.addPoint(hi, 0.85 * g);
     }
   }
 
@@ -1069,13 +1088,29 @@ export class VolumeViewerSession {
     this.vtk.genericRenderWindow.getRenderWindow().render();
   }
 
-  /**
-   * Composite opacity gain. Transfer-function only; no-op for MIP (use black level).
-   */
+  /** Display-only density/opacity gain. Transfer-function only. */
   setOpacityGain(gain: number): void {
     if (this.disposed || !this.vtk) return;
-    this.opacityGain = Math.max(0.02, Math.min(1, gain));
-    if (this.blendMode !== "composite") return;
+    this.tone = sanitizeVolumeTone({ ...this.tone, opacityGain: gain });
+    this.applyTransferFunctions(this.vtk.ctfun, this.vtk.ofun, this.vtk.mapper);
+    this.vtk.genericRenderWindow.getRenderWindow().render();
+  }
+
+  setExposureEv(exposureEv: number): void {
+    this.setTone({ exposureEv });
+  }
+
+  setContrast(contrast: number): void {
+    this.setTone({ contrast });
+  }
+
+  setGamma(gamma: number): void {
+    this.setTone({ gamma });
+  }
+
+  private setTone(update: Partial<VolumeToneSettings>): void {
+    if (this.disposed || !this.vtk) return;
+    this.tone = sanitizeVolumeTone({ ...this.tone, ...update });
     this.applyTransferFunctions(this.vtk.ctfun, this.vtk.ofun, this.vtk.mapper);
     this.vtk.genericRenderWindow.getRenderWindow().render();
   }
@@ -1089,7 +1124,12 @@ export class VolumeViewerSession {
     const a = Number(lo);
     const b = Number(hi);
     if (!Number.isFinite(a) || !Number.isFinite(b) || b <= a) return;
-    this.scalarRange = [a, b];
+    const fullLo = this.baseScalarRange[0];
+    const fullHi = this.baseScalarRange[1];
+    const clampedLo = Math.max(fullLo, Math.min(fullHi, a));
+    const clampedHi = Math.max(clampedLo + (fullHi - fullLo) * 0.001, Math.min(fullHi, b));
+    if (!(clampedHi > clampedLo)) return;
+    this.scalarRange = [clampedLo, clampedHi];
     // Keep blackLevel approximately consistent with the window low edge.
     const span = this.baseScalarRange[1] - this.baseScalarRange[0] || 1;
     this.blackLevel = clamp01((a - this.baseScalarRange[0]) / span);
@@ -1105,6 +1145,36 @@ export class VolumeViewerSession {
     if (this.disposed || !this.vtk) return;
     this.blackLevel = clamp01(level);
     this.scalarRange = intensityWindowFromBlackLevel(this.baseScalarRange, this.blackLevel);
+    this.applyTransferFunctions(this.vtk.ctfun, this.vtk.ofun, this.vtk.mapper);
+    this.vtk.genericRenderWindow.getRenderWindow().render();
+  }
+
+  /** Set normalized low/high window handles against the full sampled range. */
+  setWindowFractions(low: number, high: number): void {
+    if (this.disposed || !this.vtk) return;
+    this.scalarRange = windowFromFractions(this.baseScalarRange, low, high);
+    const [lowFraction] = fractionsFromWindow(this.baseScalarRange, this.scalarRange);
+    this.blackLevel = lowFraction;
+    this.applyTransferFunctions(this.vtk.ctfun, this.vtk.ofun, this.vtk.mapper);
+    this.vtk.genericRenderWindow.getRenderWindow().render();
+  }
+
+  /** Restore robust sampled window and bright defaults. */
+  autoMap(): void {
+    if (this.disposed || !this.vtk) return;
+    this.scalarRange = [...this.autoScalarRange];
+    this.tone = { ...AUTO_VOLUME_TONE };
+    this.blackLevel = this.currentWindowFractions[0];
+    this.applyTransferFunctions(this.vtk.ctfun, this.vtk.ofun, this.vtk.mapper);
+    this.vtk.genericRenderWindow.getRenderWindow().render();
+  }
+
+  /** Restore neutral tone over the full sampled data range. */
+  resetDisplay(): void {
+    if (this.disposed || !this.vtk) return;
+    this.scalarRange = [...this.baseScalarRange];
+    this.tone = { ...RESET_VOLUME_TONE };
+    this.blackLevel = 0;
     this.applyTransferFunctions(this.vtk.ctfun, this.vtk.ofun, this.vtk.mapper);
     this.vtk.genericRenderWindow.getRenderWindow().render();
   }

@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const srcPath = path.join(__dirname, "..", "src", "volumeViewer.ts");
+const transferPath = path.join(__dirname, "..", "src", "volumeTransfer.ts");
 
 async function loadModule() {
   try {
@@ -29,6 +30,7 @@ function b64(bytes) {
 
 async function main() {
   const m = await loadModule();
+  const t = await import(pathToFileURL(transferPath).href);
 
   // --- feature flag ---
   const mem = new Map();
@@ -196,6 +198,34 @@ async function main() {
   assert.ok(m.VOLUME_FIT_CPU_BUDGET_MS <= 50);
   assert.ok(m.VOLUME_FIT_RESIZE_DEBOUNCE_MS > 0);
 
+  // --- display-only robust transfer math ---
+  const sparse = new Float32Array(1000);
+  sparse.set([10, 20, 30, 40, 50], 995);
+  const sparseWindows = t.estimateVolumeWindows(sparse);
+  assert.equal(sparseWindows.full[0], 0);
+  assert.ok(sparseWindows.auto[1] > 0, "sparse foreground must produce a visible auto window");
+  const degenerate = t.estimateVolumeWindows(new Float32Array([NaN, NaN]));
+  assert.deepEqual(degenerate.full, [0, 1]);
+  const constant = t.estimateVolumeWindows(new Float32Array([7, 7, 7]));
+  assert.ok(constant.full[1] > constant.full[0]);
+
+  const neutral = t.sanitizeVolumeTone({ exposureEv: 0, contrast: 1, gamma: 1, opacityGain: 1 });
+  const bright = t.sanitizeVolumeTone({ exposureEv: 99, contrast: 99, gamma: -1, opacityGain: 99 });
+  assert.equal(bright.exposureEv, 8);
+  assert.equal(bright.contrast, 4);
+  assert.equal(bright.gamma, 0.2);
+  assert.equal(bright.opacityGain, 4);
+  assert.ok(t.mapVolumeIntensity(0.1, bright) >= t.mapVolumeIntensity(0.1, neutral));
+
+  const zeroOpacity = t.buildVolumeTransferPoints([0, 100], { ...neutral, opacityGain: 0 });
+  assert.ok(zeroOpacity.every((point) => point.opacity === 0));
+  const maxOpacity = t.buildVolumeTransferPoints([0, 100], { ...neutral, opacityGain: 4 });
+  assert.ok(maxOpacity.every((point) => point.opacity >= 0 && point.opacity <= 1));
+  assert.ok(maxOpacity.at(-1).opacity > 0.99);
+  assert.deepEqual(t.windowFromFractions([0, 100], 0.2, 0.8), [20, 80]);
+  const fractions = t.fractionsFromWindow([0, 100], [20, 80]);
+  assert.ok(Math.abs(fractions[0] - 0.2) < 1e-9 && Math.abs(fractions[1] - 0.8) < 1e-9);
+
   // Session API surface (no GPU mount in unit tests)
   assert.equal(typeof m.VolumeViewerSession, "function");
   assert.equal(typeof m.detectWebGLSupport, "function");
@@ -204,6 +234,11 @@ async function main() {
   assert.equal(typeof proto.setBlackLevel, "function");
   assert.equal(typeof proto.setIntensityWindow, "function");
   assert.equal(typeof proto.setOpacityGain, "function");
+  assert.equal(typeof proto.setExposureEv, "function");
+  assert.equal(typeof proto.setContrast, "function");
+  assert.equal(typeof proto.setGamma, "function");
+  assert.equal(typeof proto.autoMap, "function");
+  assert.equal(typeof proto.resetDisplay, "function");
 
   console.log("volumeViewer.test.mjs: all passed");
 }

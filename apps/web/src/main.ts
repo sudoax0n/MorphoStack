@@ -17,7 +17,6 @@ import {
   SeedMappingError,
   VolumeViewerError,
   VolumeViewerSession,
-  appearanceControlForBlend,
   fallbackMessage,
   geometryFromLevelPayload,
   isVolumeViewerEnabled,
@@ -766,14 +765,13 @@ app.innerHTML = `
               <option value="composite">Alpha blend</option>
             </select>
           </label>
-          <label id="volume-opacity-label" hidden>
-            Opacity
-            <input id="volume-opacity" type="range" min="0.05" max="1" step="0.05" value="0.35" title="Composite alpha gain only" />
-          </label>
-          <label id="volume-black-level-label">
-            Black level
-            <input id="volume-black-level" type="range" min="0" max="0.85" step="0.05" value="0" title="MIP intensity floor (transfer function only)" />
-          </label>
+          <label>Exposure <output id="volume-exposure-value">+1.00 EV</output><input id="volume-exposure" type="range" min="-4" max="8" step="0.25" value="1" title="Display-only brightness" /></label>
+          <label>Contrast <output id="volume-contrast-value">1.10×</output><input id="volume-contrast" type="range" min="0.25" max="4" step="0.05" value="1.1" title="Display-only contrast" /></label>
+          <label>Gamma <output id="volume-gamma-value">1.20</output><input id="volume-gamma" type="range" min="0.2" max="4" step="0.05" value="1.2" title="Display-only gamma" /></label>
+          <label id="volume-opacity-label">Opacity / density <output id="volume-opacity-value">0.80×</output><input id="volume-opacity" type="range" min="0" max="4" step="0.05" value="0.8" title="Display-only density gain" /></label>
+          <label id="volume-black-level-label">Window low <output id="volume-black-level-value">0%</output><input id="volume-black-level" type="range" min="0" max="0.95" step="0.01" value="0" title="Display-only low window bound" /></label>
+          <button id="volume-auto-btn" class="secondary" type="button">Auto intensity</button>
+          <button id="volume-reset-btn" class="secondary" type="button">Reset intensity</button>
           <button id="volume-fit-btn" class="secondary" type="button" title="Re-fit camera to full physical bounds">Fit view</button>
           <button id="volume-reload-btn" class="secondary" type="button">Load / refresh 3D</button>
           <button id="volume-seed-pick-btn" class="secondary" type="button" title="Click in the volume to set the same ObjectSeed as 2D">
@@ -997,6 +995,9 @@ const volumeViewerEnable = mustElement<HTMLInputElement>("volume-viewer-enable")
 const volumeBlendModeSelect = mustElement<HTMLSelectElement>("volume-blend-mode");
 const volumeOpacityLabel = mustElement<HTMLLabelElement>("volume-opacity-label");
 const volumeOpacityInput = mustElement<HTMLInputElement>("volume-opacity");
+const volumeExposureInput = mustElement<HTMLInputElement>("volume-exposure");
+const volumeContrastInput = mustElement<HTMLInputElement>("volume-contrast");
+const volumeGammaInput = mustElement<HTMLInputElement>("volume-gamma");
 const volumeBlackLevelLabel = mustElement<HTMLLabelElement>("volume-black-level-label");
 const volumeBlackLevelInput = mustElement<HTMLInputElement>("volume-black-level");
 const meshOutput = mustElement<HTMLDivElement>("mesh-output");
@@ -1140,10 +1141,14 @@ volumeBlendModeSelect.addEventListener("change", () => {
 volumeOpacityInput.addEventListener("input", () => {
   const gain = Number(volumeOpacityInput.value);
   if (Number.isFinite(gain)) {
-    // Composite-only TF gain; MIP uses black level (no pyramid refetch).
     volumeSession?.setOpacityGain(gain);
+    syncVolumeToneLabels();
   }
 });
+
+volumeExposureInput.addEventListener("input", () => { volumeSession?.setExposureEv(Number(volumeExposureInput.value)); syncVolumeToneLabels(); });
+volumeContrastInput.addEventListener("input", () => { volumeSession?.setContrast(Number(volumeContrastInput.value)); syncVolumeToneLabels(); });
+volumeGammaInput.addEventListener("input", () => { volumeSession?.setGamma(Number(volumeGammaInput.value)); syncVolumeToneLabels(); });
 
 volumeBlackLevelInput.addEventListener("input", () => {
   const level = Number(volumeBlackLevelInput.value);
@@ -1152,6 +1157,9 @@ volumeBlackLevelInput.addEventListener("input", () => {
     volumeSession?.setBlackLevel(level);
   }
 });
+
+mustElement<HTMLButtonElement>("volume-auto-btn").addEventListener("click", () => { volumeSession?.autoMap(); syncVolumeToneControlsFromSession(); });
+mustElement<HTMLButtonElement>("volume-reset-btn").addEventListener("click", () => { volumeSession?.resetDisplay(); syncVolumeToneControlsFromSession(); });
 
 mustElement<HTMLButtonElement>("volume-fit-btn").addEventListener("click", () => {
   if (!volumeSession || volumeSession.isDisposed) return;
@@ -4846,12 +4854,28 @@ function readVolumeBlendMode(): VolumeBlendMode {
 
 /** Show composite Opacity vs MIP Black level — never a dead control for the active blend. */
 function syncVolumeAppearanceControls(): void {
-  const control = appearanceControlForBlend(readVolumeBlendMode());
-  const showOpacity = control === "opacity";
-  volumeOpacityLabel.hidden = !showOpacity;
-  volumeBlackLevelLabel.hidden = showOpacity;
-  volumeOpacityInput.disabled = !showOpacity;
-  volumeBlackLevelInput.disabled = showOpacity;
+  volumeOpacityLabel.hidden = false;
+  volumeBlackLevelLabel.hidden = false;
+  volumeOpacityInput.disabled = false;
+  volumeBlackLevelInput.disabled = false;
+}
+function syncVolumeToneLabels(): void {
+  mustElement<HTMLOutputElement>("volume-exposure-value").value = Number(volumeExposureInput.value).toFixed(2) + " EV";
+  mustElement<HTMLOutputElement>("volume-contrast-value").value = Number(volumeContrastInput.value).toFixed(2) + "×";
+  mustElement<HTMLOutputElement>("volume-gamma-value").value = Number(volumeGammaInput.value).toFixed(2);
+  mustElement<HTMLOutputElement>("volume-opacity-value").value = Number(volumeOpacityInput.value).toFixed(2) + "×";
+  mustElement<HTMLOutputElement>("volume-black-level-value").value = Math.round(Number(volumeBlackLevelInput.value) * 100) + "%";
+}
+function syncVolumeToneControlsFromSession(): void {
+  if (volumeSession) {
+    const tone = volumeSession.currentTone;
+    volumeExposureInput.value = String(tone.exposureEv);
+    volumeContrastInput.value = String(tone.contrast);
+    volumeGammaInput.value = String(tone.gamma);
+    volumeOpacityInput.value = String(tone.opacityGain);
+    volumeBlackLevelInput.value = String(volumeSession.currentWindowFractions[0]);
+  }
+  syncVolumeToneLabels();
 }
 
 // Initial control visibility matches default MIP blend.
@@ -5179,7 +5203,10 @@ async function loadVolumeViewer(options: { reason: string } = { reason: "manual"
       container: volumeVtkRoot,
       payload: levelPayload,
       blendMode: readVolumeBlendMode(),
-      opacityGain: Number(volumeOpacityInput.value) || 0.35,
+      opacityGain: Number(volumeOpacityInput.value),
+      exposureEv: Number(volumeExposureInput.value),
+      contrast: Number(volumeContrastInput.value),
+      gamma: Number(volumeGammaInput.value),
       blackLevel: Number(volumeBlackLevelInput.value) || 0,
       maxBytes: DEFAULT_VOLUME_MAX_BYTES,
       sourceShapeZyx: inspectedSourceShape ?? undefined,
