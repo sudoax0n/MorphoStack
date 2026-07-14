@@ -17,7 +17,7 @@ import threading
 import time
 from collections import defaultdict
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
 import numpy as np
@@ -42,6 +42,14 @@ class SeededSliceResult:
     # (adaptive local Otsu/percentile inside the seed disk). None for polar_dp
     # and other non-threshold methods. Not the UI slider value.
     effective_threshold: float | None = None
+    consensus_sigmas: tuple[float, ...] | None = None
+    consensus_candidate_count: int | None = None
+    consensus_dominant_cluster_size: int | None = None
+    consensus_agreement: float | None = None
+    consensus_boundary_spread: float | None = None
+    consensus_raw_edge_support: float | None = None
+    consensus_confidence: float | None = None
+    consensus_reject_reason: str | None = None
 
 
 def effective_seed_radius(seed_radius: float | None) -> float:
@@ -172,6 +180,7 @@ _COMPETITIVE_ISOLATION_ENABLED: bool = False
 # Distinct cache/job identity tokens (never share entries across variants).
 SEEDED_EXACT_MODE_LEGACY: str = "seeded_exact_legacy"
 SEEDED_EXACT_MODE_COMPETITIVE: str = "seeded_exact_competitive_v1"
+SEEDED_EXACT_MODE_MULTISCALE: str = "seeded_exact_multiscale_consensus_v1"
 # Honest UI/API warning (Packet 05/11 real-data gate incomplete).
 COMPETITIVE_TRACKING_WARNING: str = "Touching-vesicle real-data sign-off incomplete."
 
@@ -187,8 +196,12 @@ def is_competitive_isolation_enabled() -> bool:
     return bool(_COMPETITIVE_ISOLATION_ENABLED)
 
 
-def exact_tracking_mode_token(competitive: bool) -> str:
+def exact_tracking_mode_token(competitive: bool, multiscale_consensus: bool = False) -> str:
     """Stable tracking_mode for TrackingCacheKey / manifests."""
+    if competitive and multiscale_consensus:
+        raise ValueError("competitive and multi-scale consensus modes are mutually exclusive")
+    if multiscale_consensus:
+        return SEEDED_EXACT_MODE_MULTISCALE
     return SEEDED_EXACT_MODE_COMPETITIVE if competitive else SEEDED_EXACT_MODE_LEGACY
 
 
@@ -196,6 +209,10 @@ def competitive_from_tracking_mode(mode: str | None) -> bool:
     """True only for the explicit competitive experimental mode token."""
     token = str(mode or "").strip()
     return token == SEEDED_EXACT_MODE_COMPETITIVE
+
+
+def multiscale_from_tracking_mode(mode: str | None) -> bool:
+    return str(mode or "").strip() == SEEDED_EXACT_MODE_MULTISCALE
 
 
 def resolve_competitive_isolation(competitive_isolation: bool | None) -> bool:
@@ -1076,6 +1093,8 @@ def segment_slice_seeded(
     ref_area: float | None = None,
     fast_preview: bool = False,
     competitive_isolation: bool | None = None,
+    multiscale_consensus: bool = False,
+    profile: str = "vesicle",
 ) -> SeededSliceResult:
     """Segment one slice with a user circle (cx, cy, R) in full-image coords.
 
@@ -1103,12 +1122,16 @@ def segment_slice_seeded(
     sy = float(np.clip(seed_y, 0, h - 1))
 
     R = effective_seed_radius(seed_radius if seed_radius is not None else crop_radius)
+    use_competitive = resolve_competitive_isolation(competitive_isolation)
+    use_consensus = bool(multiscale_consensus)
+    if use_competitive and use_consensus:
+        raise ValueError("competitive and multi-scale consensus modes are mutually exclusive")
 
     y0, y1, x0, x1 = _crop_bounds((h, w), sx, sy, R)
     crop_raw = np.asarray(arr[y0:y1, x0:x1], dtype=np.float64)
     # Interactive rendering needs a faithful local selection quickly; the
     # expensive edge-preserving filter is reserved for scientific results.
-    if fast_preview:
+    if fast_preview or use_consensus:
         crop = crop_raw
     else:
         if _instr:
@@ -1129,6 +1152,50 @@ def segment_slice_seeded(
     thr: float | None = None
     competitive_used = False
     use_competitive = resolve_competitive_isolation(competitive_isolation)
+    use_consensus = bool(multiscale_consensus)
+    if use_competitive and use_consensus:
+        raise ValueError("competitive and multi-scale consensus modes are mutually exclusive")
+    consensus = None
+
+    if not fast_preview and use_consensus:
+        from morphostack.core.multiscale_consensus import (
+            mask_iou as _consensus_iou,
+            propose_multiscale_consensus,
+            raw_edge_support as _raw_edge_support,
+        )
+
+        consensus = propose_multiscale_consensus(
+            crop_raw, disk, local_cx, local_cy, R, ref_area=ref_area, profile=profile
+        )
+        if consensus.solid is None:
+            return SeededSliceResult(
+                None, None, (sx, sy), 0.0, 0.0, "multiscale_consensus_reject", False,
+                consensus_sigmas=consensus.sigmas,
+                consensus_candidate_count=consensus.candidate_count,
+                consensus_dominant_cluster_size=consensus.dominant_cluster_size,
+                consensus_agreement=consensus.agreement,
+                consensus_boundary_spread=consensus.boundary_spread,
+                consensus_raw_edge_support=consensus.raw_edge_support,
+                consensus_confidence=consensus.confidence,
+                consensus_reject_reason=consensus.reject_reason,
+            )
+        solid = np.asarray(consensus.solid, dtype=bool) & disk
+        method = "multiscale_consensus"
+        effective_threshold = None
+        if refine:
+            _EXACT_PATH_COUNTERS.morphgac_calls += 1
+            refined = _refine_contour_morphgac(
+                crop_raw,
+                solid,
+                iterations=5,
+                smoothing=0,
+                disk_mask=disk,
+            ) & disk
+            refined_iou = _consensus_iou(solid, refined)
+            refined_edge = _raw_edge_support(crop_raw, refined, disk)
+            if refined_iou >= 0.75 and refined_edge >= consensus.raw_edge_support - 0.05:
+                solid = refined
+                method = "multiscale_consensus_morphgac"
 
     # Packet 02/11: request-scoped competitive polar + multi-label RW path.
     # When enabled, threshold/CC is no longer authoritative isolation.
@@ -1189,7 +1256,7 @@ def segment_slice_seeded(
                 merge_suspect=True,
             )
 
-    if not competitive_used:
+    if not competitive_used and not use_consensus:
         # Primary (legacy default): adaptive threshold inside hard disk.
         disk_vals = crop[disk]
         if _instr:
@@ -1296,7 +1363,7 @@ def segment_slice_seeded(
     )
 
     _EXACT_PATH_COUNTERS.segment_calls += 1
-    qc_img = crop_raw if fast_preview else crop
+    qc_img = crop_raw if (fast_preview or use_consensus) else crop
     clean_pre_refine = False
     suspicion: tuple[str, ...] = ()
 
@@ -1342,13 +1409,31 @@ def segment_slice_seeded(
             False,
             merge_suspect=True,
             qc=qc_obj,
+            consensus_sigmas=consensus.sigmas if consensus is not None else None,
+            consensus_candidate_count=(
+                consensus.candidate_count if consensus is not None else None
+            ),
+            consensus_dominant_cluster_size=(
+                consensus.dominant_cluster_size if consensus is not None else None
+            ),
+            consensus_agreement=consensus.agreement if consensus is not None else None,
+            consensus_boundary_spread=(
+                consensus.boundary_spread if consensus is not None else None
+            ),
+            consensus_raw_edge_support=(
+                consensus.raw_edge_support if consensus is not None else None
+            ),
+            consensus_confidence=consensus.confidence if consensus is not None else None,
+            consensus_reject_reason=(
+                consensus.reject_reason if consensus is not None else None
+            ),
         )
 
     if fast_preview:
         qc = _run_qc(solid, qc_img, cheap=True)
     else:
         # Full QC only (no staged cheap-first gate — experiment deleted).
-        qc = _run_qc(solid, crop, cheap=False)
+        qc = _run_qc(solid, crop_raw if use_consensus else crop, cheap=False)
         suspicion = cheap_suspicion_flags(
             qc,
             solid,
@@ -1362,7 +1447,11 @@ def segment_slice_seeded(
         # Competitive isolation already applied hard multi-body / star-convex gates.
         # Do not re-run legacy split/polar repair or discard the solid on soft QC —
         # that destroyed continuity (Packet 02 R20 flip-flop / false reject).
-        if competitive_used:
+        if use_consensus:
+            if fail_closed(qc):
+                _EXACT_PATH_COUNTERS.merge_rejects += 1
+                return _reject_merge(qc)
+        elif competitive_used:
             pass
         elif not clean_pre_refine and not accept_as_is(qc):
 
@@ -1453,7 +1542,7 @@ def segment_slice_seeded(
     # multi-body/star-convex; skip MorphGAC there (Packet 02 continuity).
     # Packet 06 MorphGAC-skip-when-clean switch deleted (science REJECT).
     run_morphgac = bool(refine and not fast_preview)
-    if run_morphgac and competitive_used:
+    if run_morphgac and (competitive_used or use_consensus):
         run_morphgac = False
         _EXACT_PATH_COUNTERS.morphgac_skipped_clean += 1
 
@@ -1553,7 +1642,7 @@ def segment_slice_seeded(
             ok=True,
         )
 
-    return _result_from_solid(
+    final_result = _result_from_solid(
         solid,
         y0=y0,
         x0=x0,
@@ -1564,6 +1653,19 @@ def segment_slice_seeded(
         merge_suspect=bool(qc.merge_suspect) if qc is not None else False,
         effective_threshold=effective_threshold,
     )
+    if consensus is not None:
+        return replace(
+            final_result,
+            consensus_sigmas=consensus.sigmas,
+            consensus_candidate_count=consensus.candidate_count,
+            consensus_dominant_cluster_size=consensus.dominant_cluster_size,
+            consensus_agreement=consensus.agreement,
+            consensus_boundary_spread=consensus.boundary_spread,
+            consensus_raw_edge_support=consensus.raw_edge_support,
+            consensus_confidence=consensus.confidence,
+            consensus_reject_reason=consensus.reject_reason,
+        )
+    return final_result
 
 
 # Bump when exact seeded association, QC, gap, or segment decisions change.
@@ -1783,18 +1885,7 @@ def _result_for_progress(res: SeededSliceResult) -> SeededSliceResult:
         mask.flags.writeable = False
     if contour is res.contour_xy and mask is res.solid_mask:
         return res
-    return SeededSliceResult(
-        contour,
-        mask,
-        res.center_xy,
-        res.area_px,
-        res.perimeter_px,
-        res.method,
-        res.ok,
-        merge_suspect=res.merge_suspect,
-        qc=res.qc,
-        effective_threshold=res.effective_threshold,
-    )
+    return replace(res, contour_xy=contour, solid_mask=mask)
 
 
 def _frontiers_from_results(
@@ -1938,6 +2029,8 @@ def track_seeded_vesicle_stack(
     cancel_check: CancelCheck | None = None,
     direction_priority: DirectionPriorityHint = None,
     competitive_isolation: bool | None = None,
+    multiscale_consensus: bool = False,
+    profile: str = "vesicle",
 ) -> list[SeededSliceResult]:
     """Z tracking with user circle radius R.
 
@@ -1969,6 +2062,9 @@ def track_seeded_vesicle_stack(
     """
     del min_area_ratio  # replaced by IoU + multi-feature score; keep param for API compat
     use_competitive = resolve_competitive_isolation(competitive_isolation)
+    use_consensus = bool(multiscale_consensus)
+    if use_competitive and use_consensus:
+        raise ValueError("competitive and multi-scale consensus modes are mutually exclusive")
     arr = np.asarray(stack)
     if arr.ndim != 3:
         raise ValueError("track_seeded_vesicle_stack expects (z, y, x)")
@@ -2000,6 +2096,8 @@ def track_seeded_vesicle_stack(
         seed_y=seed_y,
         seed_radius=R,
         competitive_isolation=use_competitive,
+        multiscale_consensus=use_consensus,
+        profile=profile,
     )
     results[seed_frame] = first
     if not first.ok:
@@ -2007,6 +2105,8 @@ def track_seeded_vesicle_stack(
             SeededSliceResult(None, None, (seed_x, seed_y), 0.0, 0.0, "circle_seed_fail", False)
             for _ in range(n)
         ]
+        if use_consensus:
+            fail_list[seed_frame] = first
         # Seed commit is the only real result; publish then return (legacy shape).
         _emit_track_progress(
             on_progress,
@@ -2150,6 +2250,8 @@ def track_seeded_vesicle_stack(
                     seed_radius=use_r,
                     ref_area=ref_area,
                     competitive_isolation=use_competitive,
+                    multiscale_consensus=use_consensus,
+                    profile=profile,
                 )
                 accepted = _candidate_accepted(
                     cand,
@@ -2162,6 +2264,12 @@ def track_seeded_vesicle_stack(
                     search_radius=use_r,
                     nominal_radius=R,
                 )
+                if accepted and use_consensus:
+                    anchor_dist = math.hypot(
+                        cand.center_xy[0] - float(seed_x), cand.center_xy[1] - float(seed_y)
+                    )
+                    anchor_frac = 0.50 if R < 30.0 else 0.30
+                    accepted = anchor_dist <= max(6.0, anchor_frac * R)
                 _instr_record_association(
                     z=z,
                     accepted=accepted,
@@ -2203,7 +2311,7 @@ def track_seeded_vesicle_stack(
         intensity_cap = _is_vesicle_cap(arr[z], res.solid_mask, full_disk)
         area_stable = float(res.area_px) >= 0.55 * float(ref_area) if ref_area > 0 else False
         is_cap = bool(intensity_cap) and not (
-            str(res.method).startswith("competitive") and area_stable
+            str(res.method).startswith(("competitive", "multiscale_consensus")) and area_stable
         )
         if is_cap:
             cap_res = SeededSliceResult(
@@ -2347,6 +2455,8 @@ def extend_track(
     cancel_check: CancelCheck | None = None,
     direction_priority: DirectionPriorityHint = None,
     competitive_isolation: bool | None = None,
+    multiscale_consensus: bool = False,
+    profile: str = "vesicle",
 ) -> list[SeededSliceResult]:
     """Extend a previously cached tracking result toward ``target_frame``.
 
@@ -2360,6 +2470,9 @@ def extend_track(
     del min_area_ratio  # API compat; gating uses IoU + score
     del direction_priority  # single-direction extension; scheduling fixed by target
     use_competitive = resolve_competitive_isolation(competitive_isolation)
+    use_consensus = bool(multiscale_consensus)
+    if use_competitive and use_consensus:
+        raise ValueError("competitive and multi-scale consensus modes are mutually exclusive")
     arr = np.asarray(stack)
     if arr.ndim != 3:
         raise ValueError("extend_track expects (z, y, x)")
@@ -2409,6 +2522,8 @@ def extend_track(
             on_progress=on_progress,
             cancel_check=cancel_check,
             competitive_isolation=use_competitive,
+            multiscale_consensus=use_consensus,
+            profile=profile,
         )
 
     if (direction > 0 and furthest_ok >= tf0) or (
@@ -2556,6 +2671,8 @@ def extend_track(
                     seed_radius=use_r,
                     ref_area=ref_area,
                     competitive_isolation=use_competitive,
+                    multiscale_consensus=use_consensus,
+                    profile=profile,
                 )
                 accepted = _candidate_accepted(
                     cand,
@@ -2568,6 +2685,12 @@ def extend_track(
                     search_radius=use_r,
                     nominal_radius=R,
                 )
+                if accepted and use_consensus:
+                    anchor_dist = math.hypot(
+                        cand.center_xy[0] - float(seed_x), cand.center_xy[1] - float(seed_y)
+                    )
+                    anchor_frac = 0.50 if R < 30.0 else 0.30
+                    accepted = anchor_dist <= max(6.0, anchor_frac * R)
                 _instr_record_association(
                     z=z,
                     accepted=accepted,
@@ -2604,7 +2727,7 @@ def extend_track(
         intensity_cap = _is_vesicle_cap(arr[z], res.solid_mask, full_disk)
         area_stable = float(res.area_px) >= 0.55 * float(ref_area) if ref_area > 0 else False
         is_cap = bool(intensity_cap) and not (
-            str(res.method).startswith("competitive") and area_stable
+            str(res.method).startswith(("competitive", "multiscale_consensus")) and area_stable
         )
         if is_cap:
             cap_res = SeededSliceResult(

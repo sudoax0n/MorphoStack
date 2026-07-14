@@ -92,6 +92,15 @@ class FrameTrackingRecord:
     touches_seed_disk: bool = False
     # Source method string from seeded path when available (debug/provenance).
     method: str | None = None
+    # Experimental multi-scale consensus diagnostics.
+    consensus_sigmas: tuple[float, ...] | None = None
+    consensus_candidate_count: int | None = None
+    consensus_dominant_cluster_size: int | None = None
+    consensus_agreement: float | None = None
+    consensus_boundary_spread: float | None = None
+    consensus_raw_edge_support: float | None = None
+    consensus_confidence: float | None = None
+    consensus_reject_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -801,6 +810,7 @@ def analyze_stack(
     enable_skeleton: bool = False,
     skeleton_prune_pix: float = 1.0,
     competitive_tracking: bool = False,
+    multiscale_consensus: bool = False,
 ) -> StackAnalysis:
     """Analyze a grayscale Z-stack.
 
@@ -813,6 +823,8 @@ def analyze_stack(
     overrides are provided.
     """
     analysis_profile = normalize_profile(profile)
+    if competitive_tracking and multiscale_consensus:
+        raise ValueError("competitive and multi-scale consensus modes are mutually exclusive")
     arr = np.asarray(stack)
     if arr.ndim != 3:
         raise ValueError("analyze_stack expects a grayscale stack shaped as (z, y, x)")
@@ -1057,6 +1069,8 @@ def analyze_stack(
                 seed_radius=seed_r,
                 max_centroid_jump_px=jump_px,
                 competitive_isolation=bool(competitive_tracking),
+                multiscale_consensus=bool(multiscale_consensus),
+                profile=analysis_profile,
             )
             frames_list = []
             track_records: list[FrameTrackingRecord] = []
@@ -1159,6 +1173,14 @@ def analyze_stack(
                             merge_rejected=False,
                             touches_seed_disk=touches_disk,
                             method=str(sres.method) if sres.method else None,
+                            consensus_sigmas=sres.consensus_sigmas,
+                            consensus_candidate_count=sres.consensus_candidate_count,
+                            consensus_dominant_cluster_size=sres.consensus_dominant_cluster_size,
+                            consensus_agreement=sres.consensus_agreement,
+                            consensus_boundary_spread=sres.consensus_boundary_spread,
+                            consensus_raw_edge_support=sres.consensus_raw_edge_support,
+                            consensus_confidence=sres.consensus_confidence,
+                            consensus_reject_reason=sres.consensus_reject_reason,
                         )
                     )
                 else:
@@ -1212,6 +1234,28 @@ def analyze_stack(
                             # accepted contours; they get merge_rejected instead.
                             likely_neighbor_merge=False,
                             method=str(method_name) if method_name else None,
+                            consensus_sigmas=getattr(sres, "consensus_sigmas", None),
+                            consensus_candidate_count=getattr(
+                                sres, "consensus_candidate_count", None
+                            ),
+                            consensus_dominant_cluster_size=getattr(
+                                sres, "consensus_dominant_cluster_size", None
+                            ),
+                            consensus_agreement=getattr(
+                                sres, "consensus_agreement", None
+                            ),
+                            consensus_boundary_spread=getattr(
+                                sres, "consensus_boundary_spread", None
+                            ),
+                            consensus_raw_edge_support=getattr(
+                                sres, "consensus_raw_edge_support", None
+                            ),
+                            consensus_confidence=getattr(
+                                sres, "consensus_confidence", None
+                            ),
+                            consensus_reject_reason=getattr(
+                                sres, "consensus_reject_reason", None
+                            ),
                         )
                     )
                 frames_list.append(fa)

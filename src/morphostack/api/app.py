@@ -198,6 +198,7 @@ class AnalyzeRequest(BaseModel):
     skeleton_prune_pix: float = Field(default=1.0, ge=0)
     # Packet 11: experimental competitive exact path (default off / legacy).
     competitive_tracking: bool = False
+    multiscale_consensus: bool = False
 
 
 class MeshPreviewRequest(BaseModel):
@@ -268,6 +269,7 @@ class PreviewRequest(BaseModel):
     # Packet 11: experimental competitive exact path (default off). Fast provisional
     # preview stays the display path; this only affects exact seeded tracking identity.
     competitive_tracking: bool = False
+    multiscale_consensus: bool = False
 
 
 class ThresholdRequest(BaseModel):
@@ -315,6 +317,7 @@ class TrackingJobStartRequest(BaseModel):
     target_z: int | None = None
     direction_priority: int | None = None  # +1 / -1 for full bidirectional only
     competitive_tracking: bool = False
+    multiscale_consensus: bool = False
 
 
 class TrackingJobReprioritizeRequest(BaseModel):
@@ -339,6 +342,7 @@ class TrackingCorrectionRequest(BaseModel):
     roi: ROIRequest | None = None
     z_range: ZRangeRequest | None = None
     competitive_tracking: bool = False
+    multiscale_consensus: bool = False
     frame_index: int = Field(ge=0)
     action: Literal["reject_frame", "accept_manual_anchor", "reseed"] = "accept_manual_anchor"
 
@@ -635,7 +639,7 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
                 roi=roi,
                 z_range=z_range,
                 profile=request.profile,
-                tracking_mode=exact_tracking_mode_token(bool(request.competitive_tracking)),
+                tracking_mode=exact_tracking_mode_token(bool(request.competitive_tracking), bool(request.multiscale_consensus)),
             )
             snap = _tracking_service().start(
                 key=cache_key,
@@ -768,7 +772,7 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
                 roi=roi,
                 z_range=z_range,
                 profile=request.profile,
-                tracking_mode=_mode_tok(bool(request.competitive_tracking)),
+                tracking_mode=_mode_tok(bool(request.competitive_tracking), bool(request.multiscale_consensus)),
             )
             cached = default_tracking_cache.get(cache_key)
             meta = default_tracking_cache.get_review_meta(cache_key) or TrackingReviewMeta()
@@ -849,6 +853,8 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
                             seed_y=cy,
                             seed_radius=seed_r,
                             competitive_isolation=bool(request.competitive_tracking),
+                            multiscale_consensus=bool(request.multiscale_consensus),
+                            profile=request.profile,
                         )
                     if not anchor.ok:
                         raise ValueError(
@@ -957,6 +963,7 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
                 enable_skeleton=request.enable_skeleton,
                 skeleton_prune_pix=request.skeleton_prune_pix,
                 competitive_tracking=bool(request.competitive_tracking),
+                multiscale_consensus=bool(request.multiscale_consensus),
             )
             
             print(f"=== DEBUG ANALYZE RESULT ===")
@@ -1243,6 +1250,7 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
                     tracking_service=job_svc,
                     tracking_cache=default_tracking_cache,
                     competitive_tracking=bool(getattr(request, "competitive_tracking", False)),
+                    multiscale_consensus=bool(getattr(request, "multiscale_consensus", False)),
                 )
                 if not exact_available:
                     preview_quality = "provisional"
@@ -1324,6 +1332,7 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
                     roi=roi,
                     z_range=z_range,
                     profile=request.profile,
+                    tracking_mode=tracking_mode,
                 )
                 corr_rev = int(default_tracking_cache.correction_revision(_ck))
                 frame_authority_fields = frame_authority_payload(
@@ -1940,6 +1949,7 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
         # never share tracking cache. Session/stack_id uses subscription (packet 04).
         force_sync_exact: Annotated[bool | None, Form()] = None,
         competitive_tracking: Annotated[bool, Form()] = False,
+        multiscale_consensus: Annotated[bool, Form()] = False,
     ) -> dict[str, object]:
         """Multipart or session-backed preview.
 
@@ -2082,6 +2092,8 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
                         seed_radius=seed_r,
                         target_frame=int(local_frame),
                         competitive_isolation=bool(competitive_tracking),
+                        multiscale_consensus=bool(multiscale_consensus),
+                        profile=profile,
                     )
                     sres = tracked[local_frame]
                     thr_meta = threshold_provenance(
@@ -2114,6 +2126,7 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
                         tracking_service=None if use_force_sync else _tracking_service(),
                         tracking_cache=default_tracking_cache,
                         competitive_tracking=bool(competitive_tracking),
+                        multiscale_consensus=bool(multiscale_consensus),
                     )
                     if not exact_available:
                         preview_quality = "provisional"
@@ -2763,6 +2776,7 @@ def obtain_exact_seeded_slice(
     tracking_service,
     tracking_cache,
     competitive_tracking: bool = False,
+    multiscale_consensus: bool = False,
 ):
     """Resolve one exact seeded slice via cache/job (default) or diagnostic sync walk.
 
@@ -2781,6 +2795,9 @@ def obtain_exact_seeded_slice(
 
     seed_r = effective_seed_radius(float(local_seed.radius) if local_seed.radius else None)
     use_competitive = bool(competitive_tracking)
+    use_multiscale = bool(multiscale_consensus)
+    if use_competitive and use_multiscale:
+        raise ValueError("competitive and multi-scale consensus modes are mutually exclusive")
     cache_key = make_tracking_cache_key(
         stack_identity=stack_identity,
         seed_x=float(local_seed.x),
@@ -2791,7 +2808,7 @@ def obtain_exact_seeded_slice(
         roi=roi,
         z_range=z_range,
         profile=profile,
-        tracking_mode=exact_tracking_mode_token(use_competitive),
+        tracking_mode=exact_tracking_mode_token(use_competitive, use_multiscale),
     )
     tracking_profile = cache_key.profile
     tracking_mode = cache_key.tracking_mode
@@ -2816,6 +2833,8 @@ def obtain_exact_seeded_slice(
                 target_frame=int(local_frame),
                 cached_results=cached,
                 competitive_isolation=use_competitive,
+                multiscale_consensus=use_multiscale,
+                profile=profile,
             )
         else:
             tracked = track_seeded_vesicle_stack(
@@ -2826,6 +2845,8 @@ def obtain_exact_seeded_slice(
                 seed_radius=seed_r,
                 target_frame=int(local_frame),
                 competitive_isolation=use_competitive,
+                multiscale_consensus=use_multiscale,
+                profile=profile,
             )
         tracking_cache.merge(cache_key, tracked)
         sres = tracked[local_frame]
@@ -3141,6 +3162,7 @@ def preview_payload(
     tracking_key_revision: str | None = None,
     source_revision: str | None = None,
     competitive_tracking: bool | None = None,
+    multiscale_consensus: bool | None = None,
 ) -> dict[str, object]:
     """Build preview JSON.
 
@@ -3230,6 +3252,7 @@ def preview_payload(
     from morphostack.core.seeded_vesicle import (
         COMPETITIVE_TRACKING_WARNING,
         competitive_from_tracking_mode,
+        multiscale_from_tracking_mode,
     )
 
     is_competitive = (
@@ -3238,6 +3261,8 @@ def preview_payload(
         else competitive_from_tracking_mode(tracking_mode)
     )
     payload["competitive_tracking"] = bool(is_competitive)
+    is_multiscale = bool(multiscale_consensus) if multiscale_consensus is not None else multiscale_from_tracking_mode(tracking_mode)
+    payload["multiscale_consensus"] = bool(is_multiscale)
     if is_competitive:
         payload["competitive_tracking_warning"] = COMPETITIVE_TRACKING_WARNING
         # Provisional display must never be read as competitive exact science.

@@ -48,6 +48,7 @@ import {
   competitiveTrackingRequestValue,
   correctionProfileValue
 } from "./competitiveTrackingUi";
+import { multiscaleConsensusControlState, multiscaleConsensusRequestValue } from "./multiscaleConsensusUi.ts";
 
 /** Shown as path-input placeholder; never treat as a real stack path. */
 const PATH_PLACEHOLDER = "D:\\lab-data\\sample.tif";
@@ -690,6 +691,10 @@ app.innerHTML = `
           </p>
           <p id="competitive-tracking-gate-hint" class="fieldset-hint muted" style="margin-top: 2px;" hidden></p>
         </div>
+        <div id="multiscale-consensus-opt-in" class="competitive-tracking-opt-in" style="margin-top: 12px;" hidden>
+          <label class="checkbox-row"><input id="multiscale-consensus" type="checkbox" disabled />Multi-scale contour consensus (experimental)</label>
+          <p id="multiscale-consensus-hint" class="fieldset-hint muted">Gaussian views propose boundaries only; raw image remains measurement and QC authority.</p>
+        </div>
         <p class="fieldset-hint muted" style="margin-top: 6px;">
           Uncheck overlays to see the raw membrane; re-check to verify what is selected.
         </p>
@@ -1271,7 +1276,16 @@ mustElement<HTMLButtonElement>("select-object-btn").addEventListener("click", ()
 const competitiveTrackingEl = document.getElementById("competitive-tracking");
 if (competitiveTrackingEl instanceof HTMLInputElement) {
   competitiveTrackingEl.addEventListener("change", () => {
-    // Variant switch must not reuse the other mode's exact cache.
+    if (competitiveTrackingEl.checked) { const c = document.getElementById("multiscale-consensus"); if (c instanceof HTMLInputElement) c.checked = false; }
+    syncCompetitiveTrackingControl();
+    schedulePreview();
+  });
+}
+const multiscaleConsensusEl = document.getElementById("multiscale-consensus");
+if (multiscaleConsensusEl instanceof HTMLInputElement) {
+  multiscaleConsensusEl.addEventListener("change", () => {
+    if (multiscaleConsensusEl.checked && competitiveTrackingEl instanceof HTMLInputElement) competitiveTrackingEl.checked = false;
+    syncCompetitiveTrackingControl();
     schedulePreview();
   });
 }
@@ -1324,7 +1338,8 @@ async function postTrackingCorrection(action: "accept_manual_anchor" | "reject_f
     z_range: readZRange(),
     frame_index: globalPreviewFrameIndex(readLocalPreviewFrameIndex()),
     action,
-    competitive_tracking: readCompetitiveTracking()
+    competitive_tracking: readCompetitiveTracking(),
+    multiscale_consensus: readMultiscaleConsensus()
   };
   try {
     const t0 = performance.now();
@@ -1729,6 +1744,27 @@ function readCompetitiveTracking(): boolean {
   return competitiveTrackingRequestValue(profile, selectedObjectSeed !== null, checked);
 }
 
+function readMultiscaleConsensus(): boolean {
+  const el = document.getElementById("multiscale-consensus");
+  const competitive = document.getElementById("competitive-tracking");
+  return multiscaleConsensusRequestValue(
+    readProfile(), selectedObjectSeed !== null,
+    el instanceof HTMLInputElement && el.checked,
+    competitive instanceof HTMLInputElement && competitive.checked
+  );
+}
+
+function syncMultiscaleConsensusControl(): void {
+  const wrap = document.getElementById("multiscale-consensus-opt-in");
+  const el = document.getElementById("multiscale-consensus");
+  const hint = document.getElementById("multiscale-consensus-hint");
+  const competitive = document.getElementById("competitive-tracking");
+  if (!(wrap instanceof HTMLElement) || !(el instanceof HTMLInputElement)) return;
+  const state = multiscaleConsensusControlState(readProfile(), selectedObjectSeed !== null, competitive instanceof HTMLInputElement && competitive.checked);
+  wrap.hidden = !state.visible; el.disabled = !state.enabled; if (!state.enabled) el.checked = false;
+  if (hint instanceof HTMLElement && state.reason) hint.textContent = state.reason;
+}
+
 /** Show/enable experimental control only for seeded vesicle workflow. */
 function syncCompetitiveTrackingControl(): void {
   const wrap = document.getElementById("competitive-tracking-opt-in");
@@ -1754,6 +1790,7 @@ function syncCompetitiveTrackingControl(): void {
     hint.hidden = !state.reason || !state.visible;
     hint.textContent = state.reason;
   }
+  syncMultiscaleConsensusControl();
   if (warn instanceof HTMLElement && state.visible && state.enabled) {
     // Keep authority warning text stable for screenshots / lab honesty.
     if (!warn.textContent?.includes("Touching-vesicle")) {
@@ -1776,7 +1813,8 @@ function previewJsonBody(stackRef: { path?: string; stack_id?: string }): Record
     skeleton_prune_pix: readSkeletonPrunePix(),
     show_selection: readShowSelectionOverlay(),
     image_transport: "url",
-    competitive_tracking: readCompetitiveTracking()
+    competitive_tracking: readCompetitiveTracking(),
+    multiscale_consensus: readMultiscaleConsensus()
   };
 }
 
@@ -2541,7 +2579,8 @@ async function analyzeStack(options: { keepExclusions?: boolean } = {}): Promise
         prefer_opencv: !mustElement<HTMLInputElement>("fallback-input").checked,
         object_seed: selectedObjectSeed,
         excluded_frames: excluded,
-        competitive_tracking: readCompetitiveTracking()
+        competitive_tracking: readCompetitiveTracking(),
+        multiscale_consensus: readMultiscaleConsensus()
       });
     } else {
       const stackId = await ensureUploadSession(source.file, {
@@ -2563,7 +2602,8 @@ async function analyzeStack(options: { keepExclusions?: boolean } = {}): Promise
         prefer_opencv: !mustElement<HTMLInputElement>("fallback-input").checked,
         object_seed: selectedObjectSeed,
         excluded_frames: excluded,
-        competitive_tracking: readCompetitiveTracking()
+        competitive_tracking: readCompetitiveTracking(),
+        multiscale_consensus: readMultiscaleConsensus()
       });
     }
     excludedFrameIndices = new Set(payload.excluded_frames ?? excluded);

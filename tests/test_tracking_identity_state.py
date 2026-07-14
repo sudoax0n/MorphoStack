@@ -42,7 +42,7 @@ def _base_key_kwargs(**overrides):
 def test_exact_tracking_constants_are_stable_nonempty():
     assert isinstance(EXACT_TRACKING_ALGORITHM_VERSION, str)
     assert EXACT_TRACKING_ALGORITHM_VERSION.strip()
-    assert EXACT_TRACKING_MODE == "seeded_exact"
+    assert EXACT_TRACKING_MODE == "seeded_exact_legacy"
 
 
 def test_make_tracking_cache_key_fills_canonical_identity_defaults():

@@ -568,9 +568,13 @@ class TrackingJobService:
                         # Accepted path already covers target (target may be gap).
                         use_extend = True
 
-            from morphostack.core.seeded_vesicle import competitive_from_tracking_mode
+            from morphostack.core.seeded_vesicle import (
+                competitive_from_tracking_mode,
+                multiscale_from_tracking_mode,
+            )
 
             job_competitive = competitive_from_tracking_mode(job.key.tracking_mode)
+            job_multiscale = multiscale_from_tracking_mode(job.key.tracking_mode)
 
             if use_extend and cached is not None:
                 with self._track_invocations_lock:
@@ -588,6 +592,8 @@ class TrackingJobService:
                     cancel_check=cancel_check,
                     direction_priority=live_direction_priority,
                     competitive_isolation=job_competitive,
+                    multiscale_consensus=job_multiscale,
+                    profile=job.key.profile,
                 )
             else:
                 with self._track_invocations_lock:
@@ -606,6 +612,8 @@ class TrackingJobService:
                         cancel_check=cancel_check,
                         direction_priority=live_direction_priority,
                         competitive_isolation=job_competitive,
+                        multiscale_consensus=job_multiscale,
+                        profile=job.key.profile,
                     )
                 else:
                     out = self._track_fn(
@@ -619,6 +627,8 @@ class TrackingJobService:
                         cancel_check=cancel_check,
                         direction_priority=live_direction_priority,
                         competitive_isolation=job_competitive,
+                        multiscale_consensus=job_multiscale,
+                        profile=job.key.profile,
                     )
             with self._lock:
                 # Successful science return: mark complete only if we still own the key.
