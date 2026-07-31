@@ -481,30 +481,30 @@ app.innerHTML = `
 
   <nav class="workflow-strip" aria-label="Prototype workflow">
     <span><strong>1</strong> Load stack</span>
-    <span><strong>2</strong> Set voxel/Z/ROI</span>
-    <span><strong>3</strong> Preview threshold</span>
-    <span><strong>4</strong> Analyze</span>
-    <span><strong>5</strong> Download outputs</span>
-    <span><strong>6</strong> Log book</span>
+    <span><strong>2</strong> Pick object & threshold</span>
+    <span><strong>3</strong> Analyze</span>
+    <span><strong>4</strong> Results & downloads</span>
   </nav>
 
   <main class="layout">
-    <section class="panel" id="step-1-panel">
+    <section class="panel step-panel" id="step-1-panel">
       <div class="panel-title">
-        <h2><span class="step-badge">1</span> Stack</h2>
+        <h2><span class="step-badge">1</span> Load stack <span class="step-status" id="step-1-status">Not started</span></h2>
         <button id="inspect-btn" type="button">Inspect</button>
       </div>
       <label>
         Stack file
         <input id="file-input" type="file" accept=".tif,.tiff,.lsm,.czi,image/tiff" />
       </label>
+      <details class="advanced-details"><summary>or use a server path (large files)</summary>
       <label>
         Stack path (preferred for large stacks — no browser upload)
         <input id="path-input" type="text" placeholder="${PATH_PLACEHOLDER}" />
       </label>
       <p class="muted" style="margin: 0.35rem 0 0.6rem; font-size: 0.9rem;">
-        If both a file and a path are set, the local path is used (no upload). Paste the full path for large CZI/LSM stacks when the API can read the disk.
+        Big CZI/LSM files: paste the stack path instead of choosing the file (no upload).
       </p>
+      </details>
       <div id="session-banner" class="session-banner" hidden>
         <strong>File mode:</strong> first Inspect loads the stack once into server memory.
         Later Preview / Mesh / Analyze use that session and should <em>not</em> re-upload.
@@ -519,46 +519,34 @@ app.innerHTML = `
           <option value="manual">Manual override</option>
         </select>
       </label>
+      <div id="calibration-fields" hidden>
       <div class="grid">
         <label>
-          Voxel X (um)
+          Voxel X (µm)
           <input id="voxel-x" type="number" min="0" step="0.0001" value="1" disabled />
         </label>
         <label>
-          Voxel Y (um)
+          Voxel Y (µm)
           <input id="voxel-y" type="number" min="0" step="0.0001" value="1" disabled />
         </label>
         <label>
-          Voxel Z (um)
+          Voxel Z (µm)
           <input id="voxel-z" type="number" min="0" step="0.0001" value="1" disabled />
         </label>
       </div>
       <p id="calibration-help" class="calibration-help muted">
         Auto mode reads voxel spacing from TIFF/LSM/CZI metadata when available. Default 1×1×1 µm is a placeholder — do not trust surface area or volume until calibration is verified.
       </p>
+      </div>
       <div id="inspect-output" class="output muted">No stack inspected yet.</div>
     </section>
 
-    <section class="panel" id="step-2-panel">
+    <section class="panel step-panel" id="step-2-panel">
       <div class="panel-title">
-        <h2><span class="step-badge">2</span> Preview & Analyze</h2>
+        <h2><span class="step-badge">2</span> Pick object & threshold <span class="step-status" id="step-2-status">Not started</span></h2>
         <div class="button-row">
           <button id="preview-btn" class="secondary" type="button">Preview</button>
-          <button id="mesh-preview-btn" class="secondary" type="button">View 3D Mesh</button>
-          <button id="analyze-btn" type="button">Analyze</button>
         </div>
-      </div>
-      <div class="workflow-card">
-        <strong>Simple workflow</strong>
-        <ol class="workflow-steps">
-          <li><b>Inspect</b> the stack (use Stack path for big CZIs)</li>
-          <li><b>Pick your object</b> (Select Object on the preview)</li>
-          <li>Set <b>threshold</b> until the membrane looks right → Preview</li>
-          <li><b>Analyze</b> for CSV metrics · <b>View 3D Mesh</b> for shape</li>
-        </ol>
-        <p class="fieldset-hint muted" style="margin: 0;">
-          Leave mode on <b>Standard</b> for threshold segmentation, single-object tracking, and mesh export.
-        </p>
       </div>
       <div class="grid">
         <label class="wide">
@@ -578,48 +566,25 @@ app.innerHTML = `
         </label>
         <label class="button-label">
           Starting guess
-          <button id="suggest-threshold-btn" class="secondary" type="button">Suggest Threshold</button>
+          <button id="suggest-threshold-btn" class="secondary" type="button">Auto-estimate threshold</button>
           <span id="suggest-status" class="inline-status"></span>
         </label>
-        <label class="checkbox-row">
-          <input id="mesh-input" type="checkbox" checked />
-          Compute 3D surface area + volume in Analyze
-        </label>
-        <div class="skeleton-controls">
-          <label class="checkbox-row">
-            <input id="skeleton-input" type="checkbox" />
-            Enable skeleton (better perimeter)
-          </label>
-          <label class="skeleton-prune-wrap" for="skeleton-prune-input">
-            prune
-            <input
-              id="skeleton-prune-input"
-              type="number"
-              min="0"
-              step="1"
-              value="1"
-              inputmode="numeric"
-              title="Skeleton spur prune length (px)"
-            />
-            px
-          </label>
-        </div>
-        <details class="advanced-details">
-          <summary>Advanced options</summary>
-          <label class="checkbox-row" style="margin-top: 0.5rem;">
-            <input id="fallback-input" type="checkbox" />
-            Use fallback contours (no OpenCV)
-          </label>
-          <label class="checkbox-row" style="margin-top: 0.5rem;">
-            <input id="show-tracking-debug" type="checkbox" />
-            Show tracked centroid after Analyze
-          </label>
-        </details>
       </div>
       <div id="profile-warning" class="profile-warning" hidden>
         Experimental mode is much slower (minutes on big stacks). You must Select Object first.
         Prefer Standard unless the membrane is too broken for threshold.
       </div>
+      <div class="frame-control-wrap" style="margin: 1.5rem 0; padding: 0.5rem 0.25rem;">
+        <label class="frame-control" style="margin-bottom: 0;">
+          Preview slice
+          <div class="frame-control-row">
+            <input id="frame-slider" type="range" min="0" max="0" step="1" value="0" />
+            <input id="frame-input" type="number" min="0" step="1" value="0" />
+          </div>
+          <span id="frame-slice-label" class="inline-status frame-slice-label">Slice 1 of 1</span>
+        </label>
+      </div>
+      <button class="secondary" type="button" data-theatre-toggle="preview">Expand preview</button><div id="preview-output" class="preview-output muted">No preview rendered yet.</div>
       <fieldset>
         <legend>Pick this vesicle (recommended)</legend>
         <p class="fieldset-hint muted">
@@ -661,7 +626,7 @@ app.innerHTML = `
             <input id="object-seed-radius" type="number" min="1" placeholder="Radius (px)" value="10" />
           </label>
           <label>
-            Max Track Dist (um)
+            Max Track Dist (µm)
             <input id="object-seed-max-dist" type="number" min="0.1" step="0.1" placeholder="Auto" />
           </label>
         </div>
@@ -699,6 +664,8 @@ app.innerHTML = `
           Uncheck overlays to see the raw membrane; re-check to verify what is selected.
         </p>
       </fieldset>
+      <details class="advanced-details">
+        <summary>Optional: crop box (crowded field)</summary>
       <fieldset>
         <legend>Optional: crop box (if field is crowded)</legend>
         <p class="fieldset-hint muted">Drag a box on the preview (when not selecting an object) to crop neighbors away. Optional if you already selected the object.</p>
@@ -713,16 +680,107 @@ app.innerHTML = `
           <span id="roi-status" class="inline-status">Full field — largest object auto-selected</span>
         </div>
       </fieldset>
-      <div class="frame-control-wrap" style="margin: 1.5rem 0; padding: 0.5rem 0.25rem;">
-        <label class="frame-control" style="margin-bottom: 0;">
-          Preview slice
-          <div class="frame-control-row">
-            <input id="frame-slider" type="range" min="0" max="0" step="1" value="0" />
-            <input id="frame-input" type="number" min="0" step="1" value="0" />
-          </div>
-          <span id="frame-slice-label" class="inline-status frame-slice-label">Slice 1 of 1</span>
-        </label>
+      </details>
+      <details class="advanced-details">
+        <summary>Optional: 3D volume navigation (display only)</summary>
+      <div
+        id="volume-viewer-panel"
+        class="volume-viewer-panel"
+        data-state="idle"
+        aria-label="Calibrated 3D volume navigation"
+      >
+        <button class="secondary" type="button" data-theatre-toggle="volume">Expand volume</button><div class="volume-viewer-header">
+          <h3>3D volume navigation</h3>
+          <span class="volume-nav-badge" id="volume-nav-badge">${NAVIGATION_ONLY_LABEL}</span>
+        </div>
+        <p class="muted" style="margin: 0; font-size: 0.9rem;">
+          Optional coarse display level for spatial context. Does not segment or measure.
+          2D preview stays available if 3D fails or is turned off.
+        </p>
+        <div class="volume-viewer-controls">
+          <label class="checkbox-row" style="min-width: auto;">
+            <input id="volume-viewer-enable" type="checkbox" checked />
+            Enable 3D volume
+          </label>
+          <details class="volume-tuning">
+            <summary>Adjust display</summary>
+            <label>
+              Blend
+              <select id="volume-blend-mode">
+                <option value="mip" selected>MIP</option>
+                <option value="composite">Alpha blend</option>
+              </select>
+            </label>
+            <label>Exposure <output id="volume-exposure-value">+1.00 EV</output><input id="volume-exposure" type="range" min="-4" max="8" step="0.25" value="1" title="Display-only brightness" /></label>
+            <label>Contrast <output id="volume-contrast-value">1.10×</output><input id="volume-contrast" type="range" min="0.25" max="4" step="0.05" value="1.1" title="Display-only contrast" /></label>
+            <label>Gamma <output id="volume-gamma-value">1.20</output><input id="volume-gamma" type="range" min="0.2" max="4" step="0.05" value="1.2" title="Display-only gamma" /></label>
+            <label id="volume-opacity-label">Opacity / density <output id="volume-opacity-value">0.80×</output><input id="volume-opacity" type="range" min="0" max="4" step="0.05" value="0.8" title="Display-only density gain" /></label>
+            <label id="volume-black-level-label">Window low <output id="volume-black-level-value">0%</output><input id="volume-black-level" type="range" min="0" max="0.95" step="0.01" value="0" title="Display-only low window bound" /></label>
+            <button id="volume-auto-btn" class="secondary" type="button">Auto intensity</button>
+            <button id="volume-reset-btn" class="secondary" type="button">Reset intensity</button>
+          </details>
+          <button id="volume-fit-btn" class="secondary" type="button" title="Re-fit camera to full physical bounds">Fit view</button>
+          <button id="volume-reload-btn" class="secondary" type="button">Load / refresh 3D</button>
+          <button id="volume-seed-pick-btn" class="secondary" type="button" title="Click in the volume to set the same ObjectSeed as 2D">
+            Pick seed in 3D
+          </button>
+        </div>
+        <div id="volume-viewer-canvas-wrap" class="volume-viewer-canvas-wrap" hidden>
+          <div id="volume-vtk-root" class="volume-vtk-root"></div>
+        </div>
+        <div id="volume-viewer-fallback" class="volume-viewer-fallback muted">
+          Inspect a stack to build a display-only volume (or use Load / refresh 3D).
+        </div>
+        <div id="volume-viewer-status" class="volume-viewer-status">Idle</div>
+        <div id="volume-viewer-meta" class="volume-viewer-meta" hidden></div>
       </div>
+      </details>
+      <details class="advanced-details">
+        <summary>Advanced options</summary>
+        <div class="skeleton-controls">
+          <label class="checkbox-row">
+            <input id="skeleton-input" type="checkbox" />
+            Enable skeleton (better perimeter)
+          </label>
+          <label class="skeleton-prune-wrap" for="skeleton-prune-input">
+            prune
+            <input
+              id="skeleton-prune-input"
+              type="number"
+              min="0"
+              step="1"
+              value="1"
+              inputmode="numeric"
+              title="Skeleton spur prune length (px)"
+            />
+            px
+          </label>
+        </div>
+        <label class="checkbox-row" style="margin-top: 0.5rem;">
+          <input id="fallback-input" type="checkbox" />
+          Use fallback contours (no OpenCV)
+        </label>
+        <label class="checkbox-row" style="margin-top: 0.5rem;">
+          <input id="show-tracking-debug" type="checkbox" />
+          Show tracked centroid after Analyze
+        </label>
+      </details>
+    </section>
+
+    <section class="panel step-panel" id="analyze-panel">
+      <div class="panel-title">
+        <h2><span class="step-badge">3</span> Analyze <span class="step-status" id="step-3-status">Not started</span></h2>
+        <div class="button-row">
+          <button id="analyze-btn" type="button">Analyze</button>
+          <button id="mesh-preview-btn" class="secondary" type="button">View 3D Mesh</button>
+        </div>
+      </div>
+      <label class="checkbox-row">
+        <input id="mesh-input" type="checkbox" checked />
+        Compute 3D surface area + volume in Analyze
+      </label>
+      <details class="advanced-details">
+        <summary>Optional: limit slice range</summary>
       <fieldset>
         <legend>Slice range for analysis/3D</legend>
         <div class="range-pair">
@@ -744,63 +802,52 @@ app.innerHTML = `
           <span id="z-range-status" class="inline-status">Full stack (all slices)</span>
         </div>
       </fieldset>
-      <button class="secondary" type="button" data-theatre-toggle="preview">Expand preview</button><div id="preview-output" class="preview-output muted">No preview rendered yet.</div>
-      <div
-        id="volume-viewer-panel"
-        class="volume-viewer-panel"
-        data-state="idle"
-        aria-label="Calibrated 3D volume navigation"
-      >
-        <button class="secondary" type="button" data-theatre-toggle="volume">Expand volume</button><div class="volume-viewer-header">
-          <h3>3D volume navigation</h3>
-          <span class="volume-nav-badge" id="volume-nav-badge">${NAVIGATION_ONLY_LABEL}</span>
-        </div>
-        <p class="muted" style="margin: 0; font-size: 0.9rem;">
-          Optional coarse display level for spatial context. Does not segment or measure.
-          2D preview stays available if 3D fails or is turned off.
-        </p>
-        <div class="volume-viewer-controls">
-          <label class="checkbox-row" style="min-width: auto;">
-            <input id="volume-viewer-enable" type="checkbox" checked />
-            Enable 3D volume
-          </label>
-          <label>
-            Blend
-            <select id="volume-blend-mode">
-              <option value="mip" selected>MIP</option>
-              <option value="composite">Alpha blend</option>
-            </select>
-          </label>
-          <label>Exposure <output id="volume-exposure-value">+1.00 EV</output><input id="volume-exposure" type="range" min="-4" max="8" step="0.25" value="1" title="Display-only brightness" /></label>
-          <label>Contrast <output id="volume-contrast-value">1.10×</output><input id="volume-contrast" type="range" min="0.25" max="4" step="0.05" value="1.1" title="Display-only contrast" /></label>
-          <label>Gamma <output id="volume-gamma-value">1.20</output><input id="volume-gamma" type="range" min="0.2" max="4" step="0.05" value="1.2" title="Display-only gamma" /></label>
-          <label id="volume-opacity-label">Opacity / density <output id="volume-opacity-value">0.80×</output><input id="volume-opacity" type="range" min="0" max="4" step="0.05" value="0.8" title="Display-only density gain" /></label>
-          <label id="volume-black-level-label">Window low <output id="volume-black-level-value">0%</output><input id="volume-black-level" type="range" min="0" max="0.95" step="0.01" value="0" title="Display-only low window bound" /></label>
-          <button id="volume-auto-btn" class="secondary" type="button">Auto intensity</button>
-          <button id="volume-reset-btn" class="secondary" type="button">Reset intensity</button>
-          <button id="volume-fit-btn" class="secondary" type="button" title="Re-fit camera to full physical bounds">Fit view</button>
-          <button id="volume-reload-btn" class="secondary" type="button">Load / refresh 3D</button>
-          <button id="volume-seed-pick-btn" class="secondary" type="button" title="Click in the volume to set the same ObjectSeed as 2D">
-            Pick seed in 3D
-          </button>
-        </div>
-        <div id="volume-viewer-canvas-wrap" class="volume-viewer-canvas-wrap" hidden>
-          <div id="volume-vtk-root" class="volume-vtk-root"></div>
-        </div>
-        <div id="volume-viewer-fallback" class="volume-viewer-fallback muted">
-          Inspect a stack to build a display-only volume (or use Load / refresh 3D).
-        </div>
-        <div id="volume-viewer-status" class="volume-viewer-status">Idle</div>
-        <div id="volume-viewer-meta" class="volume-viewer-meta" hidden></div>
-      </div>
+      </details>
       <button class="secondary" type="button" data-theatre-toggle="mesh">Expand mesh</button><div id="mesh-output" class="mesh-output muted">No 3D mesh rendered yet.</div>
       <div id="analysis-summary" class="output muted">No analysis run yet.</div>
     </section>
   </main>
 
+  <section class="results step-panel" id="step-5-panel">
+    <div class="results-header panel-title">
+      <h2><span class="step-badge">4</span> Results & downloads <span class="step-status" id="step-4-status">Not started</span></h2>
+      <div class="button-row">
+        <button id="reanalyze-excluded-btn" class="secondary" type="button" disabled>Re-analyze with exclusions</button>
+        <button id="download-report-btn" class="secondary" type="button" disabled>Download Report</button>
+        <button id="download-manifest-btn" class="secondary" type="button" disabled>Download Manifest</button>
+        <button id="download-csv-btn" class="secondary" type="button" disabled>Download CSV</button>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Exclude</th>
+            <th>Frame</th>
+            <th>Method</th>
+            <th>Contour</th>
+            <th>Slice area (µm²)</th>
+            <th>Slice perimeter (µm)</th>
+            <th>Eq. diameter (µm)</th>
+            <th>Aspect</th>
+            <th>Elongation</th>
+            <th>Def. index</th>
+            <th>Solidity</th>
+            <th>Circularity</th>
+          </tr>
+        </thead>
+        <tbody id="results-body">
+          <tr><td colspan="12" class="muted">Run an analysis to populate metrics.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <details class="developer-tools"><summary>Advanced tools (batch, sweep, QA)</summary>
+
   <section class="results" id="step-3-panel">
     <div class="results-header">
-      <h2><span class="step-badge">3</span> Batch</h2>
+      <h2>Batch analysis</h2>
       <div class="button-row">
         <button id="batch-analyze-btn" type="button">Analyze Batch</button>
         <button id="download-batch-report-btn" class="secondary" type="button" disabled>Download Batch Report</button>
@@ -821,7 +868,7 @@ app.innerHTML = `
             <th>Profile</th>
             <th>Frames</th>
             <th>Valid</th>
-            <th>Mean area (um2)</th>
+            <th>Mean area (µm²)</th>
             <th>Mean def. index</th>
             <th>Mean circularity</th>
           </tr>
@@ -835,7 +882,7 @@ app.innerHTML = `
 
   <section class="results">
     <div class="results-header">
-      <h2><span class="step-badge">3</span> Threshold Sweep</h2>
+      <h2>Threshold sweep</h2>
       <div class="button-row">
         <button id="sweep-btn" type="button">Run Sweep</button>
         <button id="download-sweep-report-btn" class="secondary" type="button" disabled>Download Sweep Report</button>
@@ -864,7 +911,7 @@ app.innerHTML = `
             <th>Threshold</th>
             <th>Valid fraction</th>
             <th>Valid frames</th>
-            <th>Mean area (um2)</th>
+            <th>Mean area (µm²)</th>
             <th>Mean def. index</th>
             <th>Mean circularity</th>
             <th>Warnings</th>
@@ -879,7 +926,7 @@ app.innerHTML = `
 
   <section class="results" id="step-4-panel">
     <div class="results-header">
-      <h2><span class="step-badge">4</span> CSV Validation</h2>
+      <h2>CSV validation (QA)</h2>
       <button id="validate-csv-btn" type="button">Validate</button>
     </div>
     <div class="grid validation-grid">
@@ -927,44 +974,9 @@ app.innerHTML = `
     </div>
   </section>
 
-  <section class="results" id="step-5-panel">
-    <div class="results-header">
-      <h2><span class="step-badge">5</span> Frame Metrics</h2>
-      <div class="button-row">
-        <button id="reanalyze-excluded-btn" class="secondary" type="button" disabled>Re-analyze with exclusions</button>
-        <button id="download-report-btn" class="secondary" type="button" disabled>Download Report</button>
-        <button id="download-manifest-btn" class="secondary" type="button" disabled>Download Manifest</button>
-        <button id="download-csv-btn" class="secondary" type="button" disabled>Download CSV</button>
-      </div>
-    </div>
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Exclude</th>
-            <th>Frame</th>
-            <th>Method</th>
-            <th>Contour</th>
-            <th>Slice area (um2)</th>
-            <th>Slice perimeter (um)</th>
-            <th>Eq. diameter (um)</th>
-            <th>Aspect</th>
-            <th>Elongation</th>
-            <th>Def. index</th>
-            <th>Solidity</th>
-            <th>Circularity</th>
-          </tr>
-        </thead>
-        <tbody id="results-body">
-          <tr><td colspan="12" class="muted">Run an analysis to populate metrics.</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </section>
-
   <section class="results" id="step-6-panel">
     <div class="results-header">
-      <h2><span class="step-badge">6</span> Log Book</h2>
+      <h2>Recent actions</h2>
       <div class="button-row">
         <button id="clear-logs-btn" class="secondary" type="button">Clear Logs</button>
         <button id="download-logs-btn" class="secondary" type="button">Export Logs (JSON)</button>
@@ -985,6 +997,7 @@ app.innerHTML = `
       </table>
     </div>
   </section>
+  </details>
 `;
 
 const apiStatus = mustElement<HTMLDivElement>("api-status");
@@ -1208,6 +1221,7 @@ mustElement<HTMLSelectElement>("calibration-mode").addEventListener("change", (e
   mustElement<HTMLInputElement>("voxel-x").disabled = isAuto;
   mustElement<HTMLInputElement>("voxel-y").disabled = isAuto;
   mustElement<HTMLInputElement>("voxel-z").disabled = isAuto;
+  syncCalibrationFieldsVisibility();
 });
 
 mustElement<HTMLButtonElement>("analyze-btn").addEventListener("click", () => {
@@ -1458,17 +1472,72 @@ downloadSweepReportButton.addEventListener("click", () => {
   downloadLatestSweepReport();
 });
 
-// Scroll-into-view workflow strip navigation
+// Stepper: show one workflow step panel at a time (steps 2-4 start closed).
 const workflowSpans = document.querySelectorAll(".workflow-strip span");
-workflowSpans.forEach((span, index) => {
-  span.addEventListener("click", () => {
-    const stepId = `step-${index + 1}-panel`;
-    const element = document.getElementById(stepId);
-    if (element) {
-      element.scrollIntoView({ behavior: "smooth", block: "start" });
+const workflowStepTargets = ["step-1-panel", "step-2-panel", "analyze-panel", "step-5-panel"];
+let currentStep = 0;
+
+function openStep(index: number, scroll = false): void {
+  currentStep = index;
+  workflowStepTargets.forEach((id, i) => {
+    const section = document.getElementById(id);
+    if (!section) return;
+    section.classList.toggle("step-closed", i !== index);
+    const status = document.getElementById(`step-${i + 1}-status`);
+    if (status && status.textContent === "Not started" && i < index) {
+      status.textContent = "Skipped";
+    }
+  });
+  workflowSpans.forEach((span, i) => span.classList.toggle("active", i === index));
+  const targetId = workflowStepTargets[index];
+  if (scroll && targetId) {
+    document.getElementById(targetId)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+}
+
+function completeStep(index: number): void {
+  const status = document.getElementById(`step-${index + 1}-status`);
+  const alreadyDone = status?.textContent === "Done";
+  if (status) {
+    status.textContent = "Done";
+    status.classList.add("done");
+  }
+  // Only auto-advance on the first Done transition, so status refreshes
+  // (e.g. toggling a tool in step 2) don't re-scroll the user.
+  if (!alreadyDone && index === currentStep && index < 3) {
+    openStep(index + 1, true);
+  }
+}
+
+// Clicking a closed step's heading row reopens it; the open step's title is inert.
+workflowStepTargets.forEach((id, i) => {
+  const section = document.getElementById(id);
+  const title = section?.querySelector(".panel-title");
+  title?.addEventListener("click", () => {
+    if (section?.classList.contains("step-closed")) {
+      openStep(i, false);
     }
   });
 });
+
+// Workflow strip navigation: jump straight to a step.
+workflowSpans.forEach((span, index) => {
+  span.addEventListener("click", () => {
+    openStep(index, true);
+  });
+});
+
+function syncCalibrationFieldsVisibility(): void {
+  const mode = mustElement<HTMLSelectElement>("calibration-mode").value;
+  const fields = document.getElementById("calibration-fields");
+  if (fields) {
+    fields.hidden = mode === "auto";
+  }
+}
+
+// Startup: only step 1 open; calibration fields follow the auto/manual mode.
+openStep(0, false);
+syncCalibrationFieldsVisibility();
 
 // Log Book controls
 mustElement<HTMLButtonElement>("clear-logs-btn").addEventListener("click", () => {
@@ -1704,6 +1773,7 @@ async function inspectStack(): Promise<void> {
         payload.stack_id ? `, stack_id: ${payload.stack_id}` : ""
       }`
     );
+    completeStep(0);
     // Display-only volume: never blocks inspect/2D; fails open to 2D workflow.
     void loadVolumeViewer({ reason: "inspect" });
   } catch (error) {
@@ -2608,6 +2678,11 @@ async function analyzeStack(options: { keepExclusions?: boolean } = {}): Promise
     }
     excludedFrameIndices = new Set(payload.excluded_frames ?? excluded);
     renderAnalysis(payload);
+    completeStep(2);
+    const resultsStepStatus = document.getElementById("step-4-status");
+    if (resultsStepStatus && resultsStepStatus.textContent === "Not started") {
+      resultsStepStatus.textContent = "Ready";
+    }
     logAction("Analyze Stack Succeeded", `Source: "${payload.source_path}", Valid frames: ${payload.valid_frame_count}/${payload.frame_count}`);
   } catch (error) {
     const msg = errorMessage(error, usedUpload ? "upload" : "general");
@@ -3655,6 +3730,11 @@ function updateObjectSeedStatus(): void {
     }
   }
   syncCompetitiveTrackingControl();
+  // Stepper: any flow that leaves a seed in place (2D drag, polygon, 3D pick)
+  // means the object has been picked.
+  if (selectedObjectSeed) {
+    completeStep(1);
+  }
 }
 
 function updateFrameRange(): void {
@@ -4735,6 +4815,7 @@ function applyProjectSettings(settings: ProjectSettings): void {
     vx.disabled = false;
     vy.disabled = false;
     vz.disabled = false;
+    syncCalibrationFieldsVisibility();
   }
   if (settings.roi !== undefined) {
     mustElement<HTMLInputElement>("roi-xmin").value = formatInputNumber(settings.roi.xmin);
