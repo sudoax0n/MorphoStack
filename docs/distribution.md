@@ -34,14 +34,14 @@ Builds `apps/web`, then `python -m build --wheel`. The wheel embeds UI files as 
 Local install:
 
 ```powershell
-pipx install dist/morphostack-0.1.0-py3-none-any.whl
+pipx install dist/morphostack-1.0.0-py3-none-any.whl
 morphostack app
 ```
 
 Full analysis extras:
 
 ```bash
-pip install "morphostack[all] @ file:///absolute/path/to/morphostack-0.1.0-py3-none-any.whl"
+pip install "morphostack[all] @ file:///absolute/path/to/morphostack-1.0.0-py3-none-any.whl"
 ```
 
 ## Local wheel verification
@@ -55,14 +55,14 @@ Before tagging a release:
 ## GitHub Releases
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v1.0.0
+git push origin v1.0.0
 ```
 
 `.github/workflows/release.yml` builds the web UI, packages the wheel, and uploads `dist/*.whl` to the release.
 
 ```bash
-pipx install https://github.com/sudoax0n/MorphoStack/releases/download/v0.1.0/morphostack-0.1.0-py3-none-any.whl
+pipx install https://github.com/sudoax0n/MorphoStack/releases/download/v1.0.0/morphostack-1.0.0-py3-none-any.whl
 morphostack app
 ```
 

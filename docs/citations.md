@@ -13,7 +13,7 @@ tools, please:
 
 Suggested citation:
 
-> Abhinav. *MorphoStack: local morphometry toolkit for microscopy Z-stacks* (v0.1.0). 2026.  
+> Abhinav. *MorphoStack: local morphometry toolkit for microscopy Z-stacks* (v1.0.0). 2026.  
 > https://github.com/sudoax0n/MorphoStack
 
 BibTeX-style:
@@ -22,7 +22,7 @@ BibTeX-style:
 @software{morphostack2026,
   author  = {Abhinav},
   title   = {MorphoStack: local morphometry toolkit for microscopy Z-stacks},
-  version = {0.1.0},
+  version = {1.0.0},
   year    = {2026},
   url     = {https://github.com/sudoax0n/MorphoStack}
 }

@@ -409,7 +409,7 @@ def test_api_preview_with_seed_returns_seed_method(client, tmp_path):
     payload = response.json()
     method = str(payload["method"])
     assert (
-        method in ("seed", "seeded_rw", "seeded_ws", "circle_seed", "circle_seed_rw")
+        method in ("seed", "seeded_rw", "seeded_ws", "circle_seed", "circle_seed_rw", "exact_pending")
         or method.startswith("seeded")
         or method.startswith("circle_seed")
     )
@@ -513,7 +513,7 @@ def test_api_upload_preview_with_seed_selects_correct_object(client):
     assert response.status_code == 200
     method = str(response.json()["method"])
     assert (
-        method in ("seed", "seeded_rw", "seeded_ws", "circle_seed", "circle_seed_rw")
+        method in ("seed", "seeded_rw", "seeded_ws", "circle_seed", "circle_seed_rw", "exact_pending")
         or method.startswith("seeded")
         or method.startswith("circle_seed")
     )

@@ -2,7 +2,7 @@ cff-version: 1.2.0
 message: "If you use MorphoStack, please cite it as below."
 type: software
 title: "MorphoStack"
-version: "0.1.0"
+version: "1.0.0"
 date-released: "2026-07-09"
 abstract: >-
   Local morphometry toolkit for microscopy Z-stacks (vesicle/GUV analysis,
@@ -30,5 +30,5 @@ preferred-citation:
   authors:
     - family-names: Abhinav
   year: 2026
-  version: "0.1.0"
+  version: "1.0.0"
   url: "https://github.com/sudoax0n/MorphoStack"

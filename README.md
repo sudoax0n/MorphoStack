@@ -20,7 +20,7 @@
 </p>
 
 <p align="center">
-  <code>morphostack</code> &nbsp;·&nbsp; short alias <code>mst</code> &nbsp;·&nbsp; v0.1.0<br/>
+  <code>morphostack</code> &nbsp;·&nbsp; short alias <code>mst</code> &nbsp;·&nbsp; v1.0.0<br/>
   <strong>Dual license:</strong> AGPL-3.0-only <em>or</em> PolyForm Noncommercial 1.0.0
 </p>
 
@@ -122,8 +122,8 @@ morphostack init --web
 Both entry points work (same code path):
 
 ```bash
-morphostack --version    # MorphoStack 0.1.0
-mst --version            # MorphoStack 0.1.0
+morphostack --version    # MorphoStack 1.0.0
+mst --version            # MorphoStack 1.0.0
 ```
 
 ```bash
@@ -210,7 +210,7 @@ When reporting analyses that use public DOPC supplementary stacks, cite the orig
 
 If you use this software, please cite it (GitHub: “Cite this repository” / [`CITATION.cff`](CITATION.cff)):
 
-> Abhinav. *MorphoStack: local morphometry toolkit for microscopy Z-stacks* (v0.1.0). 2026. https://github.com/sudoax0n/MorphoStack
+> Abhinav. *MorphoStack: local morphometry toolkit for microscopy Z-stacks* (v1.0.0). 2026. https://github.com/sudoax0n/MorphoStack
 
 Also credit MorphoStack by name in papers, theses, and derivative tools when practical. Library and dataset citations: [docs/citations.md](docs/citations.md).
 

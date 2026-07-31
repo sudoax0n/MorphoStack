@@ -1,11 +1,11 @@
 # Methods Supplement (Draft)
 
-Paste-ready methods text for vesicle/GUV and RBC shape analysis with MorphoStack **v0.1.0**.  
+Paste-ready methods text for vesicle/GUV and RBC shape analysis with MorphoStack **v1.0.0**.  
 Replace bracketed placeholders with instrument-specific values before submission. Read [limitations.md](limitations.md) first.
 
 ## Image preprocessing
 
-Microscopy Z-stacks in TIFF, LSM, or CZI format were loaded in MorphoStack (v0.1.0). Multi-channel or color stacks were converted to grayscale for analysis. Slices were optionally cropped to a rectangular region of interest and trimmed to a selected Z-frame range `[zmin, zmax)`. Voxel spacing was taken from file metadata when available; otherwise manual overrides of `[vx, vy, vz]` µm were applied after verification against the acquisition log. Analyses that retained the software default spacing of 1 × 1 × 1 µm were treated as uncalibrated and were not used for absolute biological dimensions.
+Microscopy Z-stacks in TIFF, LSM, or CZI format were loaded in MorphoStack (v1.0.0). Multi-channel or color stacks were converted to grayscale for analysis. Slices were optionally cropped to a rectangular region of interest and trimmed to a selected Z-frame range `[zmin, zmax)`. Voxel spacing was taken from file metadata when available; otherwise manual overrides of `[vx, vy, vz]` µm were applied after verification against the acquisition log. Analyses that retained the software default spacing of 1 × 1 × 1 µm were treated as uncalibrated and were not used for absolute biological dimensions.
 
 ## Object selection (crowded fields)
 

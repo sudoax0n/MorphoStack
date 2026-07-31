@@ -59,7 +59,7 @@ Design rule borrowed from brand-kit thinking:
 │  [logo]  MorphoStack                                     │
 │  tagline · profiles · CLI/API/UI                         │
 │  ████████████████  HERO BANNER  ████████████████         │
-│  morphostack · mst · v0.1.0 · dual license               │
+│  morphostack · mst · v1.0.0 · dual license               │
 ├──────────────────────────────────────────────────────────┤
 │  SEE IT BEFORE YOU READ IT                               │
 │  ┌─────────────────┐  ┌─────────────────┐                │

@@ -29,6 +29,11 @@ from validation.promotion.schema import load_corpus_dir  # noqa: E402
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Windows consoles default to cp1252; the report prints ≥ and other
+    # non-ASCII characters. Reconfigure so the BLOCKED/INCOMPLETE path can
+    # still print and return its documented exit codes.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument(
         "--corpus",

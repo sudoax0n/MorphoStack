@@ -386,8 +386,11 @@ def test_analyze_writes_csv_from_synthetic_tiff(tmp_path, capsys):
     assert manifest["voxel_source"] == "override"
     assert manifest["summary"]["metrics"]["area_um2"]["mean"] == 9.0
     csv_text = output_path.read_text(encoding="utf-8")
-    assert "frame_index,threshold,profile,method,excluded,has_contour" in csv_text
-    assert "0,100.0,vesicle,fallback,False,True" in csv_text
+    assert (
+        "frame_index,threshold,requested_threshold,effective_threshold,threshold_semantics,"
+        "profile,method,excluded,has_contour" in csv_text
+    )
+    assert "0,100.0,100.0,100.0,global_intensity,vesicle,fallback,False,True" in csv_text
 
 
 def test_analyze_can_write_markdown_report_from_synthetic_tiff(tmp_path, capsys):
@@ -500,7 +503,7 @@ def test_analyze_uses_project_defaults_from_synthetic_tiff(tmp_path, capsys):
     assert manifest["profile"] == "rbc"
     assert manifest["threshold"] == 100
     csv_text = output_path.read_text(encoding="utf-8")
-    assert "0,100.0,rbc,fallback,False,True" in csv_text
+    assert "0,100.0,100.0,100.0,global_intensity,rbc,fallback,False,True" in csv_text
 
 
 def test_analyze_writes_mesh_export_with_z_range_and_seed(tmp_path, capsys):

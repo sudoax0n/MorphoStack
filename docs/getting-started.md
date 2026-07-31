@@ -42,8 +42,8 @@ morphostack init --web
 Confirm both commands:
 
 ```bash
-morphostack --version   # MorphoStack 0.1.0
-mst --version           # MorphoStack 0.1.0
+morphostack --version   # MorphoStack 1.0.0
+mst --version           # MorphoStack 1.0.0
 ```
 
 ## First analysis (CLI)
