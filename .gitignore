@@ -58,6 +58,11 @@ researches/
 private/
 notes/
 
+# --- Imaris viewer state & local command transcripts ---
+imarisviewer.gpr
+imarisviewer.rep/
+*-local-command-*.txt
+
 # --- Personal / agent-only notes (NEVER ship) ---
 AGENTS.md
 improvements.md
