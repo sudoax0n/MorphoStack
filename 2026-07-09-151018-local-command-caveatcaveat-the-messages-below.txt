@@ -1,0 +1,1157 @@
+╭─── Claude Code v2.1.204 ─────────────────────────────────────────────────────╮
+│                                  │ Tips for getting started                  │
+│           Welcome back!          │ Run /init to create a CLAUDE.md file wit… │
+│                                  │ ───────────────────────────────────────── │
+│              ▐▛███▜▌             │ What's new                                │
+│             ▝▜█████▛▘            │ Added an auto mode rule that blocks tamp… │
+│               ▘▘ ▝▝              │ Fixed `--json-schema` silently producing… │
+│                                  │ Fixed a message sent while Claude was wo… │
+│   Opus 4.6 · API Usage Billing   │ /release-notes for more                   │
+│          D:\morphostack          │                                           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+
+> /model                                                                        
+  ⎿  Set model to Opus 4.6 and saved as your default for new sessions
+
+> E:\Temp\MorphoStack-handoff-2026-07-09.md, just audit, dont edit code yet,    
+  the rendering issue is solved, but rendering is way too slow, not fiji level. 
+  the green roi is working for first few frames but going blank after some, my  
+  thought is that object tracking is not working or the script might be dumb.   
+  rest is upto u. again, dont code yet.                                         
+
+  Thought for 57s (ctrl+o to expand)
+
+● Let me read the handoff document and then explore the relevant code.
+
+  Thought for 5s, read 2 files (ctrl+o to expand)
+
+● Good, I've read the handoff. Now let me dig into the two issues you flagged:
+  slow rendering and ROI going blank after a few frames. I'll read the core
+  files in parallel.
+
+  Thought for 5s, read 4 files (ctrl+o to expand)
+
+● Let me also check the frontend to understand how preview requests are fired
+  during scrubbing.
+
+  Thought for 5s, read 1 file (ctrl+o to expand)
+
+● Let me search for the key preview-related logic in the frontend.
+
+  Thought for 5s, searched for 2 patterns, read 1 file (ctrl+o to expand)
+
+● Let me find how the frame slider triggers preview and how the object seed is
+  managed across scrubs.
+
+  Thought for 42s, searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+● I've read through the key files. Here's the audit.
+
+  ---
+  Audit: Two Issues
+
+  1. Preview rendering too slow (not Fiji-level)
+
+  Root cause: No tracking cache between /preview calls. Every Z-scrub re-walks
+  the entire chain from seed_frame to target_frame from scratch.
+
+  The target_frame fix was correct — it stopped walking the full bidirectional
+  113 frames. But scrubbing to frame 80 from seed at frame 50 still walks 30
+  frames, each running segment_slice_seeded, which does:
+  - Gaussian blur
+  - Otsu threshold
+  - Connected component labeling + fill holes
+  - Contour extraction
+  - And in the worst case, 9 attempts per frame (3 center positions x 3 radii,
+  lines 488-514 of seeded_vesicle.py)
+  - Plus a random_walker fallback (_try_rw_ws_in_disk) which is expensive scipy
+
+  So frame 80 = ~30 frames x up to 9 calls = ~270 segmentations per scrub. There
+  is zero caching between requests — app.py:356 creates a fresh
+  track_seeded_vesicle_stack call every time.
+
+  Why Fiji is instant: Fiji doesn't segment on scrub. It shows the raw image
+  with an OvalRoi overlay. LimeSeg runs the fitting once as a separate batch
+  operation, not per-frame on scrub.
+
+  Fix direction: Cache the tracking results keyed by (stack_id_or_path, seed_x, 
+  seed_y, seed_frame, seed_radius). On scrub to frame N+1, only compute one more
+  frame instead of re-walking from scratch. The handoff called this out
+  explicitly (priority #2).
+
+  2. Green ROI goes blank after some frames
+
+  Root cause: Tracking genuinely loses the vesicle. This is not a UI bug — it's
+  the segmentation failing at difficult Z planes. When sres.ok is False,
+  app.py:437-465 draws an empty overlay (just the seed marker, no green
+  contour).
+
+  The tracking fails because of cascading issues in propagate()
+  (seeded_vesicle.py:477-527):
+
+  1. Fixed ref_area from equator: ref_area = max(first.area_px, 1.0) (line 471)
+  is the seed-frame area. At the poles of a GUV, the cross-section shrinks well
+  below 0.25 * ref_area, hitting the min_area_ratio gate (line 505). This is
+  geometrically correct — polar slices of a sphere really do shrink — but the
+  gate doesn't adapt.
+  2. Otsu failure on weak slices: _adaptive_threshold_sparse uses Otsu on pixels
+  inside the disk. At weak-signal Z planes (near vesicle poles), there's not
+  enough membrane signal to separate from background, so either everything is
+  foreground or nothing is.
+  3. Gap-then-drift: After a gap frame, cx, cy stays at the last good center
+  (line 521: the continue skips the cx, cy = res.center_xy update). If the
+  vesicle is floating laterally through Z, the search center doesn't track the
+  drift through gaps, making subsequent recovery harder.
+  4. RW fallback area gate: Even the _try_rw_ws_in_disk random walker fallback
+  has its own area rejection (ref_area * 0.2 to ref_area * 2.5, line 401), which
+  compounds with the same fixed-ref problem.
+
+  This matches bugs #9 and #11 from the handoff, both marked "Partial". The
+  tracking works for the first several frames where the cross-section is near
+  the equator, then drops out as it approaches the poles.
+
+  Fix direction:
+  - Adaptive ref_area: update the reference area as you walk (rolling average or
+  gradual decay toward current slice area) instead of locking to seed frame
+  - More forgiving area gates at the extremes (allow smaller fractions at high Z
+  distance from seed)
+  - After gaps, extrapolate the center drift direction instead of holding
+  position
+  - The Polar-DP approach from the Gemini research (handoff priority #4) would
+  sidestep this entirely for near-round GUVs
+
+  ---
+  Summary: The two issues are related but separate. Speed needs a tracking cache
+  so scrub doesn't re-walk from scratch. The blank ROI is the tracking
+  algorithm genuinely losing the vesicle at challenging Z planes due to rigid
+  area gates and fixed reference area. Both need code changes, but the cache is
+  lower risk / higher payoff for daily use, while the tracking robustness is the
+  harder CV problem.
+
+  Want me to plan the fixes?
+
+✻ Crunched for 2m 50s
+
+> yes create a document for the plan, and except for these two issues, what     
+  else did u audit accordning to the handoff document?                          
+
+  Thought for 6s (ctrl+o to expand)
+
+● Let me verify the other bugs from the handoff against the current code before
+  writing the plan.
+
+● 7 background agents launched (↓ to manage)
+   ├ Audit handoff bug #2 (suggest threshold OOM)
+   ├ Audit handoff bug #3 (inspect 500 on CZI)
+   ├ Audit handoff bug #5,6,7 (overlay issues)
+   ├ Audit handoff bug #8,13 (circle drag + overlays)
+   ├ Audit handoff bug #10 (multi-GUV merge)
+   ├ Audit stack_cache and session store
+   └ Audit tests and grayscale loading
+
+  Thought for 21s (ctrl+o to expand)
+
+● Waiting on the audit agents to report back before writing the plan document.
+
+✻ Crunched for 34s
+
+● Agent "Audit handoff bug #2 (suggest threshold OOM)" finished · 18s
+
+● Agent "Audit handoff bug #10 (multi-GUV merge)" finished · 6s
+
+  Thought for 5s (ctrl+o to expand)
+
+● Got results for bugs #2 and #10. Waiting on the remaining 5 agents.
+
+✻ Churned for 6s
+
+● Agent "Audit stack_cache and session store" finished · 6s
+
+● Agent "Audit handoff bug #8,13 (circle drag + overlays)" finished · 15s
+
+  Thought for 4s (ctrl+o to expand)
+
+● Got cache audit and UI audit back. Still waiting on 3 more agents.
+
+✻ Cogitated for 5s
+
+● Agent "Audit handoff bug #3 (inspect 500 on CZI)" finished · 29s
+
+  Thought for 3s (ctrl+o to expand)
+
+● Got inspect audit. Two more agents remaining.
+
+✻ Baked for 4s
+
+● Agent "Audit tests and grayscale loading" finished · 17s
+  Thought for 3s (ctrl+o to expand)
+
+● One agent left (overlay audit).
+
+✻ Crunched for 4s
+
+● Agent "Audit handoff bug #5,6,7 (overlay issues)" finished · 31s
+
+  Thought for 20s (ctrl+o to expand)
+
+● All 7 agents reported back. Now I have the full picture. Let me write the plan
+  document.
+
+● Write(docs\plan-preview-speed-and-tracking.md)
+  ⎿  Wrote 149 lines to docs\plan-preview-speed-and-tracking.md
+       1 # Plan: Preview Speed + Tracking Robustness
+       2 
+       3 **Date:** 2026-07-09
+         OI goes blank) and address remaining partial bugs from the hando
+         ff.
+       5 
+       6 ---
+       7 
+       9 
+      10 Every bug from the handoff was verified against current code:
+     … +206 lines (ctrl+o to expand)
+
+> the plan document must contain everything so i can paste it to another agent  
+  and tell it to pursue this plan as the goal... ask him to drop subagents      
+  where files dont overlap and as much subagents as he wants int he document    
+  only                                                                          
+
+  Thought for 46s (ctrl+o to expand)
+
+● Got it — rewriting the plan to be fully self-contained and agent-executable
+  with explicit subagent decomposition.
+
+  Read 1 file (ctrl+o to expand)
+
+● Write(docs\plan-preview-speed-and-tracking.md)
+  ⎿  Added 332 lines, removed 79 lines
+       1  # Plan: Preview Speed + Tracking Robustness
+       2  
+       3  **Date:** 2026-07-09
+       4 -**Scope:** Fix the two open critical issues (preview too slow, 
+         -ROI goes blank) and address remaining partial bugs from the han
+         -doff.                                                          
+       4 +**Repo:** `D:\morphostack` (branch: `master`, many uncommitted 
+         +changes)                                                       
+       5 +**Goal:** Fix two open critical bugs (preview too slow on Z-scr
+         +ub; green ROI goes blank after some frames) and tighten remaini
+         +ng partial bugs from the previous session's handoff.           
+       6  
+       7 +> This document is self-contained. Paste it to an implementing 
+         +agent as-is.                                                   
+       8 +                                                               
+       9  ---
+      10  
+      11 +## Context                                                     
+      12 +                                                               
+      13 +MorphoStack = local morphometry for confocal Z-stacks (vesicle/
+         +GUV, RBC).                                                     
+      14 +UI: Vite `apps/web/` · API: FastAPI `src/morphostack/api/` · Co
+         +re: `src/morphostack/core/`.                                   
+      15 +                                                               
+      16 +Lab file: `C:\Users\systemm\Downloads\1644_z stack.czi` (~113 x
+         + 1000 x 1000 uint16, multi-vesicle crowded field).             
+      17 +                                                               
+      18 +### How preview works today                                    
+      19 +1. User drags a circle ROI on the preview image (Fiji-style Ova
+         +lRoi).                                                         
+      20 +2. `selectedObjectSeed` is set in `apps/web/src/main.ts:2291` w
+         +ith `(x, y, frame_index, radius)`.                             
+      21 +3. On every Z-slider scrub, the frontend fires `POST /api/previ
+         +ew` (debounced 150ms) with the seed.                           
+      22 +4. The API handler (`src/morphostack/api/app.py:313`, the `prev
+         +iew()` function) calls `track_seeded_vesicle_stack()` which wal
+         +ks from `seed_frame` to `target_frame`, segmenting every interm
+         +ediate slice.                                                  
+      23 +5. The result for the target frame is rendered as a PNG with gr
+         +een contour overlay and returned.                              
+      24 +                                                               
+      25 +### What's broken                                              
+      26 +- **Speed (bug #1):** Every scrub re-walks from scratch. No tra
+         +cking results are cached between requests. Scrubbing 30 frames 
+         +away = ~30 frames x up to 9 segmentation attempts each = hundre
+         +ds of segmentations per slider move.                           
+      27 +- **Blank ROI (bugs #9, #11):** Tracking genuinely loses the ve
+         +sicle at polar Z-slices because `ref_area` is locked to the see
+         +d frame (equator), and the area gates reject the naturally-smal
+         +ler polar cross-sections. When tracking fails (`sres.ok == Fals
+         +e`), the API renders an empty overlay (no green contour).      
+      28 +                                                               
+      29 +---                                                            
+      30 +                                                               
+      31  ## Full Handoff Bug Audit
+      32  
+      10 -Every bug from the handoff was verified against current code:  
+      33 +Every bug from the previous session's handoff (`E:\Temp\MorphoS
+         +tack-handoff-2026-07-09.md`) was verified against current code:
+      34  
+      35  | # | Bug | Handoff | Verified | Notes |
+      36  |---|-----|---------|----------|-------|
+     ...
+       49  | 13 | Overlay hide/show | Fixed | Confirmed fixed | Checkboxe
+           s for circle ROI / XY crop / selection |
+       50  | 14 | Tests only synthetic | Known | Confirmed | 6 tests (5 s
+           ynthetic, 1 optional real CZI); no `@pytest.mark.slow` |
+       51  
+       29 -**Existing infrastructure:**                                  
+       30 -- `StackCache`: path-based LRU for loaded `ImageStack` objects
+          - (works, no changes needed)                                   
+       31 -- `SessionStackStore`: UUID-keyed LRU for uploaded stacks (wor
+          -ks, no changes needed)                                        
+       32 -- **No tracking result cache exists** — this is the gap       
+       52 +**Existing caching infrastructure (do NOT rewrite):**         
+       53 +- `StackCache` in `src/morphostack/core/stack_cache.py`: path-
+          +based LRU for loaded `ImageStack` objects. Thread-safe, invali
+          +dates on mtime/size change.                                   
+       54 +- `SessionStackStore` in same file: UUID-keyed LRU for browser
+          +-uploaded stacks in process memory.                           
+       55 +- **No tracking result cache exists** — this is the gap to fil
+          +l.                                                            
+       56  
+       57  ---
+       58  
+       59  ## Phase 1: Tracking Result Cache (fixes bug #1 — speed)
+       60  
+       61  ### Problem
+       39 -Every `/preview` call runs `track_seeded_vesicle_stack(gray, .
+          -.., target_frame=N)` from scratch. Scrubbing to frame 80 from 
+          -seed at 50 re-segments 30 intermediate frames. Each frame trie
+          -s up to 9 attempts (3 centers x 3 radii) plus an RW fallback. 
+          -This is ~100-270 segmentations per scrub.                     
+       62 +`track_seeded_vesicle_stack()` in `src/morphostack/core/seeded
+          +_vesicle.py:423` is called fresh on every `/preview` request. 
+          +It walks from `seed_frame` to `target_frame`, calling `segment
+          +_slice_seeded()` on every intermediate frame. Each call does: 
+          +Gaussian blur, Otsu threshold, CC labeling, fill holes, contou
+          +r extraction, and up to 9 retry attempts (3 center positions x
+          + 3 radii per frame, lines 488-514). Plus an optional `random_w
+          +alker` fallback (`_try_rw_ws_in_disk`, line 397).             
+       63  
+       41 -Fiji is instant because it doesn't segment on scrub — it shows
+          - the raw image with an OvalRoi overlay. LimeSeg fits once as a
+          - batch operation.                                             
+       64 +For a 113-frame stack with seed at frame 50 and target at fram
+          +e 80, that's 30 frames of work re-done on every slider move.  
+       65  
+       43 -### Approach                                                  
+       44 -Add a `TrackingCache` to `stack_cache.py` that stores `SeededS
+          -liceResult` per frame, keyed by `(stack_identity, seed_x, seed
+          -_y, seed_frame, seed_radius)`.                                
+       66 +### Solution: `TrackingResultCache`                           
+       67  
+       46 -**Key design decisions:**                                     
+       47 -- Cache key uses rounded seed coords (to 1px) so minor float j
+          -itter doesn't miss                                            
+       48 -- Cache stores the full `list[SeededSliceResult]` from `track_
+          -seeded_vesicle_stack`                                         
+       49 -- On cache hit for a given seed key: if `target_frame` result 
+          -already exists, return immediately; if not, extend from the fu
+          -rthest cached frame instead of re-walking from seed           
+       50 -- Cache is invalidated when the seed changes (user drags a new
+          - circle)                                                      
+       51 -- LRU eviction (small — 4-8 entries is plenty since users work
+          - on one vesicle at a time)                                    
+       68 +#### 1A. Add `TrackingResultCache` class                      
+       69  
+       53 -### Files to change                                           
+       54 -1. **`src/morphostack/core/stack_cache.py`** — add `TrackingCa
+          -che` class                                                    
+       55 -2. **`src/morphostack/api/app.py`** — `/preview` endpoint: che
+          -ck cache before calling `track_seeded_vesicle_stack`; store re
+          -sults after                                                   
+       56 -3. **`src/morphostack/core/seeded_vesicle.py`** — add an `exte
+          -nd_track` function that takes previously cached results and on
+          -ly computes from the last known frame to the new target       
+       70 +**File:** `src/morphostack/core/stack_cache.py`               
+       71  
+       58 -### Expected outcome                                          
+       59 -- First scrub after placing seed: same speed as now (~1-3s dep
+          -ending on distance)                                           
+       60 -- Subsequent scrubs nearby: near-instant (cache hit or 1-frame
+          - extension)                                                   
+       61 -- Scrubbing backward after forward: instant (already cached)  
+       72 +Add a new class alongside the existing `StackCache` and `Sessi
+          +onStackStore`. Structure:                                     
+       73  
+       63 ----                                                           
+       74 +```python                                                     
+       75 +@dataclass(frozen=True)                                       
+       76 +class TrackingCacheKey:                                       
+       77 +    stack_identity: str      # resolved path or stack_id      
+       78 +    seed_x: int              # rounded to nearest pixel       
+       79 +    seed_y: int              # rounded to nearest pixel       
+       80 +    seed_frame: int                                           
+       81 +    seed_radius: int         # rounded to nearest pixel       
+       82  
+       65 -## Phase 2: Tracking Robustness (fixes bugs #9, #11, partially
+          - #10)                                                         
+       83 +class TrackingResultCache:                                    
+       84 +    """LRU cache for SeededSliceResult lists from track_seeded
+          +_vesicle_stack.                                               
+       85 +                                                              
+       86 +    Keyed by (stack_identity, rounded seed params). Stores the
+          + full                                                         
+       87 +    list[SeededSliceResult] indexed by frame. On subsequent pr
+          +eview                                                         
+       88 +    requests, returns cached results directly if the target fr
+          +ame                                                           
+       89 +    was already computed, or provides the furthest-reached fra
+          +me                                                            
+       90 +    so tracking can resume from there instead of from seed_fra
+          +me.                                                           
+       91 +    """                                                       
+       92 +    def __init__(self, maxsize: int = 8): ...                 
+       93 +    def get(self, key: TrackingCacheKey) -> list[SeededSliceRe
+          +sult] | None: ...                                             
+       94 +    def put(self, key: TrackingCacheKey, results: list[SeededS
+          +liceResult]) -> None: ...                                     
+       95 +    def merge(self, key: TrackingCacheKey, results: list[Seede
+          +dSliceResult]) -> None:                                       
+       96 +        """Merge new results into existing cache entry — keep 
+          +the best                                                      
+       97 +        (ok=True) result for each frame slot."""              
+       98 +    def clear(self) -> None: ...                              
+       99 +```                                                           
+      100  
+       67 -### Problem                                                   
+       68 -Tracking loses the vesicle after several frames because:      
+      101 +Thread-safe with `threading.Lock` (same pattern as `StackCache
+          +`).                                                           
+      102 +Import `SeededSliceResult` from `morphostack.core.seeded_vesic
+          +le` at the type-checking level to avoid circular imports.     
+      103  
+       70 -1. **Fixed ref_area**: `ref_area = max(first.area_px, 1.0)` is
+          - locked to seed-frame area (equator). At vesicle poles, cross-
+          -section shrinks below `0.25 * ref_area`, hitting `min_area_rat
+          -io` and getting rejected.                                     
+       71 -2. **Otsu failure on weak slices**: Near poles, membrane signa
+          -l is weak. Otsu can't separate membrane from background, yield
+          -ing all-FG or no-FG.                                          
+       72 -3. **Gap-then-drift**: After a gap, `cx, cy` holds the last go
+          -od position. If the vesicle floats laterally, the search cente
+          -r falls behind.                                               
+       73 -4. **RW fallback also rigid**: `_try_rw_ws_in_disk` applies th
+          -e same fixed `ref_area * 0.2 to 2.5` gate.                    
+      104 +Instantiate a module-level `default_tracking_cache = TrackingR
+          +esultCache()`.                                                
+      105  
+       75 -### Approach                                                  
+      106 +#### 1B. Add `extend_track` to seeded_vesicle.py              
+      107  
+       77 -#### A. Adaptive ref_area (highest impact)                    
+       78 -Replace fixed `ref_area` with a rolling reference that decays 
+          -toward the current frame's area:                              
+      108 +**File:** `src/morphostack/core/seeded_vesicle.py`            
+      109  
+      110 +Add a new public function after `track_seeded_vesicle_stack`: 
+      111 +                                                              
+      112 +```python                                                     
+      113 +def extend_track(                                             
+      114 +    stack: np.ndarray,                                        
+      115 +    *,                                                        
+      116 +    seed_x: float,                                            
+      117 +    seed_y: float,                                            
+      118 +    seed_frame: int,                                          
+      119 +    seed_radius: float | None = None,                         
+      120 +    target_frame: int,                                        
+      121 +    cached_results: list[SeededSliceResult],                  
+      122 +    max_centroid_jump_px: float | None = None,                
+      123 +    max_area_ratio: float = 2.2,                              
+      124 +    min_area_ratio: float = 0.25,                             
+      125 +) -> list[SeededSliceResult]:                                 
+      126 +    """Extend a previously cached tracking result to reach tar
+          +get_frame.                                                    
+      127 +                                                              
+      128 +    Finds the furthest frame already tracked in the direction 
+          +of target_frame,                                              
+      129 +    and propagates from there instead of from seed_frame. Retu
+          +rns a full                                                    
+      130 +    list with both cached and newly computed results merged.  
+      131 +    """                                                       
+      132  ```
+       81 -ref_area = 0.7 * ref_area + 0.3 * current_area                
+      133 +                                                              
+      134 +Logic:                                                        
+      135 +- Determine direction: `+1` if `target_frame > seed_frame`, el
+          +se `-1`                                                       
+      136 +- Find the furthest frame in `cached_results` that has `ok=Tru
+          +e` in that direction                                          
+      137 +- If `cached_results[target_frame].ok` or `cached_results[targ
+          +et_frame].method != "circle_seed_unreached"`: return cached_re
+          +sults as-is (cache hit)                                       
+      138 +- Otherwise: call `propagate()` starting from the furthest rea
+          +ched frame, not from `seed_frame`                             
+      139 +- Merge new results into `cached_results` (don't overwrite fra
+          +mes that already have `ok=True`)                              
+      140 +                                                              
+      141 +#### 1C. Wire cache into `/preview` endpoint                  
+      142 +                                                              
+      143 +**File:** `src/morphostack/api/app.py`                        
+      144 +                                                              
+      145 +In the `preview()` function (line 313), replace the current tr
+          +acking call block (lines 351-465) with:                       
+      146 +                                                              
+      147 +```python                                                     
+      148 +if local_seed is not None:                                    
+      149 +    from morphostack.core.seeded_vesicle import effective_seed
+          +_radius, extend_track                                         
+      150 +    from morphostack.core.stack_cache import default_tracking_
+          +cache, TrackingCacheKey                                       
+      151 +                                                              
+      152 +    seed_r = effective_seed_radius(float(local_seed.radius) if
+          + local_seed.radius else None)                                 
+      153 +                                                              
+      154 +    # Build cache key from resolved stack identity            
+      155 +    stack_identity = request.path or request.stack_id or ""   
+      156 +    cache_key = TrackingCacheKey(                             
+      157 +        stack_identity=stack_identity,                        
+      158 +        seed_x=round(float(local_seed.x)),                    
+      159 +        seed_y=round(float(local_seed.y)),                    
+      160 +        seed_frame=int(local_seed.frame_index),               
+      161 +        seed_radius=round(seed_r),                            
+      162 +    )                                                         
+      163 +                                                              
+      164 +    cached = default_tracking_cache.get(cache_key)            
+      165 +    if cached is not None:                                    
+      166 +        tracked = extend_track(                               
+      167 +            gray,                                             
+      168 +            seed_x=float(local_seed.x),                       
+      169 +            seed_y=float(local_seed.y),                       
+      170 +            seed_frame=int(local_seed.frame_index),           
+      171 +            seed_radius=seed_r,                               
+      172 +            target_frame=int(local_frame),                    
+      173 +            cached_results=cached,                            
+      174 +        )                                                     
+      175 +    else:                                                     
+      176 +        tracked = track_seeded_vesicle_stack(                 
+      177 +            gray,                                             
+      178 +            seed_x=float(local_seed.x),                       
+      179 +            seed_y=float(local_seed.y),                       
+      180 +            seed_frame=int(local_seed.frame_index),           
+      181 +            seed_radius=seed_r,                               
+      182 +            target_frame=int(local_frame),                    
+      183 +        )                                                     
+      184 +                                                              
+      185 +    default_tracking_cache.merge(cache_key, tracked)          
+      186 +    sres = tracked[local_frame]                               
+      187 +    # ... rest of rendering unchanged                         
+      188  ```
+      189  
+       84 -This lets the gate naturally widen as cross-sections shrink to
+          -ward the poles. The decay rate prevents a single bad frame fro
+          -m corrupting the reference.                                   
+      190 +Do the same for the `/upload/preview` endpoint (line 871) whic
+          +h has duplicate tracking logic.                               
+      191  
+       86 -Also widen `min_area_ratio` as Z-distance from seed increases:
+      192 +### Tests for Phase 1                                         
+      193 +                                                              
+      194 +**File:** `tests/test_core_seeded_vesicle.py`                 
+      195 +                                                              
+      196 +Add tests:                                                    
+      197 +- `test_extend_track_cache_hit`: track to frame 5, then extend
+          + to frame 5 again — should return same results without re-comp
+          +uting                                                         
+      198 +- `test_extend_track_extends_forward`: track to frame 5, then 
+          +extend to frame 8 — should only compute frames 6-8            
+      199 +- `test_tracking_cache_key_rounding`: verify that seeds at (10
+          +0.3, 200.7) and (100.1, 200.9) hit the same cache key         
+      200 +                                                              
+      201 +**File:** `tests/test_api.py`                                 
+      202 +                                                              
+      203 +Add test:                                                     
+      204 +- `test_preview_caching_reuses_results`: two preview calls wit
+          +h same seed but different frame_index — second should be faste
+          +r (or at least not error)                                     
+      205 +                                                              
+      206 +---                                                           
+      207 +                                                              
+      208 +## Phase 2: Tracking Robustness (fixes bugs #9, #11)          
+      209 +                                                              
+      210 +All changes in this phase are in `src/morphostack/core/seeded_
+          +vesicle.py` and `tests/test_core_seeded_vesicle.py` only.     
+      211 +                                                              
+      212 +### 2A. Adaptive ref_area                                     
+      213 +                                                              
+      214 +**Current code** (`seeded_vesicle.py:471`):                   
+      215 +```python                                                     
+      216 +ref_area = max(first.area_px, 1.0)                            
+      217  ```
+       88 -effective_min = min_area_ratio * max(0.4, 1.0 - 0.02 * abs(z -
+          - seed_frame))                                                 
+      218 +This is fixed for the entire Z-walk. At vesicle poles, cross-s
+          +ection shrinks below `0.25 * ref_area`, hitting `min_area_rati
+          +o` (line 505).                                                
+      219 +                                                              
+      220 +**Change in `propagate()` (line 477):**                       
+      221 +- Make `ref_area` a local variable that updates after each suc
+          +cessful frame:                                                
+      222 +  ```python                                                   
+      223 +  ref_area = 0.7 * ref_area + 0.3 * res.area_px               
+      224 +  ```                                                         
+      225 +- Widen `min_area_ratio` as Z-distance from seed increases:   
+      226 +  ```python                                                   
+      227 +  z_dist = abs(z - seed_frame)                                
+      228 +  effective_min = min_area_ratio * max(0.35, 1.0 - 0.015 * z_d
+          +ist)                                                          
+      229 +  ```                                                         
+      230 +- Apply the same adaptive ref_area to the `_try_rw_ws_in_disk`
+          + fallback call (currently line 397-401 uses the fixed ref_area
+          + passed into `segment_slice_seeded`)                          
+      231 +                                                              
+      232 +**In `segment_slice_seeded()` (line 346):**                   
+      233 +- The `ref_area` parameter is already passed through. No signa
+          +ture change needed.                                           
+      234 +- In `_pick_component_in_disk` (line 172), the `ref_area` gate
+          +s at lines 196-198 already use the passed ref_area. The adapti
+          +ve value will flow through naturally.                         
+      235 +- In `_try_rw_ws_in_disk` area gate (line 401), same — uses wh
+          +atever ref_area was passed.                                   
+      236 +                                                              
+      237 +### 2B. Center extrapolation through gaps                     
+      238 +                                                              
+      239 +**Current code** (`seeded_vesicle.py:516-521`):               
+      240 +```python                                                     
+      241 +if res is None:                                               
+      242 +    results[z] = SeededSliceResult(                           
+      243 +        None, None, (cx, cy), 0.0, 0.0, "circle_seed_gap", Fal
+          +se                                                            
+      244 +    )                                                         
+      245 +    z += direction                                            
+      246 +    continue                                                  
+      247  ```
+      248 +After a gap, `cx, cy` stays fixed. If the vesicle is drifting 
+          +laterally, subsequent frames search the wrong location.       
+      249  
+       91 -#### B. Center extrapolation through gaps                     
+       92 -When a gap occurs, instead of holding `cx, cy` fixed, extrapol
+          -ate from the last 2-3 good positions:                         
+      250 +**Change in `propagate()`:**                                  
+      251 +- Track the last 3 good centers in a small list:              
+      252 +  ```python                                                   
+      253 +  recent_centers: list[tuple[float, float]] = []              
+      254 +  ```                                                         
+      255 +- After each successful frame, append `(cx, cy)` to `recent_ce
+          +nters` (keep last 3).                                         
+      256 +- When building the `attempts` tuple (line 488), add an extrap
+          +olated center if we have >= 2 recent centers:                 
+      257 +  ```python                                                   
+      258 +  extrapolated = None                                         
+      259 +  if len(recent_centers) >= 2:                                
+      260 +      dx = recent_centers[-1][0] - recent_centers[-2][0]      
+      261 +      dy = recent_centers[-1][1] - recent_centers[-2][1]      
+      262 +      extrapolated = (cx + dx, cy + dy)                       
+      263 +                                                              
+      264 +  attempts = [(cx, cy), (anchor_x, anchor_y), (first.center_xy
+          +[0], first.center_xy[1])]                                     
+      265 +  if extrapolated is not None:                                
+      266 +      attempts = [extrapolated] + list(attempts)              
+      267 +  ```                                                         
+      268 +                                                              
+      269 +### 2C. Multi-threshold fallback                              
+      270 +                                                              
+      271 +**Current code** (`seeded_vesicle.py:378`):                   
+      272 +```python                                                     
+      273 +thr = _adaptive_threshold_sparse(disk_vals)                   
+      274  ```
+       94 -dx = cx_prev - cx_prev_prev                                   
+       95 -dy = cy_prev - cy_prev_prev                                   
+       96 -cx_predicted = cx + dx                                        
+       97 -cy_predicted = cy + dy                                        
+      275 +If Otsu fails (uniform crop), returns `None` and the frame is 
+          +lost.                                                         
+      276 +                                                              
+      277 +**Change in `_adaptive_threshold_sparse()` (line 77):**       
+      278 +After the Otsu try/except block (line 93-97), before the `med 
+          ++ 0.3 * ...` fallback, add a percentile-based strategy:       
+      279 +```python                                                     
+      280 +# Percentile fallback for weak membranes where Otsu merges FG/
+          +BG                                                            
+      281 +p70 = float(np.percentile(flat, 70))                          
+      282 +if p70 > lo + 1e-12:                                          
+      283 +    return p70                                                
+      284  ```
+       99 -Add the extrapolated center as a 4th attempt position in the `
+          -attempts` tuple.                                              
+      285  
+      101 -#### C. Multi-threshold retry                                 
+      102 -When Otsu fails on a weak slice, try a second threshold strate
+          -gy before giving up: percentile-based (e.g., 70th percentile o
+          -f disk pixels). This catches weak membranes that Otsu merges w
+          -ith background.                                               
+      286 +This catches weak membrane signals that Otsu treats as one dis
+          +tribution.                                                    
+      287  
+      104 -### Files to change                                           
+      105 -1. **`src/morphostack/core/seeded_vesicle.py`**:              
+      106 -   - `propagate()`: adaptive ref_area, center extrapolation, w
+          -ider area gates at extremes                                   
+      107 -   - `_adaptive_threshold_sparse()`: add percentile fallback  
+      108 -   - `_try_rw_ws_in_disk()`: use adaptive ref_area instead of 
+          -fixed                                                         
+      109 -2. **`tests/test_core_seeded_vesicle.py`**: add tests for pola
+          -r-slice tracking with shrinking cross-sections                
+      288 +### Tests for Phase 2                                         
+      289  
+      111 -### Expected outcome                                          
+      112 -- Tracking should survive 80-90% of Z range on typical GUVs in
+          -stead of dropping at the poles                                
+      113 -- Gap recovery improves for floating vesicles                 
+      114 -- Some slices will still fail (genuinely no signal) — that's c
+          -orrect behavior                                               
+      290 +**File:** `tests/test_core_seeded_vesicle.py`                 
+      291  
+      292 +Add:                                                          
+      293 +- `test_tracking_survives_shrinking_area`: synthetic stack whe
+          +re object area shrinks linearly from 100% to 20% over Z. Curre
+          +nt code loses track at ~25%; with adaptive ref_area should tra
+          +ck to ~20%.                                                   
+      294 +- `test_tracking_center_extrapolation`: synthetic stack where 
+          +object center drifts 2px/frame laterally. Insert a 2-frame gap
+          +. Current code loses track after gap; with extrapolation shoul
+          +d recover.                                                    
+      295 +- `test_adaptive_threshold_weak_signal`: frame where membrane 
+          +occupies <10% of disk. Current Otsu threshold = background. Pe
+          +rcentile fallback should find the membrane.                   
+      296 +                                                              
+      297  ---
+      298  
+      118 -## Phase 3: Quality of Life (lower priority)                  
+      299 +## Phase 3: Test Hardening                                    
+      300  
+      120 -### A. `@pytest.mark.slow` for real CZI tests                 
+      121 -- Add marker to the optional CZI test in `test_core_seeded_ves
+          -icle.py`                                                      
+      122 -- Add a regression test that loads 1644 (if present) and check
+          -s tracking survives >80% of frames                            
+      301 +### 3A. Mark slow tests                                       
+      302  
+      124 -### B. Bug #10 refinement (multi-GUV merge)                   
+      125 -- The hard disk at `R * 1.15` already prevents most merges    
+      126 -- Remaining issue: when a neighbor touches inside R, the CC ca
+          -n include both membranes                                      
+      127 -- Potential fix: after CC selection, check for bimodal centroi
+          -d distribution within the component (two blobs merged) and spl
+          -it at the saddle point                                        
+      128 -- **Defer** unless user reports it as blocking                
+      303 +**File:** `tests/test_core_seeded_vesicle.py`                 
+      304  
+      305 +- Add `@pytest.mark.slow` to `test_optional_real_czi_if_presen
+          +t`                                                            
+      306 +- Add a new test:                                             
+      307 +  ```python                                                   
+      308 +  @pytest.mark.slow                                           
+      309 +  def test_real_czi_tracking_coverage():                      
+      310 +      """Track 1644 Z-stack and verify >80% of frames have ok=
+          +True."""                                                      
+      311 +      czi_path = Path(r"C:\Users\systemm\Downloads\1644_z stac
+          +k.czi")                                                       
+      312 +      if not czi_path.exists():                               
+      313 +          pytest.skip("Real CZI not available")               
+      314 +      # Load, place seed at approximate center of a visible ve
+          +sicle                                                         
+      315 +      # Run full track, assert >80% ok rate                   
+      316 +  ```                                                         
+      317 +                                                              
+      318 +### 3B. Tracking cache tests                                  
+      319 +                                                              
+      320 +**File:** `tests/test_core_seeded_vesicle.py` (alongside Phase
+          + 1 tests)                                                     
+      321 +                                                              
+      322 +Already described in Phase 1 test section above.              
+      323 +                                                              
+      324  ---
+      325  
+      132 -## Implementation Order                                       
+      326 +## Subagent Decomposition                                     
+      327  
+      134 -1. **Phase 1 (cache)** — highest ROI, lowest risk, directly ad
+          -dresses daily-use frustration                                 
+      135 -2. **Phase 2A (adaptive ref_area)** — highest impact tracking 
+          -fix, moderate risk                                            
+      136 -3. **Phase 2B (center extrapolation)** — small change, complem
+          -ents 2A                                                       
+      137 -4. **Phase 2C (multi-threshold)** — fallback for edge cases   
+      138 -5. **Phase 3** — tests and polish                             
+      328 +The implementing agent should spawn subagents in parallel wher
+          +e file ownership doesn't overlap. Here is the recommended deco
+          +mposition:                                                    
+      329  
+      330 +### Parallel Group 1 (no file overlap — run simultaneously)   
+      331 +                                                              
+      332 +**Subagent A: TrackingResultCache infrastructure**            
+      333 +- Files: `src/morphostack/core/stack_cache.py` only           
+      334 +- Task: Add `TrackingCacheKey` dataclass and `TrackingResultCa
+          +che` class with `get/put/merge/clear` methods. Instantiate `de
+          +fault_tracking_cache`. Thread-safe with `threading.Lock`. Impo
+          +rt `SeededSliceResult` under `TYPE_CHECKING` to avoid circular
+          + imports.                                                     
+      335 +- Test: None in this subagent (tested via integration in Subag
+          +ent D).                                                       
+      336 +                                                              
+      337 +**Subagent B: Tracking robustness — adaptive ref_area + extrap
+          +olation + multi-threshold**                                   
+      338 +- Files: `src/morphostack/core/seeded_vesicle.py` only        
+      339 +- Task: Implement Phase 2A (adaptive ref_area in `propagate()`
+          +), Phase 2B (center extrapolation in `propagate()`), Phase 2C 
+          +(percentile fallback in `_adaptive_threshold_sparse()`). Also 
+          +add the `extend_track()` function from Phase 1B.              
+      340 +- Constraint: Do NOT change function signatures of `track_seed
+          +ed_vesicle_stack` or `segment_slice_seeded` — only internal lo
+          +gic.                                                          
+      341 +                                                              
+      342 +**Subagent C: Tests for tracking robustness**                 
+      343 +- Files: `tests/test_core_seeded_vesicle.py` only             
+      344 +- Task: Add all Phase 2 tests (`test_tracking_survives_shrinki
+          +ng_area`, `test_tracking_center_extrapolation`, `test_adaptive
+          +_threshold_weak_signal`) and Phase 1 tests (`test_extend_track
+          +_cache_hit`, `test_extend_track_extends_forward`, `test_tracki
+          +ng_cache_key_rounding`). Add `@pytest.mark.slow` to the existi
+          +ng `test_optional_real_czi_if_present`. Add the `test_real_czi
+          +_tracking_coverage` test.                                     
+      345 +- Depends on: Subagent B completing (needs `extend_track` to e
+          +xist).                                                        
+      346 +                                                              
+      347 +### Sequential after Group 1                                  
+      348 +                                                              
+      349 +**Subagent D: Wire cache into API endpoints**                 
+      350 +- Files: `src/morphostack/api/app.py` only                    
+      351 +- Task: In the `preview()` function (line 313) and `upload_pre
+          +view()` function (line 871), replace the direct `track_seeded_
+          +vesicle_stack` call with cache-check → `extend_track` → cache-
+          +merge pattern from Phase 1C. Import `default_tracking_cache` a
+          +nd `TrackingCacheKey` from `stack_cache`, import `extend_track
+          +` from `seeded_vesicle`.                                      
+      352 +- Depends on: Subagents A and B completing.                   
+      353 +                                                              
+      354 +**Subagent E: API test**                                      
+      355 +- Files: `tests/test_api.py` only                             
+      356 +- Task: Add `test_preview_caching_reuses_results`.            
+      357 +- Depends on: Subagent D completing.                          
+      358 +                                                              
+      359 +### Dependency graph                                          
+      360 +```                                                           
+      361 +A (stack_cache.py) ──┐                                        
+      362 +                     ├──> D (app.py) ──> E (test_api.py)      
+      363 +B (seeded_vesicle.py)┘                                        
+      364 +         │                                                    
+      365 +         └──> C (test_seeded_vesicle.py)                      
+      366 +```                                                           
+      367 +                                                              
+      368 +Subagents A, B can run fully in parallel.                     
+      369 +Subagent C can start after B.                                 
+      370 +Subagent D starts after both A and B.                         
+      371 +Subagent E starts after D.                                    
+      372 +                                                              
+      373 +### Validation                                                
+      374 +                                                              
+      375 +After all subagents complete, run:                            
+      376 +```powershell                                                 
+      377 +cd D:\morphostack                                             
+      378 +$env:PYTHONPATH="src"                                         
+      379 +.\.venv\Scripts\python.exe -m pytest tests/test_core_seeded_ve
+          +sicle.py tests/test_api.py -q                                 
+      380 +```                                                           
+      381 +                                                              
+      382 +Then manual validation:                                       
+      383 +```powershell                                                 
+      384 +.\.venv\Scripts\morphostack dev                               
+      385 +```                                                           
+      386 +1. Open path `C:\Users\systemm\Downloads\1644_z stack.czi`    
+      387 +2. Standard mode → Select Object → drag circle around a vesicl
+          +e                                                             
+      388 +3. Scrub Z slider — preview should return in <1s after first f
+          +rame (cache hit)                                              
+      389 +4. Green contour should persist for most of the Z range, not j
+          +ust first few frames                                          
+      390 +5. Scrub back — should be instant (already cached)            
+      391 +                                                              
+      392  ---
+      393  
+      394  ## What NOT to change
+      395  
+      144 -- Stack loading / `StackCache` / `SessionStackStore` — working
+          - correctly                                                    
+      145 -- Overlay rendering (bugs #5-8, #13) — all verified fixed     
+      146 -- Frame labeling (bug #4) — verified fixed                    
+      147 -- Threshold suggestion (bug #2) — verified fixed              
+      148 -- `target_frame` optimization (bug #12) — verified fixed      
+      149 -- Architecture — no new heavy deps, no DL, no Polar-DP yet (th
+          -at's a separate research track)                               
+      396 +- `src/morphostack/core/stack_cache.py` existing classes (`Sta
+          +ckCache`, `SessionStackStore`) — working, don't touch         
+      397 +- Overlay rendering in `src/morphostack/core/preview.py` — all
+          + bugs verified fixed                                          
+      398 +- Frontend `apps/web/src/main.ts` — no changes needed for this
+          + plan                                                         
+      399 +- `src/morphostack/core/pipeline.py` — no changes needed      
+      400 +- Stack loading / `src/morphostack/core/io.py` — working corre
+          +ctly                                                          
+      401 +- No new heavy dependencies (no DL, no Polar-DP in this plan) 
+      402 +- No architecture changes — incremental fixes to existing modu
+          +les only                                                      
+
+● Done. The plan is at docs/plan-preview-speed-and-tracking.md.
+
+  Beyond the two issues you flagged, here's what else I audited from the
+  handoff:
+
+  Verified fixed (6 bugs):
+  - Bug #2 (Otsu OOM) — pixel sampling confirmed in segmentation.py
+  - Bug #3 (inspect 500) — path + session + cached_load + MemoryError handling
+  confirmed
+  - Bugs #5, #6, #7 (overlay rendering) — edge tint, no width=1000, full FOV all
+  confirmed
+  - Bug #8 (click r=10) — drag circle with 14px minimum confirmed
+  - Bug #12 (preview stuck) — target_frame parameter confirmed
+  - Bug #13 (overlay toggles) — checkboxes confirmed
+
+  Verified UX-only (1 bug):
+  - Bug #4 — 1-based "Slice N of M" labels confirmed
+
+  Partially fixed, deferred (1 bug):
+  - Bug #10 (multi-GUV merge) — hard disk R*1.15 + max_area gate works for most
+  cases. Remaining edge case (neighbor touching inside R) noted in plan but
+  deferred.
+
+  Known gap (1 bug):
+  - Bug #14 (synthetic-only tests) — 5 synthetic + 1 optional real CZI, no
+  @pytest.mark.slow. Addressed in Phase 3 of the plan.
+
+  Infrastructure finding:
+  - Stack cache and session store exist and work. No tracking result cache
+  exists at all — that's the core gap the plan fills.
+
+  The plan document is fully self-contained with exact file paths, line numbers,
+  code sketches, and a 5-subagent decomposition with a dependency graph. Ready
+  to paste to another agent.
+
+✻ Worked for 4m 28s
+
+※ recap: Audited the handoff document, verified all 14 bugs against current code, and wrote a self-contained implementation plan at docs/plan-preview-speed-and-tracking.md covering the tracking cache and robustness fixes with subagent decomposition. Ready for you to hand it off. (disable recaps in /config)
+
+> the agent has done it, review and delete the plan file, also we had done some 
+  researches in the .researches folder, if any issues in the current code, can  
+  u refer to them and see if they can be implemented to make this program more  
+  robust and accurate                                                           
+
+  Thought for 9s (ctrl+o to expand)
+
+● Let me review the implemented changes and explore the research files in
+  parallel.
+
+● 5 background agents launched (↓ to manage)
+   ├ Review seeded_vesicle.py changes
+   ├ Review stack_cache.py changes
+   ├ Review app.py preview caching
+   ├ Review new tests
+   └ Explore .researches folder
+
+> no code changes please                                                        
+
+  Thought for 25s (ctrl+o to expand)
+
+● Understood — review and research only, no code changes. Waiting for the 5
+  agents to report back.
+
+✻ Cogitated for 36s
+
+● Agent "Review stack_cache.py changes" finished · 13s
+
+  Thought for 3s (ctrl+o to expand)
+
+● Stack cache looks clean. 4 agents still running.
+
+✻ Cogitated for 7s
+
+● Agent "Review app.py preview caching" finished · 36s
+
+  Thought for 6s (ctrl+o to expand)
+
+● Good catch on the upload preview cache key using temp paths — that'll never
+  hit. Waiting on 3 more agents.
+
+✻ Churned for 7s
+
+● Agent "Review seeded_vesicle.py changes" finished · 51s
+
+  Thought for 12s (ctrl+o to expand)
+
+● Seeded vesicle review found some real bugs. 2 agents still running (tests +
+  research).
+
+✻ Worked for 13s
+
+● Agent "Review new tests" finished · 42s
+
+● Agent "Explore .researches folder" finished · 42s
+
+  Thought for 5s (ctrl+o to expand)
+● All agents done. Let me delete the plan file and give you the full picture.
+
+  Listed 1 directory, ran 1 shell command (ctrl+o to expand)
+
+● Plan file deleted. Here's the full review + research synthesis.
+
+  ---
+  Code Review: Bugs Found in the Implementation
+
+  Critical
+
+  1. Percentile threshold fallback is unreachable (seeded_vesicle.py): The new
+  percentile fallback for weak signals is inside the except Exception block of
+  the Otsu call. But Otsu succeeds on nearly all non-uniform images — it just
+  returns a bad threshold. So the fallback never fires when it's actually needed
+  (weak signal where Otsu merges FG/BG). It needs to be a post-Otsu quality 
+  check (e.g., "if >90% of disk pixels pass the Otsu threshold, try percentile
+  instead"), not an exception handler.
+  2. Upload preview cache key uses temp path (app.py:972): The /upload/preview
+  endpoint builds stack_identity from stack.source_path, which is a random temp
+  file name that changes every request. Cache miss rate = 100%. Should use the
+  session stack_id or uploaded filename hash instead.
+
+  Moderate
+
+  3. Center extrapolation doesn't scale with gap duration (seeded_vesicle.py):
+  When extrapolating through a multi-frame gap, dx/dy is applied once regardless
+  of how many frames were skipped. A 3-frame gap should extrapolate 3x the
+  step, not 1x.
+  4. recent_centers ignores frame gaps (seeded_vesicle.py, extend_track): The
+  velocity calculation uses adjacent entries in recent_centers without checking
+  if they came from adjacent Z-frames. Non-adjacent frames give wrong velocity
+  estimates.
+  5. CZI tests crash without czifile dependency (test_core_seeded_vesicle.py):
+  Both test_optional_real_czi_if_present and test_real_czi_tracking_coverage
+  will RuntimeError if the CZI file exists but czifile isn't installed. Need
+  pytest.importorskip("czifile") at the top.
+
+  Minor
+
+  6. Unused imports (app.py): segment_slice_seeded imported but unused in
+  /preview; ObjectSeed, resolve_seed_xy_for_preview_frame unused in
+  /upload/preview; crop_stack_xy imported twice.
+  7. Missing skeleton processing in /upload/preview (app.py): Unlike /preview,
+  the upload variant doesn't compute skeleton metrics or pass skeleton_mask to
+  overlay_preview. Pre-existing gap, not a regression.
+  8. Redundant branches and dead pass (seeded_vesicle.py:465-474, 567-568):
+  Minor code noise.
+
+  ---
+  Research Ideas Not Yet Implemented
+
+  Three research documents exist in .researches/ (GPT, Grok, Gemini synthesis
+  from 7/9). Here's what's actionable and not yet in the codebase, ranked by
+  impact:
+
+  High Impact
+
+  Idea: Polar-DP (Viterbi in polar space)
+  Source: Gemini
+  What it solves: Natively isolates touching GUVs — the membrane becomes a
+  horizontal ridge in polar space, so neighbors can't merge. Solves bug #10
+  fundamentally.
+  Complexity: Medium-high — needs polar transform, DP solver, back-projection
+  ────────────────────────────────────────
+  Idea: IoU-based Z-gating
+  Source: Grok
+  What it solves: Replace the rigid area-ratio gate with mask overlap (IoU)
+  between consecutive slices. IoU > 0.5 = same object. Much more robust than
+  area-only because shape matters.
+  Complexity: Low — just compute IoU between consecutive solid_masks
+  ────────────────────────────────────────
+  Idea: Multi-feature tracking score
+  Source: GPT
+  What it solves: Weighted combination of IoU (0.45), centroid drift (0.20),
+  radius change (0.20), shape similarity (0.15) instead of independent hard
+  gates. Prevents false rejections where one metric is off but the object is
+  clearly the same.
+  Complexity: Low-medium
+
+  Medium Impact
+
+  Idea: Statistical cap stopping
+  Source: Gemini
+  What it solves: Auto-detect vesicle poles by checking if the optimal path
+  intensity drops below local background. Graceful stop instead of
+  gap-then-fail.
+  Complexity: Low
+  ────────────────────────────────────────
+  Idea: Signed distance band for Random Walker
+  Source: GPT
+  What it solves: Constrain RW to a thin band around the previous contour
+  instead
+  of the full disk. Faster + more accurate.
+  Complexity: Medium
+  ────────────────────────────────────────
+  Idea: Bilateral filtering
+  Source: Gemini
+  What it solves: Smooth speckle noise while preserving membrane edges, before
+  thresholding. Better than Gaussian which blurs the membrane.
+  Complexity: Low — skimage.restoration.denoise_bilateral
+  ────────────────────────────────────────
+  Idea: MorphGAC refinement
+  Source: Gemini, GPT
+  What it solves: After initial threshold+CC, snap the contour to sub-pixel
+  gradient maxima with morphological_geodesic_active_contour. Better perimeter
+  accuracy.
+  Complexity: Medium
+
+  Lower Priority
+
+  ┌────────────────────────┬────────┬──────────────────────────┬────────────┐
+  │          Idea          │ Source │      What it solves      │ Complexity │
+  ├────────────────────────┼────────┼──────────────────────────┼────────────┤
+  │                        │        │ Correct pixelization     │            │
+  │ Vossepoel-Smeulders    │ Grok   │ bias in perimeter        │ Low        │
+  │ perimeter correction   │        │ measurement using        │            │
+  │                        │        │ chain-code weights.      │            │
+  ├────────────────────────┼────────┼──────────────────────────┼────────────┤
+  │                        │        │ Alternative digital      │            │
+  │ Crofton perimeter      │ GPT    │ perimeter estimator,     │ Low        │
+  │                        │        │ less biased than polygon │            │
+  │                        │        │  perimeter.              │            │
+  ├────────────────────────┼────────┼──────────────────────────┼────────────┤
+  │                        │        │ Auto-estimate R from     │            │
+  │ Radial profile scale   │ GPT    │ radial intensity peaks   │ Medium     │
+  │ auto-estimation        │        │ so user doesn't need to  │            │
+  │                        │        │ draw precisely.          │            │
+  ├────────────────────────┼────────┼──────────────────────────┼────────────┤
+  │                        │        │ Directional edge search  │            │
+  │ DisGUVery RMD membrane │ Grok   │ orthogonal to gradient — │ High       │
+  │  chaining              │        │  specialized for         │            │
+  │                        │        │ membrane tracing.        │            │
+  └────────────────────────┴────────┴──────────────────────────┴────────────┘
+
+  My recommendation for next priorities
+
+  1. IoU gating — lowest effort, highest tracking robustness gain. Replace the
+  area-ratio check in propagate() with IoU between consecutive solid_masks. This
+  directly fixes the polar-slice dropout problem because a
+  shrinking-but-overlapping cross-section still has high IoU.
+  2. Bilateral filtering — one-line change, improves threshold quality on noisy
+  slices.
+  3. Polar-DP — the big one. Fundamentally solves the multi-GUV merge problem
+  and weak-membrane problem simultaneously. Medium-high effort but the Gemini
+  research doc has a detailed algorithm sketch.
+
+  Want me to plan any of these?
+
+✻ Sautéed for 2m 31s
+
+> yes all please in a document like before! the agent will execute as a goal so 
+  no worries on how much content is in the doc, just do it and give the agent   
+  specific instructions if any to avoid making mistakes, like using a lot of    
+  subagents like before that dont overlab on files and stuff...!                
+
+  Thought for 7s (ctrl+o to expand)
+
+● Let me check current line numbers in the changed files so the plan references
+  are accurate.
+
+  Thought for 8s, read 3 files (ctrl+o to expand)
+
+● API Error: 400 RESOURCE_EXHAUSTED: You have exhausted your capacity on
+  claude-opus-4-6-thinking. Quota will reset after 1h13m27s.
+
+✻ Crunched for 34s
