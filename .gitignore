@@ -112,3 +112,6 @@ temp_uploads/
 # Confidential real-data previews (never ship in docs assets)
 docs/public/preview-*.png
 
+
+.codex/
+graphify-out/
