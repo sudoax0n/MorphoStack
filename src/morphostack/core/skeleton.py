@@ -121,26 +121,20 @@ def prune_skeleton(skeleton_array: np.ndarray, prune_threshold_pix: float = 1.0)
     return pruned
 
 
-def calculate_vs_perimeter(
+def _walk_skeleton_components(
     pruned_skeleton: np.ndarray,
-    voxel_size_um: float = 1.0,
-) -> tuple[float, float]:
-    """Vossepoel & Smeulders metrication-corrected perimeter from a skeleton loop.
+) -> list[np.ndarray]:
+    """Greedy 8-neighbor chain walks covering all skeleton pixels.
 
-    Returns ``(P_physical, P_naive_physical)`` both scaled by ``voxel_size_um``.
-    Pixel-space equivalents are ``P / voxel_size_um`` when ``voxel_size_um > 0``.
+    Restarts from an unvisited node when a walk stalls so disconnected
+    components and residual fragments are not silently dropped.
+    Returns a list of ordered (row, col) chains (one per component walk).
     """
     coords = np.column_stack(np.where(np.asarray(pruned_skeleton, dtype=bool)))
     if len(coords) == 0:
-        return 0.0, 0.0
+        return []
 
     unvisited = set(map(tuple, coords.tolist()))
-    ordered_chain: list[tuple[int, int]] = []
-
-    current_pt = tuple(coords[0].tolist())
-    ordered_chain.append(current_pt)
-    unvisited.remove(current_pt)
-
     neighbors_8 = (
         (-1, -1),
         (-1, 0),
@@ -151,47 +145,166 @@ def calculate_vs_perimeter(
         (1, 0),
         (1, 1),
     )
+    components: list[np.ndarray] = []
 
     while unvisited:
-        found_next = False
-        for dy, dx in neighbors_8:
-            ny, nx_pt = current_pt[0] + dy, current_pt[1] + dx
-            if (ny, nx_pt) in unvisited:
-                current_pt = (ny, nx_pt)
-                ordered_chain.append(current_pt)
-                unvisited.remove(current_pt)
-                found_next = True
-                break
-        if not found_next:
-            break
+        # Deterministic restart: smallest (row, col) among remaining.
+        current_pt = min(unvisited)
+        ordered_chain: list[tuple[int, int]] = [current_pt]
+        unvisited.remove(current_pt)
 
-    ordered = np.asarray(ordered_chain, dtype=np.int64)
-    if len(ordered) < 3:
+        while unvisited:
+            found_next = False
+            for dy, dx in neighbors_8:
+                ny, nx_pt = current_pt[0] + dy, current_pt[1] + dx
+                if (ny, nx_pt) in unvisited:
+                    current_pt = (ny, nx_pt)
+                    ordered_chain.append(current_pt)
+                    unvisited.remove(current_pt)
+                    found_next = True
+                    break
+            if not found_next:
+                break
+
+        components.append(np.asarray(ordered_chain, dtype=np.int64))
+
+    return components
+
+
+def _chain_is_closed(ordered: np.ndarray) -> bool:
+    """True only when first and last skeleton pixels are 8-neighbors (real loop).
+
+    Open fragments must not be closed with a fake wrap-around edge.
+    """
+    if ordered is None or len(ordered) < 3:
+        return False
+    y0, x0 = int(ordered[0, 0]), int(ordered[0, 1])
+    y1, x1 = int(ordered[-1, 0]), int(ordered[-1, 1])
+    dy = abs(y0 - y1)
+    dx = abs(x0 - x1)
+    if dy == 0 and dx == 0:
+        return True  # explicit repeated endpoint
+    # 8-neighborhood: Chebyshev distance 1 (adjacent, including diagonal)
+    return max(dx, dy) == 1
+
+
+def _chain_step_pairs(ordered: np.ndarray, *, closed: bool) -> tuple[np.ndarray, np.ndarray]:
+    """Return (from_pts, to_pts) for real skeleton edges only.
+
+    Open chains use consecutive walk steps only. Closed chains add the genuine
+    last→first edge when endpoints are 8-neighbors.
+    """
+    if len(ordered) < 2:
+        empty = np.zeros((0, 2), dtype=np.int64)
+        return empty, empty
+    if closed and len(ordered) >= 3:
+        from_pts = ordered
+        to_pts = np.roll(ordered, shift=-1, axis=0)
+    else:
+        from_pts = ordered[:-1]
+        to_pts = ordered[1:]
+    return from_pts, to_pts
+
+
+def _vs_perimeter_pixels(ordered: np.ndarray) -> tuple[float, float]:
+    """Vossepoel–Smeulders and naive lengths in pixel units for one chain.
+
+    Only closes the path when endpoints are genuinely 8-adjacent.
+    """
+    if len(ordered) < 2:
         return 0.0, 0.0
 
-    next_pts = np.roll(ordered, shift=-1, axis=0)
-    deltas = next_pts - ordered
+    closed = _chain_is_closed(ordered)
+    # VS metrication needs at least a few edges; open 2-point chain uses naive only.
+    from_pts, to_pts = _chain_step_pairs(ordered, closed=closed)
+    if len(from_pts) == 0:
+        return 0.0, 0.0
 
+    deltas = to_pts - from_pts
     abs_deltas = np.abs(deltas)
     step_magnitudes = np.sum(abs_deltas, axis=1)
 
     is_even = step_magnitudes == 1
     is_odd = step_magnitudes == 2
-
     n_even = int(np.sum(is_even))
     n_odd = int(np.sum(is_odd))
 
-    prev_deltas = np.roll(deltas, shift=1, axis=0)
-    is_corner = np.any(deltas != prev_deltas, axis=1)
-    n_corner = int(np.sum(is_corner))
+    if len(deltas) >= 2:
+        prev_deltas = np.roll(deltas, shift=1, axis=0)
+        # For open chains, the first edge has no previous — do not wrap corners.
+        if not closed:
+            is_corner = np.zeros(len(deltas), dtype=bool)
+            is_corner[1:] = np.any(deltas[1:] != deltas[:-1], axis=1)
+        else:
+            is_corner = np.any(deltas != prev_deltas, axis=1)
+        n_corner = int(np.sum(is_corner))
+    else:
+        n_corner = 0
 
-    p_pixels = (n_even * 0.980) + (n_odd * 1.406) - (n_corner * 0.091)
-    p_physical = float(p_pixels * voxel_size_um)
+    p_vs = (n_even * 0.980) + (n_odd * 1.406) - (n_corner * 0.091)
+    p_naive = float(n_even + n_odd * np.sqrt(2))
+    return float(p_vs), float(p_naive)
 
-    p_naive_pixels = float(n_even + n_odd * np.sqrt(2))
-    p_naive_physical = float(p_naive_pixels * voxel_size_um)
 
-    return p_physical, p_naive_physical
+def _chain_perimeter_um(ordered: np.ndarray, *, x_um: float, y_um: float) -> float:
+    """Sum Euclidean step lengths in physical XY (anisotropic-safe).
+
+    Open fragments do not include a fake closing edge.
+    """
+    if len(ordered) < 2:
+        return 0.0
+    closed = _chain_is_closed(ordered)
+    from_pts, to_pts = _chain_step_pairs(ordered, closed=closed)
+    if len(from_pts) == 0:
+        return 0.0
+    # ordered is (row=y, col=x)
+    dy = (to_pts[:, 0] - from_pts[:, 0]).astype(np.float64) * float(y_um)
+    dx = (to_pts[:, 1] - from_pts[:, 1]).astype(np.float64) * float(x_um)
+    return float(np.sum(np.hypot(dx, dy)))
+
+
+def calculate_vs_perimeter(
+    pruned_skeleton: np.ndarray,
+    voxel_size_um: float = 1.0,
+    *,
+    voxel_y_um: float | None = None,
+) -> tuple[float, float]:
+    """Perimeter from a (possibly multi-component) pruned skeleton.
+
+    Isotropic XY (``voxel_y_um`` is None or equals ``voxel_size_um``):
+    Vossepoel–Smeulders metrication-corrected length, summed over all
+    connected components (restarting walks so fragments are not dropped).
+
+    Anisotropic XY (``voxel_y_um`` provided and differs from ``voxel_size_um``):
+    physical Euclidean step lengths with independent x/y scales — VS constants
+    assume square pixels and are not applied.
+
+    Returns ``(P_physical, P_naive_physical)`` in µm. For isotropic, pixel-space
+    equivalents are ``P / voxel_size_um`` when ``voxel_size_um > 0``.
+    """
+    x_um = float(voxel_size_um) if voxel_size_um > 0 else 1.0
+    y_um = float(voxel_y_um) if voxel_y_um is not None and voxel_y_um > 0 else x_um
+    anisotropic = abs(x_um - y_um) > 1e-15
+
+    components = _walk_skeleton_components(pruned_skeleton)
+    if not components:
+        return 0.0, 0.0
+
+    p_physical = 0.0
+    p_naive_physical = 0.0
+    for ordered in components:
+        if len(ordered) < 2:
+            continue
+        if anisotropic:
+            length = _chain_perimeter_um(ordered, x_um=x_um, y_um=y_um)
+            p_physical += length
+            p_naive_physical += length
+        else:
+            p_vs, p_naive = _vs_perimeter_pixels(ordered)
+            p_physical += p_vs * x_um
+            p_naive_physical += p_naive * x_um
+
+    return float(p_physical), float(p_naive_physical)
 
 
 def selected_component_mask(
@@ -273,14 +386,16 @@ def measure_skeleton(
     object_seed: tuple[int, int] | None = None,
     prune_threshold_pix: float = 1.0,
     voxel_x_um: float = 1.0,
+    voxel_y_um: float | None = None,
 ) -> tuple[np.ndarray, SkeletonMetrics]:
-    """Skeletonize a selected component and compute VS perimeter metrics."""
+    """Skeletonize a selected component and compute perimeter metrics."""
     pruned = skeletonize_component(
         binary_mask,
         object_seed=object_seed,
         prune_threshold_pix=prune_threshold_pix,
     )
-    scale = float(voxel_x_um) if voxel_x_um > 0 else 1.0
+    scale_x = float(voxel_x_um) if voxel_x_um > 0 else 1.0
+    scale_y = float(voxel_y_um) if voxel_y_um is not None and voxel_y_um > 0 else scale_x
     if not np.any(pruned):
         empty = SkeletonMetrics(
             perimeter_px=0.0,
@@ -291,10 +406,14 @@ def measure_skeleton(
         )
         return pruned, empty
 
-    p_um, p_naive_um = calculate_vs_perimeter(pruned, voxel_size_um=scale)
-    p_px = p_um / scale if scale else 0.0
-    p_naive_px = p_naive_um / scale if scale else 0.0
-    ok = p_px > 0.0
+    p_um, p_naive_um = calculate_vs_perimeter(
+        pruned, voxel_size_um=scale_x, voxel_y_um=scale_y
+    )
+    # Pixel-space report uses mean XY scale when anisotropic (µm is authoritative).
+    mean_scale = 0.5 * (scale_x + scale_y) if scale_x > 0 and scale_y > 0 else scale_x
+    p_px = p_um / mean_scale if mean_scale else 0.0
+    p_naive_px = p_naive_um / mean_scale if mean_scale else 0.0
+    ok = p_um > 0.0
     metrics = SkeletonMetrics(
         perimeter_px=float(p_px),
         perimeter_um=float(p_um),

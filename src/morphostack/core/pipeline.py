@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Sequence, Any
 
@@ -19,6 +20,17 @@ from morphostack.core.models import (
 )
 from morphostack.core.profiles import AnalysisProfile, DEFAULT_PROFILE, normalize_profile
 from morphostack.core.segmentation import apply_rect_roi, apply_z_range
+
+
+def xy_distance_um(
+    dx_px: float,
+    dy_px: float,
+    *,
+    x_um: float,
+    y_um: float,
+) -> float:
+    """Physical lateral distance for a pixel offset under (possibly anisotropic) XY."""
+    return math.hypot(float(dx_px) * float(x_um), float(dy_px) * float(y_um))
 
 
 @dataclass(frozen=True)
@@ -187,8 +199,11 @@ class StackViewTransform:
             if seed.frame_index < self.z_range.zmin or seed.frame_index >= self.z_range.zmax:
                 raise ValueError(f"Seed frame index {seed.frame_index} is outside Z-range [{self.z_range.zmin}, {self.z_range.zmax})")
 
-        local_x = int(round(seed.x)) - self.x_offset
-        local_y = int(round(seed.y)) - self.y_offset
+        # Half-away-from-zero nearest pixel — matches seed_mapping / 2D UI Math.round.
+        from morphostack.core.seed_mapping import nearest_int
+
+        local_x = nearest_int(seed.x) - self.x_offset
+        local_y = nearest_int(seed.y) - self.y_offset
         local_z = seed.frame_index - self.z_offset
         return (local_x, local_y, local_z)
 
@@ -740,6 +755,7 @@ def analyze_frame(
             object_seed=object_seed,
             prune_pix=skeleton_prune_pix,
             voxel_x_um=voxel_size.x_um,
+            voxel_y_um=voxel_size.y_um,
         )
 
     thr_meta = threshold_provenance(
@@ -772,6 +788,7 @@ def _skeleton_fields_for_frame(
     object_seed: tuple[int, int] | None,
     prune_pix: float,
     voxel_x_um: float,
+    voxel_y_um: float | None = None,
 ) -> tuple[float | None, float | None, bool]:
     """Return (skel_perimeter_um, skel_perimeter_px, skel_ok) for one frame."""
     try:
@@ -783,6 +800,7 @@ def _skeleton_fields_for_frame(
             object_seed=object_seed,
             prune_threshold_pix=prune_pix,
             voxel_x_um=voxel_x_um,
+            voxel_y_um=voxel_y_um if voxel_y_um is not None else voxel_x_um,
         )
         if not skel.ok:
             return 0.0, 0.0, False
@@ -1017,6 +1035,7 @@ def analyze_stack(
                     object_seed=seed_xy,
                     prune_pix=skeleton_prune_pix,
                     voxel_x_um=voxel_size.x_um,
+                    voxel_y_um=voxel_size.y_um,
                 )
 
             thr_meta = threshold_provenance(
@@ -1058,8 +1077,12 @@ def analyze_stack(
             from morphostack.core.seeded_vesicle import effective_seed_radius, track_seeded_vesicle_stack
 
             jump_px = None
+            jump_um = None
+            vx_um = float(voxel_size.x_um) if voxel_size is not None else 1.0
+            vy_um = float(voxel_size.y_um) if voxel_size is not None else 1.0
             if local_seed.max_tracking_dist_um is not None and voxel_size is not None:
-                jump_px = float(local_seed.max_tracking_dist_um) / max(voxel_size.x_um, 1e-9)
+                # Gate in physical XY: hypot(dx*x_um, dy*y_um) <= max_um (not mean spacing).
+                jump_um = float(local_seed.max_tracking_dist_um)
             seed_r = effective_seed_radius(float(local_seed.radius) if local_seed.radius else None)
             seeded_results = track_seeded_vesicle_stack(
                 arr,
@@ -1068,6 +1091,9 @@ def analyze_stack(
                 seed_frame=int(local_seed.frame_index),
                 seed_radius=seed_r,
                 max_centroid_jump_px=jump_px,
+                max_centroid_jump_um=jump_um,
+                voxel_x_um=vx_um,
+                voxel_y_um=vy_um,
                 competitive_isolation=bool(competitive_tracking),
                 multiscale_consensus=bool(multiscale_consensus),
                 profile=analysis_profile,
@@ -1128,6 +1154,7 @@ def analyze_stack(
                             object_seed=(int(round(sres.center_xy[0])), int(round(sres.center_xy[1]))),
                             prune_pix=skeleton_prune_pix,
                             voxel_x_um=voxel_size.x_um,
+                            voxel_y_um=voxel_size.y_um,
                         )
                     fa = FrameAnalysis(
                         frame_index=idx + frame_offset,
@@ -1149,10 +1176,13 @@ def analyze_stack(
                     touches_boundary = _solid_mask_touches_boundary(
                         sres.solid_mask, height=height_local, width=width_local
                     )
+                    # Disk clipping is evaluated at the search/disk center used for
+                    # that frame, not the returned contour centroid (which can drift).
+                    search_c = getattr(sres, "search_center_xy", None) or sres.center_xy
                     touches_disk = _solid_mask_touches_seed_disk(
                         sres.solid_mask,
-                        seed_x=float(sres.center_xy[0]),
-                        seed_y=float(sres.center_xy[1]),
+                        seed_x=float(search_c[0]),
+                        seed_y=float(search_c[1]),
                         seed_radius=seed_r,
                     )
                     track_records.append(
@@ -1619,14 +1649,25 @@ def _track_object(
     if local_seed_idx < 0 or local_seed_idx >= n:
         return ObjectTrackingResult(seeds=seeds, tracked_components=tracked_components)
 
-    # Max lateral drift (GUVs float in solvent across Z). Generous default.
+    # Max lateral drift (GUVs float in solvent across Z). Prefer physical XY gate.
+    max_dist_um: float | None = None
+    max_dist_px: float | None = None
+    vx_um = float(voxel_size.x_um) if voxel_size is not None else 1.0
+    vy_um = float(voxel_size.y_um) if voxel_size is not None else 1.0
     if object_seed.max_tracking_dist_um is not None and voxel_size is not None:
-        max_dist_px = object_seed.max_tracking_dist_um / voxel_size.x_um
+        max_dist_um = float(object_seed.max_tracking_dist_um)
+    elif voxel_size is not None:
+        # Default: at least 40 µm physical, or ~6 radii / 80 px in min-axis µm.
+        min_axis = max(min(vx_um, vy_um), 1e-9)
+        max_dist_um = max(6.0 * float(object_seed.radius) * min_axis, 40.0, 80.0 * min_axis)
     else:
-        if voxel_size is not None:
-            max_dist_px = max(6.0 * object_seed.radius, 40.0 / max(voxel_size.x_um, 1e-6), 80.0)
-        else:
-            max_dist_px = max(6.0 * object_seed.radius, 80.0)
+        max_dist_px = max(6.0 * object_seed.radius, 80.0)
+
+    def _within_jump(dx: float, dy: float) -> bool:
+        if max_dist_um is not None:
+            return xy_distance_um(dx, dy, x_um=vx_um, y_um=vy_um) <= max_dist_um
+        assert max_dist_px is not None
+        return math.hypot(float(dx), float(dy)) <= float(max_dist_px)
 
     from morphostack.core.object_select import pick_component, refine_component_near_point
 
@@ -1697,10 +1738,15 @@ def _track_object(
                 overlap = int(np.sum(np.logical_and(sub_mask1_slice, sub_mask2_slice)))
 
             ccx, ccy = comp["centroid"]
-            dist2 = (ccx - curr_cx) ** 2 + (ccy - curr_cy) ** 2
-            if overlap == 0 and dist2 > max_dist_px ** 2:
+            dx = float(ccx - curr_cx)
+            dy = float(ccy - curr_cy)
+            if max_dist_um is not None:
+                dist_key = xy_distance_um(dx, dy, x_um=vx_um, y_um=vy_um)
+            else:
+                dist_key = math.hypot(dx, dy)
+            if overlap == 0 and not _within_jump(dx, dy):
                 continue
-            ranked.append((-float(overlap), float(dist2), comp))
+            ranked.append((-float(overlap), float(dist_key), comp))
 
         candidate: dict[str, Any] | None = None
         if ranked:
@@ -1717,7 +1763,7 @@ def _track_object(
             if soft is None:
                 return None
             scx, scy = soft["centroid"]
-            if (scx - curr_cx) ** 2 + (scy - curr_cy) ** 2 > max_dist_px ** 2:
+            if not _within_jump(float(scx - curr_cx), float(scy - curr_cy)):
                 return None
             candidate = soft
 
@@ -1730,7 +1776,7 @@ def _track_object(
             ref_area=curr_area,
         )
         rcx, rcy = refined["centroid"]
-        if (rcx - curr_cx) ** 2 + (rcy - curr_cy) ** 2 > max_dist_px ** 2:
+        if not _within_jump(float(rcx - curr_cx), float(rcy - curr_cy)):
             # Refined lobe drifted too far — lost track
             return None
         return refined

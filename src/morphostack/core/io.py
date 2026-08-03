@@ -98,15 +98,43 @@ def read_czi(path: Path) -> tuple[np.ndarray, VoxelSize | None]:
     return image, voxel
 
 
+def resolution_unit_um_scale(tag: Any) -> float | None:
+    """TIFF ResolutionUnit → micrometres per resolution unit.
+
+    TIFF 6.0: 1 = none, 2 = inch, 3 = centimetre. Absent/none keeps legacy
+    behaviour (treat 1/resolution as already-µm).
+    """
+    if tag is None:
+        return None
+    value = getattr(tag, "value", tag)
+    try:
+        unit = int(value)
+    except Exception:
+        return None
+    if unit == 2:  # inch
+        return 25_400.0
+    if unit == 3:  # centimetre
+        return 10_000.0
+    # 1 = no absolute unit, or unknown → preserve pre-fix µm interpretation
+    return None
+
+
 def voxel_from_tiff(tif: Any) -> VoxelSize | None:
     if not getattr(tif, "pages", None):
         return None
 
     first_page = tif.pages[0]
     tags = getattr(first_page, "tags", {})
-    x_um = resolution_tag_to_um(tags.get("XResolution"))
-    y_um = resolution_tag_to_um(tags.get("YResolution"))
+    unit_scale = resolution_unit_um_scale(tags.get("ResolutionUnit"))
+    x_um = resolution_tag_to_um(tags.get("XResolution"), unit_um_per_res_unit=unit_scale)
+    y_um = resolution_tag_to_um(tags.get("YResolution"), unit_um_per_res_unit=unit_scale)
     z_um = image_description_spacing_um(tags.get("ImageDescription"))
+
+    # Mirror single XY axis like CZI / Fiji / Bio-Formats (do not invent 1.0 µm).
+    if x_um is not None and y_um is None:
+        y_um = x_um
+    elif y_um is not None and x_um is None:
+        x_um = y_um
 
     if x_um is None and y_um is None and z_um is None:
         return None
@@ -218,7 +246,17 @@ def find_czi_distance(text: str, dimension: str) -> float | None:
     return None
 
 
-def resolution_tag_to_um(tag: Any) -> float | None:
+def resolution_tag_to_um(
+    tag: Any,
+    *,
+    unit_um_per_res_unit: float | None = None,
+) -> float | None:
+    """Convert TIFF XResolution/YResolution to micrometres per pixel.
+
+    Tags are pixels-per-unit. When ``unit_um_per_res_unit`` is set (from
+    ResolutionUnit inch/cm), scale into µm; when None, keep legacy behaviour
+    that treats the reciprocal as already-µm (unit absent/none).
+    """
     if tag is None:
         return None
     value = getattr(tag, "value", tag)
@@ -227,22 +265,72 @@ def resolution_tag_to_um(tag: Any) -> float | None:
         if float(numerator) == 0:
             return None
         pixels_per_unit = float(numerator) / float(denominator)
-        return 1.0 / pixels_per_unit
+        if pixels_per_unit == 0:
+            return None
+        size_in_unit = 1.0 / pixels_per_unit
+        if unit_um_per_res_unit is not None:
+            return size_in_unit * float(unit_um_per_res_unit)
+        return size_in_unit
     except Exception:
         return None
 
 
+# ImageJ ImageDescription unit= token → multiply spacing by this to get µm.
+# Unknown explicit units return None from image_description_spacing_um (no guess).
+_IMAGEJ_UNIT_TO_UM: dict[str, float] = {
+    "nm": 1e-3,
+    "nanometer": 1e-3,
+    "nanometre": 1e-3,
+    "um": 1.0,
+    "µm": 1.0,
+    "micron": 1.0,
+    "microns": 1.0,
+    "micrometer": 1.0,
+    "micrometre": 1.0,
+    "micrometers": 1.0,
+    "micrometres": 1.0,
+    "mm": 1e3,
+    "millimeter": 1e3,
+    "millimetre": 1e3,
+}
+
+
+def imagej_unit_to_um_factor(unit: str) -> float | None:
+    """Return scale from ImageJ unit token to µm, or None if unknown."""
+    key = unit.strip().lower()
+    # Normalize unicode micro sign variants already lowercased as µm in table.
+    if key in _IMAGEJ_UNIT_TO_UM:
+        return _IMAGEJ_UNIT_TO_UM[key]
+    # Bare "u" sometimes used for micron
+    if key == "u":
+        return 1.0
+    return None
+
+
 def image_description_spacing_um(tag: Any) -> float | None:
+    """Parse ImageJ spacing= (and optional unit=) into z spacing in µm.
+
+    Without unit=, keep legacy behaviour (value already treated as µm).
+    With a known unit, convert. With an unknown explicit unit, return None
+    rather than guessing.
+    """
     if tag is None:
         return None
     description = str(getattr(tag, "value", tag))
-    match = re.search(r"spacing\s*=\s*([0-9.eE+-]+)", description)
+    match = re.search(r"spacing\s*=\s*([0-9.eE+-]+)", description, re.IGNORECASE)
     if not match:
         return None
     try:
-        return float(match.group(1))
+        spacing = float(match.group(1))
     except ValueError:
         return None
+    unit_match = re.search(r"unit\s*=\s*([^\s\r\n]+)", description, re.IGNORECASE)
+    if not unit_match:
+        return spacing
+    factor = imagej_unit_to_um_factor(unit_match.group(1))
+    if factor is None:
+        return None
+    return spacing * factor
 
 
 def find_metadata_number(text: str, key: str) -> float | None:

@@ -165,13 +165,19 @@ def world_to_source_voxel(world: WorldPointUm, geometry: DisplayLevelGeometry) -
     return level_to_source_voxel(world_to_level_voxel(world, geometry), geometry)
 
 
-def _nearest_int(value: float) -> int:
-    # Python round is banker's rounding; for seeds use half-away-from-zero via int(v+0.5) for >=0
-    # and symmetric for negative (indices should be non-negative).
+def nearest_int(value: float) -> int:
+    """Nearest integer with half-away-from-zero (matches 2D UI Math.round).
+
+    Python's built-in ``round`` uses banker's rounding; seed paths must not.
+    """
     v = float(value)
     if v >= 0:
         return int(v + 0.5)
     return int(v - 0.5)
+
+
+# Backward-compatible private alias.
+_nearest_int = nearest_int
 
 
 def source_in_bounds(

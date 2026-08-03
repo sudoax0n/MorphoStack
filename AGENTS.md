@@ -64,6 +64,11 @@ PRs should state user-visible impact, note CLI/API/UI surface changes, link issu
 ## Agent orchestration
 
 - The current Codex session is the **orchestrator, planner, reviewer, and integrator**.
+- Executors must use independent technical judgment at every task and step. They must inspect evidence, reason about consequences, and challenge incorrect or incomplete packet assumptions instead of blindly following the orchestrator. Any deviation must be explained in the execution report.
+- Implementation packets should normally ask the executor to parallelize genuinely independent scouting, analysis, testing, and review work with multiple subagents when doing so materially saves time without lowering quality. Do not create subagents for tiny or sequential work, and never give subagents overlapping write ownership.
+- The selected executor remains the sole owner of the implementation and shared working tree. Subagent output is advisory until the executor personally reviews it, checks any proposed diff, resolves conflicts, and reruns the relevant validation. Never pass unreviewed subagent work to the orchestrator as complete.
+- Every executor must return a compact execution report containing: reasoning and decisions; subagents used and what each did; changed files; validation commands and results; unresolved risks; and any deviations from the packet. The orchestrator then reviews the actual diff and evidence and gives an accept / needs-correction / reject verdict with a rating.
+- **Strict simplicity rule:** for a direct file or text edit, edit only the requested file and stop. Do not introduce or discuss Git status, diffs, staging, commits, branches, merges, pushes, agents, plans, audits, tests, or other workflow unless the user explicitly asks for them or they are strictly required for safety or correctness.
 - At the beginning of **every new implementation task**, before editing code or invoking another agent/CLI, ask:
 
   > Choose the executor for this task:  

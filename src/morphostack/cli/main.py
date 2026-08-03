@@ -279,7 +279,12 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.add_argument("--seed-x", type=float, help="Object seed X coordinate in full-image pixels.")
     analyze.add_argument("--seed-y", type=float, help="Object seed Y coordinate in full-image pixels.")
     analyze.add_argument("--seed-frame", type=int, help="Object seed frame / Z index.")
-    analyze.add_argument("--seed-radius", type=float, default=10.0, help="Object seed radius in pixels. Default: 10.")
+    analyze.add_argument(
+        "--seed-radius",
+        type=float,
+        default=None,
+        help="Object seed radius in pixels. Default: 10 when a seed is provided.",
+    )
     analyze.add_argument("--seed-max-dist-um", type=float, help="Maximum centroid jump between frames in micrometers.")
     analyze.add_argument(
         "--mesh-export",
@@ -472,6 +477,7 @@ def main(argv: list[str] | None = None) -> int:
                 seed_frame=args.seed_frame,
                 seed_radius=args.seed_radius,
                 seed_max_dist_um=args.seed_max_dist_um,
+                seed_radius_explicit=args.seed_radius is not None,
             ),
             mesh_export=args.mesh_export,
             mask_export=args.mask_export,
@@ -705,20 +711,32 @@ def object_seed_from_cli(
     seed_x: float | None,
     seed_y: float | None,
     seed_frame: int | None,
-    seed_radius: float = 10.0,
+    seed_radius: float | None = None,
     seed_max_dist_um: float | None = None,
+    seed_radius_explicit: bool = False,
 ) -> ObjectSeed | None:
+    """Build an ObjectSeed from CLI flags.
+
+    Any seed tuning flag (``--seed-radius`` when explicitly passed,
+    ``--seed-max-dist-um``) without the required ``--seed-x/y/frame`` trio is a
+    usage error (exit 2). Bare defaults do not force a seed.
+    """
     values = (seed_x, seed_y, seed_frame)
-    if all(value is None for value in values):
+    has_coords = any(value is not None for value in values)
+    has_tuning = seed_max_dist_um is not None or seed_radius_explicit
+    if not has_coords and not has_tuning:
         return None
     if any(value is None for value in values):
-        print("Object seed requires --seed-x, --seed-y, and --seed-frame together.")
+        print(
+            "Object seed requires --seed-x, --seed-y, and --seed-frame together "
+            "(including when using --seed-radius or --seed-max-dist-um)."
+        )
         raise SystemExit(2)
     return ObjectSeed(
         x=seed_x,
         y=seed_y,
         frame_index=seed_frame,
-        radius=seed_radius,
+        radius=10.0 if seed_radius is None else float(seed_radius),
         max_tracking_dist_um=seed_max_dist_um,
     )
 
@@ -1014,6 +1032,11 @@ def run_sweep(
 
     try:
         thresholds = threshold_values(start, stop, step)
+    except ValueError as exc:
+        print(f"Invalid sweep parameters: {exc}")
+        return 2
+
+    try:
         stack = load_image_stack(path, voxel_override=voxel_override)
         results = threshold_sweep(
             stack.grayscale,

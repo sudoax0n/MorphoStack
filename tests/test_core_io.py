@@ -324,4 +324,73 @@ def test_standardize_shapes_unsupported():
         io.standardize_shapes((2, 2, 2, 2, 2))
 
 
+def test_tiff_resolution_unit_cm_scales_to_micrometers():
+    # 2 pixels per cm => 0.5 cm/pixel => 5000 um/pixel
+    tif = FakeTiff(
+        {
+            "XResolution": FakeTag((2, 1)),
+            "YResolution": FakeTag((2, 1)),
+            "ResolutionUnit": FakeTag(3),
+        }
+    )
+    voxel = io.voxel_from_tiff(tif)
+    assert voxel == VoxelSize(x_um=5000.0, y_um=5000.0, z_um=1.0)
 
+
+def test_tiff_resolution_unit_inch_scales_to_micrometers():
+    # 1 pixel per inch => 25400 um/pixel
+    tif = FakeTiff(
+        {
+            "XResolution": FakeTag((1, 1)),
+            "YResolution": FakeTag((1, 1)),
+            "ResolutionUnit": FakeTag(2),
+        }
+    )
+    voxel = io.voxel_from_tiff(tif)
+    assert voxel == VoxelSize(x_um=25400.0, y_um=25400.0, z_um=1.0)
+
+
+def test_tiff_missing_resolution_unit_keeps_legacy_um_behavior():
+    # No ResolutionUnit: reciprocal of pixels-per-unit treated as um (pinned legacy).
+    tif = FakeTiff(
+        {
+            "XResolution": FakeTag((2, 1)),
+            "YResolution": FakeTag((4, 1)),
+        }
+    )
+    voxel = io.voxel_from_tiff(tif)
+    assert voxel == VoxelSize(x_um=0.5, y_um=0.25, z_um=1.0)
+
+
+def test_tiff_single_axis_resolution_mirrors_other():
+    tif = FakeTiff({"XResolution": FakeTag((2, 1))})
+    voxel = io.voxel_from_tiff(tif)
+    assert voxel == VoxelSize(x_um=0.5, y_um=0.5, z_um=1.0)
+
+    tif_y = FakeTiff({"YResolution": FakeTag((4, 1))})
+    voxel_y = io.voxel_from_tiff(tif_y)
+    assert voxel_y == VoxelSize(x_um=0.25, y_um=0.25, z_um=1.0)
+
+
+def test_image_description_spacing_unit_nm_mm_um():
+    assert io.image_description_spacing_um(FakeTag("spacing=500.0 unit=nm")) == pytest.approx(0.5)
+    assert io.image_description_spacing_um(FakeTag("spacing=0.5 unit=mm")) == pytest.approx(500.0)
+    assert io.image_description_spacing_um(FakeTag("spacing=1.5 unit=um")) == pytest.approx(1.5)
+    assert io.image_description_spacing_um(FakeTag("spacing=1.5 unit=\u00b5m")) == pytest.approx(1.5)
+    assert io.image_description_spacing_um(FakeTag("spacing=2.0 unit=micron")) == pytest.approx(2.0)
+    # No unit= keeps legacy um interpretation
+    assert io.image_description_spacing_um(FakeTag("spacing=1.5")) == pytest.approx(1.5)
+    # Unknown explicit unit must not be guessed
+    assert io.image_description_spacing_um(FakeTag("spacing=1.5 unit=furlong")) is None
+
+
+def test_tiff_imagej_nm_spacing_with_xy_resolution():
+    tif = FakeTiff(
+        {
+            "XResolution": FakeTag((2, 1)),
+            "YResolution": FakeTag((2, 1)),
+            "ImageDescription": FakeTag("ImageJ=1.53 spacing=500.0 unit=nm"),
+        }
+    )
+    voxel = io.voxel_from_tiff(tif)
+    assert voxel == VoxelSize(x_um=0.5, y_um=0.5, z_um=0.5)

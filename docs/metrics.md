@@ -30,6 +30,7 @@ Contour points are in pixel coordinates; physical metrics scale by `VoxelSize` (
 | `perimeter_px` | Polygon perimeter in pixels | Closed contour |
 | `area_um2` | Area after scaling points by `(vx, vy)` | Projected area in µm² |
 | `perimeter_um` | Sum of edge lengths with **separate** `vx` and `vy` scales | Anisotropic-safe (not a single mean scale factor) |
+| `skel_perimeter_um` | Skeleton centerline length (optional) | **Isotropic XY:** Vossepoel–Smeulders metrication. **Anisotropic XY:** Euclidean step lengths with independent `vx`/`vy` (VS constants assume square pixels). All skeleton components are summed. |
 | `circularity` | \(4\pi A / P^2\) using physical area/perimeter | 1.0 ≈ circle |
 | `bbox_width_um`, `bbox_height_um` | Axis-aligned bbox in µm | From scaled points |
 | `aspect_ratio` | major / minor bbox side | ≥ 1 |

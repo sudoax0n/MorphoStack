@@ -14,7 +14,7 @@ import os
 import traceback
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from concurrent.futures.process import BrokenProcessPool
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal, Sequence
 
@@ -63,6 +63,9 @@ class BatchStackJob:
     bundle_dir: str | None = None
     input_dir: str | None = None  # for relative bundle layout
     compute_sha256: bool = True
+    # Pre-assigned unique output names (set by assign_unique_batch_outputs).
+    metrics_stem: str | None = None  # basename without _metrics.csv
+    bundle_rel: str | None = None  # posix path relative to bundle_dir
 
 
 @dataclass
@@ -107,6 +110,86 @@ class BatchRunReport:
 def safe_output_stem(path: Path) -> str:
     raw = path.stem.strip() or "stack"
     return "".join(char if char.isalnum() or char in "._-" else "_" for char in raw)
+
+
+def disambiguated_output_stem(path: Path, claimed: set[str]) -> str:
+    """Return a unique safe stem for metrics/bundle basenames.
+
+    Same-stem collisions (``stack.tif`` vs ``stack.tiff``, or flat metrics dir)
+    append a sanitized suffix, then a numeric index. Never silently reuses a
+    claimed name. Mutates ``claimed`` to record the chosen stem.
+    """
+    base = safe_output_stem(path)
+    if base not in claimed:
+        claimed.add(base)
+        return base
+    ext = path.suffix.lower().lstrip(".") or "file"
+    ext = "".join(char if char.isalnum() or char in "._-" else "_" for char in ext)
+    candidate = f"{base}_{ext}"
+    if candidate not in claimed:
+        claimed.add(candidate)
+        return candidate
+    index = 2
+    while True:
+        numbered = f"{candidate}_{index}"
+        if numbered not in claimed:
+            claimed.add(numbered)
+            return numbered
+        index += 1
+
+
+def unique_bundle_run_directory(
+    bundle_dir: str | Path,
+    source_path: str | Path,
+    *,
+    relative_to: str | Path | None = None,
+    claimed_posix: set[str],
+) -> Path:
+    """Like ``bundle_run_directory`` but never reuses a claimed output path."""
+    source = Path(source_path)
+    if relative_to is None:
+        stem = disambiguated_output_stem(source, claimed_posix)
+        return Path(bundle_dir) / stem
+
+    relative = source.relative_to(relative_to)
+    parent_parts = [
+        safe_output_stem(Path(part)) for part in relative.parent.parts if part not in (".", "")
+    ]
+    parent_key = "/".join(parent_parts)
+    if parent_key:
+        prefix = parent_key + "/"
+        local_claimed = {
+            key[len(prefix) :]
+            for key in claimed_posix
+            if key.startswith(prefix) and "/" not in key[len(prefix) :]
+        }
+    else:
+        local_claimed = {key for key in claimed_posix if "/" not in key}
+    stem = disambiguated_output_stem(source, local_claimed)
+    full_key = f"{parent_key}/{stem}" if parent_key else stem
+    claimed_posix.add(full_key)
+    return Path(bundle_dir).joinpath(*parent_parts, stem)
+
+
+def assign_unique_batch_outputs(jobs: Sequence[BatchStackJob]) -> list[BatchStackJob]:
+    """Pre-assign collision-free metrics stems and bundle paths for all jobs."""
+    metrics_claimed: set[str] = set()
+    bundle_claimed: set[str] = set()
+    assigned: list[BatchStackJob] = []
+    for job in jobs:
+        path = Path(job.source_path)
+        metrics_stem = job.metrics_stem
+        if job.metrics_dir and not metrics_stem:
+            metrics_stem = disambiguated_output_stem(path, metrics_claimed)
+        bundle_rel = job.bundle_rel
+        if job.bundle_dir and not bundle_rel:
+            rel = Path(job.input_dir) if job.input_dir else None
+            run_dir = unique_bundle_run_directory(
+                job.bundle_dir, path, relative_to=rel, claimed_posix=bundle_claimed
+            )
+            bundle_rel = Path(run_dir).relative_to(job.bundle_dir).as_posix()
+        assigned.append(replace(job, metrics_stem=metrics_stem, bundle_rel=bundle_rel))
+    return assigned
 
 
 def bundle_run_directory(
@@ -310,10 +393,14 @@ def process_batch_stack_job(job: BatchStackJob) -> BatchStackResult:
         if job.metrics_dir:
             metrics_dir = Path(job.metrics_dir)
             metrics_dir.mkdir(parents=True, exist_ok=True)
-            write_analysis_csv(analysis, metrics_dir / f"{safe_output_stem(path)}_metrics.csv")
+            stem = job.metrics_stem or safe_output_stem(path)
+            write_analysis_csv(analysis, metrics_dir / f"{stem}_metrics.csv")
         if job.bundle_dir:
-            rel = Path(job.input_dir) if job.input_dir else None
-            run_dir = bundle_run_directory(job.bundle_dir, path, relative_to=rel)
+            if job.bundle_rel:
+                run_dir = Path(job.bundle_dir) / Path(job.bundle_rel)
+            else:
+                rel = Path(job.input_dir) if job.input_dir else None
+                run_dir = bundle_run_directory(job.bundle_dir, path, relative_to=rel)
             run_dir.mkdir(parents=True, exist_ok=True)
             write_analysis_csv(analysis, run_dir / "metrics.csv")
             roi_payload = None
@@ -386,7 +473,7 @@ def run_batch_jobs(
 
     ``workers=1`` never constructs a process pool (exact rollback semantics).
     """
-    job_list = list(jobs)
+    job_list = assign_unique_batch_outputs(list(jobs))
     paths = [j.source_path for j in job_list]
     n_workers, governor = resolve_worker_count(
         workers,

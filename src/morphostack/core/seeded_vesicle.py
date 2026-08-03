@@ -42,6 +42,9 @@ class SeededSliceResult:
     # (adaptive local Otsu/percentile inside the seed disk). None for polar_dp
     # and other non-threshold methods. Not the UI slider value.
     effective_threshold: float | None = None
+    # Full-image XY center of the search/seed disk used for this frame (clipping
+    # diagnostics). Distinct from center_xy when the contour centroid drifts.
+    search_center_xy: tuple[float, float] | None = None
     consensus_sigmas: tuple[float, ...] | None = None
     consensus_candidate_count: int | None = None
     consensus_dominant_cluster_size: int | None = None
@@ -468,10 +471,33 @@ def _mask_iou(mask_a: np.ndarray | None, mask_b: np.ndarray | None) -> float:
     return intersection / union
 
 
+def _centroid_gate_distance(
+    a: tuple[float, float],
+    b: tuple[float, float],
+    *,
+    jump_px: float | None,
+    jump_um: float | None,
+    voxel_x_um: float,
+    voxel_y_um: float,
+) -> tuple[float, float]:
+    """Return (distance, limit) in consistent units (µm when jump_um set, else px)."""
+    dx = float(a[0]) - float(b[0])
+    dy = float(a[1]) - float(b[1])
+    if jump_um is not None:
+        dist = math.hypot(dx * float(voxel_x_um), dy * float(voxel_y_um))
+        return dist, float(jump_um)
+    dist = math.hypot(dx, dy)
+    return dist, float(jump_px if jump_px is not None else 1.0)
+
+
 def _tracking_score(
     prev_result: SeededSliceResult | None,
     candidate: SeededSliceResult,
     max_centroid_jump_px: float,
+    *,
+    max_centroid_jump_um: float | None = None,
+    voxel_x_um: float = 1.0,
+    voxel_y_um: float = 1.0,
 ) -> float:
     """Composite tracking score in [0, 1]. Higher = more likely same object.
 
@@ -484,11 +510,15 @@ def _tracking_score(
 
     iou = _mask_iou(prev_result.solid_mask, candidate.solid_mask)
 
-    dist = math.hypot(
-        candidate.center_xy[0] - prev_result.center_xy[0],
-        candidate.center_xy[1] - prev_result.center_xy[1],
+    dist, limit = _centroid_gate_distance(
+        candidate.center_xy,
+        prev_result.center_xy,
+        jump_px=max_centroid_jump_px,
+        jump_um=max_centroid_jump_um,
+        voxel_x_um=voxel_x_um,
+        voxel_y_um=voxel_y_um,
     )
-    centroid_score = 1.0 - min(dist / max(float(max_centroid_jump_px), 1.0), 1.0)
+    centroid_score = 1.0 - min(dist / max(float(limit), 1e-9), 1.0)
 
     r_prev = math.sqrt(prev_result.area_px / math.pi) if prev_result.area_px > 0 else 1.0
     r_new = math.sqrt(candidate.area_px / math.pi) if candidate.area_px > 0 else 0.0
@@ -829,12 +859,21 @@ def _result_from_solid(
     qc: SliceQC | None = None,
     merge_suspect: bool = False,
     effective_threshold: float | None = None,
+    search_center_xy: tuple[float, float] | None = None,
 ) -> SeededSliceResult:
     h, w = full_shape
+    search_c = search_center_xy if search_center_xy is not None else fallback_center
     contour_local = _contour_from_solid(solid_local)
     if contour_local is None or len(contour_local) < 3:
         return SeededSliceResult(
-            None, None, fallback_center, 0.0, 0.0, "circle_seed_fail", False
+            None,
+            None,
+            fallback_center,
+            0.0,
+            0.0,
+            "circle_seed_fail",
+            False,
+            search_center_xy=search_c,
         )
     contour = contour_local.copy()
     contour[:, 0] += x0
@@ -864,6 +903,7 @@ def _result_from_solid(
         effective_threshold=(
             float(effective_threshold) if effective_threshold is not None else None
         ),
+        search_center_xy=search_c,
     )
 
 
@@ -941,6 +981,9 @@ def _candidate_accepted(
     expected_center_tolerance: float | None = None,
     search_radius: float | None = None,
     nominal_radius: float | None = None,
+    jump_um: float | None = None,
+    voxel_x_um: float = 1.0,
+    voxel_y_um: float = 1.0,
 ) -> bool:
     """IoU hard floor + multi-feature score with conservative gap recovery.
 
@@ -1004,8 +1047,15 @@ def _candidate_accepted(
                 if dot < -0.1 * p_dist**2:
                     return False
     if prev is not None and prev.ok and prev.center_xy is not None:
-        dist = math.hypot(cand.center_xy[0] - prev.center_xy[0], cand.center_xy[1] - prev.center_xy[1])
-        if dist > jump:
+        dist, limit = _centroid_gate_distance(
+            cand.center_xy,
+            prev.center_xy,
+            jump_px=jump,
+            jump_um=jump_um,
+            voxel_x_um=voxel_x_um,
+            voxel_y_um=voxel_y_um,
+        )
+        if dist > limit:
             return False
     # Absolute area ceiling (loose safety net for merges)
     if cand.area_px > max_area_ratio * ref_area * 1.5:
@@ -1044,7 +1094,14 @@ def _candidate_accepted(
                 and cand.qc.circularity < max(0.65, prev.qc.circularity - 0.18)
             ):
                 return False
-    score = _tracking_score(prev, cand, jump)
+    score = _tracking_score(
+        prev,
+        cand,
+        jump,
+        max_centroid_jump_um=jump_um,
+        voxel_x_um=voxel_x_um,
+        voxel_y_um=voxel_y_um,
+    )
     return score >= 0.30
 
 
@@ -2022,6 +2079,9 @@ def track_seeded_vesicle_stack(
     seed_frame: int,
     seed_radius: float | None = None,
     max_centroid_jump_px: float | None = None,
+    max_centroid_jump_um: float | None = None,
+    voxel_x_um: float = 1.0,
+    voxel_y_um: float = 1.0,
     max_area_ratio: float = 2.2,
     min_area_ratio: float = 0.25,
     target_frame: TargetFrameHint = None,
@@ -2033,6 +2093,10 @@ def track_seeded_vesicle_stack(
     profile: str = "vesicle",
 ) -> list[SeededSliceResult]:
     """Z tracking with user circle radius R.
+
+    When ``max_centroid_jump_um`` is set, centroid gates use physical XY distance
+    ``hypot(dx*voxel_x_um, dy*voxel_y_um)``. Otherwise pixel-space ``max_centroid_jump_px``
+    (or an internal default) is used.
 
     If ``target_frame`` is set (interactive preview), only walks seed_frame → target
     (one direction). Full analyze uses ``target_frame=None`` for bidirectional walk.
@@ -2131,9 +2195,12 @@ def track_seeded_vesicle_stack(
     last_committed_res: SeededSliceResult = first
 
     seed_ref_area = max(first.area_px, 1.0)
+    jump_um = float(max_centroid_jump_um) if max_centroid_jump_um is not None else None
     jump = max_centroid_jump_px
-    if jump is None:
+    if jump_um is None and jump is None:
         jump = max(1.25 * R, 60.0)
+    elif jump is None:
+        jump = max(1.25 * R, 60.0)  # unused when jump_um set; kept for API symmetry
 
     def _commit_frame(z: int, res: SeededSliceResult) -> None:
         nonlocal last_committed_z, last_committed_res
@@ -2258,7 +2325,10 @@ def track_seeded_vesicle_stack(
                     prev=association_prev,
                     ref_area=ref_area,
                     max_area_ratio=max_area_ratio,
-                    jump=jump * (gap_count + 1),
+                    jump=(jump if jump is not None else 60.0) * (gap_count + 1),
+                    jump_um=(jump_um * (gap_count + 1) if jump_um is not None else None),
+                    voxel_x_um=float(voxel_x_um),
+                    voxel_y_um=float(voxel_y_um),
                     expected_center=expected_center,
                     expected_center_tolerance=expected_tolerance,
                     search_radius=use_r,
@@ -2449,6 +2519,9 @@ def extend_track(
     target_frame: TargetFrameHint,
     cached_results: list[SeededSliceResult],
     max_centroid_jump_px: float | None = None,
+    max_centroid_jump_um: float | None = None,
+    voxel_x_um: float = 1.0,
+    voxel_y_um: float = 1.0,
     max_area_ratio: float = 2.2,
     min_area_ratio: float = 0.25,
     on_progress: ProgressCallback | None = None,
@@ -2517,6 +2590,9 @@ def extend_track(
             seed_frame=seed_frame,
             seed_radius=seed_radius,
             max_centroid_jump_px=max_centroid_jump_px,
+            max_centroid_jump_um=max_centroid_jump_um,
+            voxel_x_um=voxel_x_um,
+            voxel_y_um=voxel_y_um,
             max_area_ratio=max_area_ratio,
             target_frame=target_frame,
             on_progress=on_progress,
@@ -2541,6 +2617,7 @@ def extend_track(
     )
 
     R = effective_seed_radius(seed_radius)
+    jump_um = float(max_centroid_jump_um) if max_centroid_jump_um is not None else None
     jump = max_centroid_jump_px
     if jump is None:
         jump = max(1.25 * R, 60.0)
@@ -2679,7 +2756,10 @@ def extend_track(
                     prev=association_prev,
                     ref_area=ref_area,
                     max_area_ratio=max_area_ratio,
-                    jump=jump * (gap_count + 1),
+                    jump=(jump if jump is not None else 60.0) * (gap_count + 1),
+                    jump_um=(jump_um * (gap_count + 1) if jump_um is not None else None),
+                    voxel_x_um=float(voxel_x_um),
+                    voxel_y_um=float(voxel_y_um),
                     expected_center=expected_center,
                     expected_center_tolerance=expected_tolerance,
                     search_radius=use_r,

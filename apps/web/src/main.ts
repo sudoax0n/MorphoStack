@@ -1495,16 +1495,23 @@ function openStep(index: number, scroll = false): void {
   }
 }
 
-function completeStep(index: number): void {
+/** Mark a workflow step Done without navigating away. */
+function markStepDone(index: number): void {
   const status = document.getElementById(`step-${index + 1}-status`);
-  const alreadyDone = status?.textContent === "Done";
   if (status) {
     status.textContent = "Done";
     status.classList.add("done");
   }
+}
+
+function completeStep(index: number): void {
+  const status = document.getElementById(`step-${index + 1}-status`);
+  const alreadyDone = status?.textContent === "Done";
+  markStepDone(index);
   // Only auto-advance on the first Done transition, so status refreshes
-  // (e.g. toggling a tool in step 2) don't re-scroll the user.
-  if (!alreadyDone && index === currentStep && index < 3) {
+  // do not re-scroll the user. Step 2 (Pick object & threshold) never
+  // auto-advances: the user must inspect the outline and choose Analyze.
+  if (!alreadyDone && index === currentStep && index < 3 && index !== 1) {
     openStep(index + 1, true);
   }
 }
@@ -1872,8 +1879,9 @@ function syncCompetitiveTrackingControl(): void {
 function previewJsonBody(stackRef: { path?: string; stack_id?: string }): Record<string, unknown> {
   return {
     ...stackRef,
-    threshold: readNumber("threshold-input"),
+    threshold: readThreshold(),
     frame_index: globalPreviewFrameIndex(readLocalPreviewFrameIndex()),
+    profile: readProfile(),
     voxel: readVoxel(),
     roi: readRoi(),
     z_range: readZRange(),
@@ -2156,6 +2164,8 @@ function applyExactPayload(gen: number, payload: PreviewResponse, roi: RectRoi |
   }
   clearExactPreviewErrorForGen(gen);
   releaseTrackingBusy(gen);
+  // Authoritative outline is ready; keep Step 2 open for threshold review.
+  markStepDone(1);
 }
 
 /**
@@ -2444,7 +2454,7 @@ async function previewMesh(): Promise<void> {
       setMeshStatus("Computing mesh…", null);
       payload = await apiPost<MeshPreviewResponse>("/api/mesh-preview", {
         path: source.path,
-        threshold: readNumber("threshold-input"),
+        threshold: readThreshold(),
         profile,
         voxel: readVoxel(),
         roi: readRoi(),
@@ -2466,7 +2476,7 @@ async function previewMesh(): Promise<void> {
       setMeshStatus("Computing mesh…", null);
       payload = await apiPost<MeshPreviewResponse>("/api/mesh-preview", {
         stack_id: stackId,
-        threshold: readNumber("threshold-input"),
+        threshold: readThreshold(),
         profile,
         voxel: readVoxel(),
         roi: readRoi(),
@@ -2638,7 +2648,7 @@ async function analyzeStack(options: { keepExclusions?: boolean } = {}): Promise
     if (source.kind === "path") {
       payload = await apiPost<AnalyzeResponse>("/api/analyze", {
         path: source.path,
-        threshold: readNumber("threshold-input"),
+        threshold: readThreshold(),
         profile,
         voxel: readVoxel(),
         roi: readRoi(),
@@ -2661,7 +2671,7 @@ async function analyzeStack(options: { keepExclusions?: boolean } = {}): Promise
       analysisSummary.innerHTML = uploadStatusMarkup("Analyzing stack", null);
       payload = await apiPost<AnalyzeResponse>("/api/analyze", {
         stack_id: stackId,
-        threshold: readNumber("threshold-input"),
+        threshold: readThreshold(),
         profile,
         voxel: readVoxel(),
         roi: readRoi(),
@@ -3730,11 +3740,8 @@ function updateObjectSeedStatus(): void {
     }
   }
   syncCompetitiveTrackingControl();
-  // Stepper: any flow that leaves a seed in place (2D drag, polygon, 3D pick)
-  // means the object has been picked.
-  if (selectedObjectSeed) {
-    completeStep(1);
-  }
+  // Seed pick alone does not complete Step 2 — wait for an applied exact
+  // preview (markStepDone in applyExactPayload) so the user can judge the outline.
 }
 
 function updateFrameRange(): void {
@@ -4703,7 +4710,7 @@ function currentProjectSettings(): ProjectSettings {
   return {
     version: 1,
     profile: readProfile(),
-    threshold: readNumber("threshold-input"),
+    threshold: readThreshold(),
     voxel_size: readVoxel() ?? undefined,
     roi: roi ?? undefined,
     z_range: zRange ?? undefined,
@@ -5101,10 +5108,21 @@ function applyObjectSeedFrom3D(world: WorldPointUm): void {
       seed_origin: "viewer_3d",
       radius_unit: "px"
     };
-    // Jump 2D scrubber to seed frame (global index).
+    // Jump 2D scrubber to seed frame (local Z-range index; requests re-add zmin).
     if (inspectedFrameCount != null && selectedObjectSeed.frame_index < inspectedFrameCount) {
-      frameInput.value = String(selectedObjectSeed.frame_index);
-      frameSlider.value = String(selectedObjectSeed.frame_index);
+      let localFrame = selectedObjectSeed.frame_index;
+      try {
+        const zRange = readZRange();
+        if (zRange) {
+          localFrame = selectedObjectSeed.frame_index - zRange.zmin;
+        }
+      } catch {
+        // keep global index when z-range is unset/invalid
+      }
+      const maxLocal = Math.max(0, effectivePreviewFrameCount() - 1);
+      localFrame = clamp(localFrame, 0, maxLocal);
+      frameInput.value = String(localFrame);
+      frameSlider.value = String(localFrame);
       updateFrameSliceLabel();
     }
     mustElement<HTMLInputElement>("object-seed-radius").value = String(Math.round(mapped.radius));
@@ -5640,7 +5658,7 @@ function batchUploadForm(files: File[]): FormData {
     formData.append("files", file);
   });
   appendVoxelFields(formData);
-  formData.set("threshold", String(readNumber("threshold-input")));
+  formData.set("threshold", String(readThreshold()));
   formData.set("profile", readProfile());
   formData.set("include_mesh", String(mustElement<HTMLInputElement>("mesh-input").checked));
   formData.set("prefer_opencv", String(!mustElement<HTMLInputElement>("fallback-input").checked));
@@ -5833,6 +5851,19 @@ function readNumber(id: string): number {
   const value = Number(mustElement<HTMLInputElement>(id).value);
   if (!Number.isFinite(value)) {
     throw new Error(`${id} must be a number.`);
+  }
+  return value;
+}
+
+/** Threshold field: empty must not silently become 0 (Number("") === 0). */
+function readThreshold(): number {
+  const raw = mustElement<HTMLInputElement>("threshold-input").value.trim();
+  if (raw === "") {
+    throw new Error("Threshold is required.");
+  }
+  const value = Number(raw);
+  if (!Number.isFinite(value)) {
+    throw new Error("Threshold must be a number.");
   }
   return value;
 }

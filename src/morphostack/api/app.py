@@ -384,12 +384,14 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
     app = FastAPI(title="MorphoStack API", version=__version__, lifespan=lifespan)
 
     # Local tool: allow browser UI on another port (e.g. Vite :5173) without proxy misconfig.
+    # Never allow arbitrary web origins (localhost drive-by write risk).
     try:
         from fastapi.middleware.cors import CORSMiddleware
 
         app.add_middleware(
             CORSMiddleware,
-            allow_origins=["*"],
+            allow_origins=[],
+            allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
             allow_credentials=False,
             allow_methods=["*"],
             allow_headers=["*"],
@@ -932,15 +934,6 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
                 stack_id=request.stack_id,
                 voxel=request.voxel,
             )
-            print("=== DEBUG ANALYZE REQUEST ===")
-            print(f"  Path: {request.path}")
-            print(f"  Stack ID: {request.stack_id}")
-            print(f"  Threshold: {request.threshold}")
-            print(f"  Profile: {request.profile}")
-            print(f"  ROI: {request.roi}")
-            print(f"  Z Range: {request.z_range}")
-            print(f"  Object Seed: {request.object_seed}")
-            
             analyze_seed = to_object_seed(request.object_seed)
             validate_object_seed_against_stack(
                 analyze_seed,
@@ -965,11 +958,6 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
                 competitive_tracking=bool(request.competitive_tracking),
                 multiscale_consensus=bool(request.multiscale_consensus),
             )
-            
-            print(f"=== DEBUG ANALYZE RESULT ===")
-            print(f"  Total frames: {len(analysis.frames)}")
-            print(f"  Valid frames count: {len(analysis.valid_frames)}")
-            print(f"  Valid frames: {[f.frame_index for f in analysis.frames if f.contour is not None]}")
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -3526,7 +3514,8 @@ def mount_static_ui(api: FastAPI, static_dir: Path) -> FastAPI:
 
         root.add_middleware(
             CORSMiddleware,
-            allow_origins=["*"],
+            allow_origins=[],
+            allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
             allow_credentials=False,
             allow_methods=["*"],
             allow_headers=["*"],
