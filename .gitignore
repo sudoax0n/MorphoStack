@@ -55,8 +55,10 @@ mcps/
 scratch/
 terminals/
 researches/
+.researches/
 private/
 notes/
+todo/
 
 # --- Imaris viewer state & local command transcripts ---
 imarisviewer.gpr
@@ -65,13 +67,23 @@ imarisviewer.rep/
 
 # --- Personal / agent-only notes (NEVER ship) ---
 AGENTS.md
+Claude.md
 improvements.md
+improvements.md.backup*
 REFERENCE_FOLDERS.md
+kimi-bugs.md
 grok*.md
 *rating*.md
 **/research-notes.md
 **/personal/
 **/_private/
+
+# Internal planning packets and design bibles (local only)
+docs/plans/
+docs/solutions/
+docs/visual-world-playbook.md
+docs/goal-vesicle-roi-tracking.md
+docs/prototype_usage.md
 
 # --- Editor / OS ---
 .idea/

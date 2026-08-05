@@ -75,7 +75,7 @@ See root `.gitignore`:
 - `.venv/`, `node_modules/`, `apps/web/dist/`
 - raw stacks (`*.tif`, `*.czi`, `*.lsm`, …)
 - local tooling: `mcps/`, `scratch/`, `terminals/`, `.clones/`
-- personal notes (`AGENTS.md`, `improvements.md`, …)
+- personal / agent notes (`AGENTS.md`, `improvements.md`, `kimi-bugs.md`, `.researches/`, `docs/plans/`, …)
 
 Keep intentional `validation/runs/` metrics and reports; avoid committing private raw data.
 

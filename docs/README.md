@@ -20,7 +20,7 @@ Local morphometry for microscopy Z-stacks: vesicles, GUVs, RBCs, and seeded obje
 | [Distribution](distribution.md) | Wheels, pipx, GitHub Releases |
 | [Citations](citations.md) | Libraries & data acknowledgements |
 
-Assets used on GitHub live in [`public/`](public/). Product roadmap notes: [`../improvements.md`](../improvements.md). Contributor guide: [`../AGENTS.md`](../AGENTS.md).
+Assets used on GitHub live in [`public/`](public/).
 
 ```text
 Stack (TIFF / LSM / CZI)
