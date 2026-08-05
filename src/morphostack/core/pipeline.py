@@ -427,17 +427,28 @@ def segmentation_candidate_from_analysis(
         resolved_method = method or "rbc_topology_occupancy"
         if algorithm_version is None:
             algorithm_version = "rbc_topology_v1"
-        # RBC occupancy remains provisional until Phase 3 QC accepts it.
+        # Provisional unless Phase 3 QC promoted occupancy to validated 3D.
+        from morphostack.core.rbc_models import RbcCapability
+
+        rbc_res = getattr(analysis, "rbc_result", None)
+        validated = (
+            rbc_res is not None
+            and getattr(rbc_res, "capability", None) is RbcCapability.VALIDATED_3D_OCCUPANCY
+        )
         return SegmentationCandidate(
             source_revision=source_revision,
             method=resolved_method,
             algorithm_version=str(algorithm_version),
             completeness=completeness,  # type: ignore[arg-type]
             is_full_resolution=is_full_resolution,
-            provisional=True,
+            provisional=not validated,
             mask=mask.astype(np.uint8, copy=False),
             contours=mesh_contours_from_analysis(analysis),
-            qc={"rbc_issues": list(analysis.rbc_issues), "rbc_withheld": analysis.rbc_withheld},
+            qc={
+                "rbc_issues": list(analysis.rbc_issues),
+                "rbc_withheld": analysis.rbc_withheld,
+                "rbc_capability": None if rbc_res is None else str(rbc_res.capability.value),
+            },
             provenance={"profile": "rbc", "representation": "topology_occupancy"},
         )
 
@@ -751,6 +762,8 @@ class StackAnalysis:
     rbc_occupancy: np.ndarray | None = None
     rbc_withheld: bool = False
     rbc_issues: tuple[str, ...] = ()
+    # Phase 3: capability-scoped morphometry (None for non-RBC profiles).
+    rbc_result: object | None = None
 
     @property
     def valid_frames(self) -> tuple[FrameAnalysis, ...]:
@@ -910,6 +923,7 @@ def analyze_stack(
     rbc_occupancy_local: np.ndarray | None = None
     rbc_withheld_flag = False
     rbc_issue_codes: tuple[str, ...] = ()
+    rbc_candidate_obj = None
 
     raw_shape = (int(arr.shape[0]), int(arr.shape[1]), int(arr.shape[2]))
     frame_offset = 0
@@ -1161,6 +1175,7 @@ def analyze_stack(
                     competitive_isolation=bool(competitive_tracking),
                     multiscale_consensus=bool(multiscale_consensus),
                 )
+                rbc_candidate_obj = rbc_cand
                 rbc_withheld_flag = bool(rbc_cand.withheld)
                 rbc_issue_codes = tuple(iss.value for iss in rbc_cand.issues)
                 if rbc_cand.occupancy_mask is not None:
@@ -1472,16 +1487,67 @@ def analyze_stack(
             full[:zh, y0:y1, x0:x1] = local[:zh, : y1 - y0, : x1 - x0]
             rbc_occupancy_full = full
 
+    # Phase 3: capability-scoped RBC morphometry / QC.
+    rbc_result_obj = None
+    if analysis_profile == "rbc":
+        from morphostack.core.rbc_result import build_rbc_analysis_result
+
+        # Prefer full-plane occupancy when mapped; else local crop candidate.
+        cand_for_qc = rbc_candidate_obj
+        if (
+            cand_for_qc is not None
+            and rbc_occupancy_full is not None
+            and cand_for_qc.occupancy_mask is not None
+            and rbc_occupancy_full.shape != cand_for_qc.occupancy_mask.shape
+        ):
+            from morphostack.core.rbc_models import RbcStackCandidate
+
+            cand_for_qc = RbcStackCandidate(
+                seed_frame_index=cand_for_qc.seed_frame_index,
+                slices=cand_for_qc.slices,
+                occupancy_mask=rbc_occupancy_full,
+                valid_slice_indices=cand_for_qc.valid_slice_indices,
+                internal_gap_indices=cand_for_qc.internal_gap_indices,
+                issues=cand_for_qc.issues,
+                withheld=cand_for_qc.withheld,
+                ok=cand_for_qc.ok,
+                method=cand_for_qc.method,
+                algorithm_version=cand_for_qc.algorithm_version,
+                provenance=dict(cand_for_qc.provenance),
+            )
+        z_lo = int(z_range.zmin) if z_range is not None else 0
+        z_hi = int(z_range.zmax) if z_range is not None else int(raw_shape[0])
+        rbc_result_obj = build_rbc_analysis_result(
+            calibration=calibration,
+            candidate=cand_for_qc,
+            voxel=voxel_size,
+            stack_z=int(raw_shape[0]),
+            z_min=z_lo,
+            z_max=z_hi,
+        )
+        rbc_withheld_flag = rbc_result_obj.capability.value == "PIXEL_PREVIEW" or bool(
+            rbc_withheld_flag
+        )
+        if rbc_result_obj.issues:
+            rbc_issue_codes = tuple(dict.fromkeys((*rbc_issue_codes, *rbc_result_obj.issues)))
+
     mesh = None
     slice_volume = None
     if include_mesh:
         mesh_shape = (len(frames), full_yx_shape[0], full_yx_shape[1])
-        if analysis_profile == "rbc" and rbc_occupancy_full is not None and not rbc_withheld_flag:
-            from morphostack.core.mesh import marching_cubes_measurement
+        if analysis_profile == "rbc":
+            # Only release mesh measurement when QC validates 3D occupancy.
+            from morphostack.core.rbc_models import RbcCapability
 
-            if np.count_nonzero(rbc_occupancy_full) > 0:
+            allow_3d = (
+                rbc_result_obj is not None
+                and rbc_result_obj.capability is RbcCapability.VALIDATED_3D_OCCUPANCY
+                and rbc_occupancy_full is not None
+            )
+            if allow_3d and np.count_nonzero(rbc_occupancy_full) > 0:
+                from morphostack.core.mesh import marching_cubes_measurement
+
                 mesh = marching_cubes_measurement(rbc_occupancy_full.astype(np.uint8), voxel_size)
-            # Volume cross-check still uses outer contours (diagnostic).
             mesh_contours = tuple(
                 None if frame.frame_index in excluded_set else frame.contour for frame in frames
             )
@@ -1509,6 +1575,7 @@ def analyze_stack(
         rbc_occupancy=rbc_occupancy_full,
         rbc_withheld=bool(rbc_withheld_flag),
         rbc_issues=tuple(rbc_issue_codes),
+        rbc_result=rbc_result_obj,
     )
 
 

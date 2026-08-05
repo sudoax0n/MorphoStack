@@ -230,3 +230,155 @@ class RbcStackCandidate:
     method: str = "rbc_topology_occupancy_v1"
     algorithm_version: str = "rbc_topology_v1"
     provenance: dict[str, Any] = field(default_factory=dict)
+
+
+class RbcQcIssue(str, Enum):
+    """Ordered reconstruction / morphometry QC reasons (fail-closed)."""
+
+    CALIBRATION_UNVERIFIED = "calibration_unverified"
+    NO_OCCUPANCY = "no_occupancy"
+    SEED_SLICE_FAILED = "seed_slice_failed"
+    INCOMPLETE_CAP = "incomplete_cap"
+    INTERNAL_GAP = "internal_gap"
+    LATERAL_CLIPPING = "lateral_clipping"
+    UNRESOLVED_MERGE = "unresolved_merge"
+    TOPOLOGY_FAILED = "topology_failed"
+    MESH_INVALID = "mesh_invalid"
+    VOLUME_DISAGREEMENT = "volume_disagreement"
+    SIGNAL_SEMANTICS_UNKNOWN = "signal_semantics_unknown"
+
+
+@dataclass(frozen=True)
+class RbcProjectedMetrics:
+    """Rotation-safe 2D morphometry from a physical-coordinate occupancy mask."""
+
+    area_um2: float
+    perimeter_um: float
+    perimeter_method: str
+    major_axis_um: float
+    minor_axis_um: float
+    aspect_ratio_L_over_W: float
+    static_elongation_index: float
+    circularity: float
+    solidity: float
+    equivalent_diameter_um: float
+    method_version: str = "rbc_projected_moments_v1"
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "area_um2": self.area_um2,
+            "perimeter_um": self.perimeter_um,
+            "perimeter_method": self.perimeter_method,
+            "major_axis_um": self.major_axis_um,
+            "minor_axis_um": self.minor_axis_um,
+            "aspect_ratio_L_over_W": self.aspect_ratio_L_over_W,
+            "static_elongation_index": self.static_elongation_index,
+            "circularity": self.circularity,
+            "solidity": self.solidity,
+            "equivalent_diameter_um": self.equivalent_diameter_um,
+            "method_version": self.method_version,
+        }
+
+
+@dataclass(frozen=True)
+class RbcVolumeCrossCheck:
+    """Voxel occupancy volume vs mesh volume consistency check."""
+
+    voxel_volume_um3: float
+    mesh_volume_um3: float | None
+    surface_area_um2: float | None
+    relative_disagreement: float | None
+    method_version: str = "rbc_occupancy_volume_v1"
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "voxel_volume_um3": self.voxel_volume_um3,
+            "mesh_volume_um3": self.mesh_volume_um3,
+            "surface_area_um2": self.surface_area_um2,
+            "relative_disagreement": self.relative_disagreement,
+            "method_version": self.method_version,
+        }
+
+
+@dataclass(frozen=True)
+class RbcMeshQc:
+    """Engineering mesh QC (not biological validation)."""
+
+    ok: bool
+    boundary_edge_count: int
+    watertight: bool
+    finite_vertices: bool
+    positive_volume: bool
+    component_count: int
+    issues: tuple[RbcQcIssue, ...] = ()
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "ok": self.ok,
+            "boundary_edge_count": self.boundary_edge_count,
+            "watertight": self.watertight,
+            "finite_vertices": self.finite_vertices,
+            "positive_volume": self.positive_volume,
+            "component_count": self.component_count,
+            "issues": [i.value for i in self.issues],
+        }
+
+
+@dataclass(frozen=True)
+class RbcQcResult:
+    """Central reconstruction QC outcome and highest permitted capability."""
+
+    capability: RbcCapability
+    authority: RbcAuthority
+    engineering_qc: EngineeringQcStatus
+    issues: tuple[RbcQcIssue, ...]
+    notes: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "capability": self.capability.value,
+            "authority": self.authority.value,
+            "engineering_qc": self.engineering_qc.value,
+            "issues": [i.value for i in self.issues],
+            "notes": list(self.notes),
+        }
+
+
+@dataclass(frozen=True)
+class RbcAnalysisResult:
+    """Capability-scoped RBC morphometry attached to a stack analysis."""
+
+    capability: RbcCapability
+    authority: RbcAuthority
+    engineering_qc: EngineeringQcStatus
+    projected_metrics: RbcProjectedMetrics | None
+    volume_um3: float | None
+    surface_area_um2: float | None
+    voxel_volume_um3: float | None
+    mesh_volume_um3: float | None
+    volume_relative_disagreement: float | None
+    dimple_thickness_um: float | None
+    rim_thickness_um: float | None
+    issues: tuple[str, ...]
+    method_versions: dict[str, str] = field(default_factory=dict)
+    mesh_qc: RbcMeshQc | None = None
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "capability": self.capability.value,
+            "authority": self.authority.value,
+            "engineering_qc": self.engineering_qc.value,
+            "projected_metrics": (
+                self.projected_metrics.to_dict() if self.projected_metrics is not None else None
+            ),
+            "volume_um3": self.volume_um3,
+            "surface_area_um2": self.surface_area_um2,
+            "voxel_volume_um3": self.voxel_volume_um3,
+            "mesh_volume_um3": self.mesh_volume_um3,
+            "volume_relative_disagreement": self.volume_relative_disagreement,
+            "dimple_thickness_um": self.dimple_thickness_um,
+            "rim_thickness_um": self.rim_thickness_um,
+            "issues": list(self.issues),
+            "method_versions": dict(self.method_versions),
+            "mesh_qc": self.mesh_qc.to_dict() if self.mesh_qc is not None else None,
+        }
