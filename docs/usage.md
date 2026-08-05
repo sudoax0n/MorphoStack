@@ -165,7 +165,7 @@ morphostack validate ref_batch.csv new_batch.csv --key-column source_path --all-
 
 Be explicit about RBC:
 
-> The RBC profile uses topology-preserving occupancy and a capability ladder (pixel preview → calibrated 2D → validated 3D occupancy). Estimated biconcavity models are not production-validated; biological accuracy still needs lab evidence (Phase 5).
+> The RBC profile uses topology-preserving occupancy and an engineering capability ladder (pixel preview → calibrated 2D → QC-gated 3D occupancy). Estimated models and surface thickness are **WITHHELD** pending lab evidence (`validation/reports/rbc-capability-decision-v1.md`). Do not treat engineering QC pass as biological certification.
 
 Be explicit about default voxels:
 

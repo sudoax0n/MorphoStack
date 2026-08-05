@@ -1,0 +1,11 @@
+{
+  "schema_version": "rbc-annotations-v1",
+  "description": "Placeholder evidence manifest. No lab stacks or annotations are registered yet.",
+  "stacks": [],
+  "annotations": [],
+  "preparation_note": "",
+  "psf_or_bead_evidence": null,
+  "estimator_addendum": null,
+  "lab_acceptance_thresholds": {},
+  "status": "empty_awaiting_lab_bundle"
+}

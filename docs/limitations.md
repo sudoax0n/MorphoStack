@@ -26,7 +26,7 @@ MorphoStack is a **lab morphometry toolkit**. Treat outputs as exploratory until
 | Profile (CLI) | UI label | Status |
 | --- | --- | --- |
 | **vesicle** | Standard | Primary threshold-contour path + optional skeleton/mesh. Use for **single** and **multi-vesicle** fields (seed the target object). |
-| **rbc** | RBC | One selected cell; requires verified X/Y/Z calibration. Capability tiers: PIXEL_PREVIEW / calibrated 2D / validated 3D occupancy. Dimple/rim thickness and estimated models not production-validated (Phase 5). |
+| **rbc** | RBC | One selected cell; verified X/Y/Z required. Engineering capability ladder active (preview → 2D → occupancy QC). **Biological validation of 2D/3D, estimated model, and surface/thickness remain WITHHELD** until lab evidence bundle + thresholds are accepted (`validation/reports/rbc-capability-decision-v1.md`). |
 | **active_surfaces** | Experimental | Surfel refinement — slow, seed required, still one object. Not “multi mode.” Compare to Standard before paper use. |
 
 Choosing Experimental does not analyze every vesicle in the FOV. Multi-object fields still need one seed per run under Standard (or Experimental). See [usage.md — Modes](usage.md#modes-profiles).
