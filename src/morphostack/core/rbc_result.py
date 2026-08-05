@@ -26,20 +26,77 @@ def build_rbc_analysis_result(
     stack_z: int,
     z_min: int = 0,
     z_max: int | None = None,
+    force_estimated_only: bool = False,
+    input_disclaimer_codes: tuple[str, ...] = (),
+    estimated=None,
+    disclaimer: str = "",
 ) -> RbcAnalysisResult:
-    """Run QC + morphometry and return capability-scoped fields only."""
+    """Run QC + morphometry and return capability-scoped fields only.
+
+    ``force_estimated_only`` (uncalibrated LSM / incomplete axes): never release
+    MEASURED projected or 3D metrics; attach ESTIMATED display output instead.
+    """
+
+    from morphostack.core.rbc_estimation import build_display_estimate_from_occupancy
+    from morphostack.core.rbc_models import EngineeringQcStatus, REFUSAL_GUIDANCE, RbcRefusalCode
 
     mesh_qc = None
     cross = None
     occupancy = candidate.occupancy_mask if candidate is not None else None
 
     # Mesh QC only attempted when occupancy looks complete enough to try.
-    if occupancy is not None and candidate is not None and candidate.valid_slice_indices:
+    if (
+        not force_estimated_only
+        and occupancy is not None
+        and candidate is not None
+        and candidate.valid_slice_indices
+    ):
         try:
             mesh_qc, cross = validate_rbc_scientific_mesh(occupancy, voxel)
         except Exception:
             mesh_qc = None
             cross = None
+
+    if force_estimated_only:
+        # Skip measured QC ladder; pixel-preview + estimated display.
+        from morphostack.core.rbc_models import RbcQcIssue
+
+        issue_vals = list(input_disclaimer_codes)
+        if RbcQcIssue.CALIBRATION_UNVERIFIED.value not in issue_vals:
+            issue_vals.append(RbcQcIssue.CALIBRATION_UNVERIFIED.value)
+        est = estimated
+        if est is None:
+            est = build_display_estimate_from_occupancy(
+                occupancy, voxel, disclaimer_codes=tuple(input_disclaimer_codes)
+            )
+        guidance_bits = []
+        for code in input_disclaimer_codes:
+            try:
+                guidance_bits.append(REFUSAL_GUIDANCE[RbcRefusalCode(code)])
+            except (ValueError, KeyError):
+                guidance_bits.append(code)
+        disc = disclaimer or " ".join(guidance_bits)
+        return RbcAnalysisResult(
+            capability=RbcCapability.PIXEL_PREVIEW,
+            authority=RbcAuthority.ESTIMATED if est is not None else RbcAuthority.WITHHELD,
+            engineering_qc=EngineeringQcStatus.INCONCLUSIVE,
+            projected_metrics=None,
+            volume_um3=None,
+            surface_area_um2=None,
+            voxel_volume_um3=None,
+            mesh_volume_um3=None,
+            volume_relative_disagreement=None,
+            dimple_thickness_um=None,
+            rim_thickness_um=None,
+            issues=tuple(dict.fromkeys(issue_vals)),
+            method_versions={
+                "estimated": "rbc_occupancy_display_estimate_v1",
+                "qc": "rbc_reconstruction_qc_v1",
+            },
+            mesh_qc=None,
+            estimated=est,
+            disclaimer=disc,
+        )
 
     qc = evaluate_rbc_reconstruction(
         calibration=calibration,
@@ -106,4 +163,6 @@ def build_rbc_analysis_result(
         issues=tuple(i.value for i in qc.issues),
         method_versions=methods,
         mesh_qc=mesh_qc,
+        estimated=estimated,
+        disclaimer=disclaimer,
     )

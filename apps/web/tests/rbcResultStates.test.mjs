@@ -23,22 +23,18 @@ function main() {
   assert.match(mainTs, /rbc-badge-estimated/);
   assert.match(mainTs, /rbc-badge-withheld/);
 
-  // Disclaimer precedes estimate action; production estimate disabled.
+  // Disclaimer + ESTIMATED path for uncalibrated LSM (no hard refuse).
   const renderFnStart = mainTs.indexOf("function renderRbcEnvelope");
   assert.ok(renderFnStart >= 0);
-  const slice = mainTs.slice(renderFnStart, renderFnStart + 3500);
-  const disclaimerIdx = slice.indexOf("rbc-disclaimer");
-  const buttonIdx = slice.indexOf("rbc-show-estimate");
-  assert.ok(disclaimerIdx >= 0, "disclaimer required");
-  assert.ok(buttonIdx > disclaimerIdx, "disclaimer must appear before estimate button");
-  assert.match(slice, /disabled/);
-  assert.match(slice, /cannot be measured from this stack/i);
+  const slice = mainTs.slice(renderFnStart, renderFnStart + 4000);
+  assert.ok(slice.includes("rbc-disclaimer"), "disclaimer required");
+  assert.match(slice, /ESTIMATED/);
+  assert.match(slice, /manual X\/Y\/Z|Convert LSM/i);
+  assert.match(slice, /never overwrites MEASURED/);
 
   // Measured and estimated stay separate.
   assert.match(slice, /rbc-measured/);
   assert.match(slice, /rbc-estimated-layer/);
-  assert.doesNotMatch(slice, /overwrite MEASURED/i); // note text is fine
-  assert.match(slice, /never overwrites MEASURED/);
 
   // Styles for authority badges.
   assert.match(styles, /\.rbc-badge-measured/);

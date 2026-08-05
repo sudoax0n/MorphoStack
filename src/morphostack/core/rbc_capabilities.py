@@ -71,6 +71,10 @@ def evaluate_rbc_input(
 
     Pure function: no file I/O, no global session state. Callers pass the
     loaded stack path, per-axis calibration assessment, and optional seed.
+
+    Hard block: missing seed.
+    Soft block (measured only): uncalibrated LSM / incomplete axes — analysis
+    may continue for ESTIMATED visualization after disclaimer.
     """
 
     path = Path(source_path)
@@ -88,17 +92,33 @@ def evaluate_rbc_input(
         else:
             reasons.append(RbcRefusalCode.INCOMPLETE_AXIS_CALIBRATION)
 
+    hard = any(code is RbcRefusalCode.SEED_REQUIRED for code in reasons)
+    measured_allowed = not reasons or (
+        not hard
+        and RbcRefusalCode.LSM_REQUIRES_CONVERSION_OR_MANUAL not in reasons
+        and RbcRefusalCode.INCOMPLETE_AXIS_CALIBRATION not in reasons
+        and RbcRefusalCode.UNVERIFIED_CONVERTED_METADATA not in reasons
+    )
+    # Soft cal issues still allow segmentation when seed is present.
+    allowed = not hard
+
     if reasons:
         guidance_parts = [REFUSAL_GUIDANCE[code] for code in reasons]
         return RbcInputDecision(
-            allowed=False,
+            allowed=allowed,
+            measured_allowed=measured_allowed and allowed,
             reasons=tuple(reasons),
-            capability=RbcCapability.PIXEL_PREVIEW,
+            capability=(
+                RbcCapability.PIXEL_PREVIEW
+                if not measured_allowed
+                else RbcCapability.CALIBRATED_2D
+            ),
             guidance=" ".join(guidance_parts),
         )
 
     return RbcInputDecision(
         allowed=True,
+        measured_allowed=True,
         reasons=(),
         capability=RbcCapability.CALIBRATED_2D,
         guidance="",

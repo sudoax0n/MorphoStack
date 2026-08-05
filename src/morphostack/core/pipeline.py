@@ -897,6 +897,8 @@ def analyze_stack(
     if competitive_tracking and multiscale_consensus:
         raise ValueError("competitive and multi-scale consensus modes are mutually exclusive")
 
+    rbc_input_decision = None
+    rbc_measured_allowed = True
     if analysis_profile == "rbc":
         cal = calibration
         if cal is None:
@@ -907,14 +909,24 @@ def analyze_stack(
                 source_format="unknown",
                 source="unknown",
             )
+            calibration = cal
         path = Path(source_path) if source_path is not None else Path("synthetic.tif")
         decision = evaluate_rbc_input(
             source_path=path,
             calibration=cal,
             object_seed=object_seed,
         )
+        rbc_input_decision = decision
+        rbc_measured_allowed = bool(decision.measured_allowed)
+        # Hard refuse only (missing seed). Soft cal/LSM issues continue as ESTIMATED-only.
         if not decision.allowed:
             raise RbcInputRefused(decision)
+        if decision.reasons:
+            rbc_issue_codes_pre = tuple(code.value for code in decision.reasons)
+        else:
+            rbc_issue_codes_pre = ()
+    else:
+        rbc_issue_codes_pre = ()
 
     arr = np.asarray(stack)
     if arr.ndim != 3:
@@ -922,7 +934,7 @@ def analyze_stack(
 
     rbc_occupancy_local: np.ndarray | None = None
     rbc_withheld_flag = False
-    rbc_issue_codes: tuple[str, ...] = ()
+    rbc_issue_codes: tuple[str, ...] = tuple(rbc_issue_codes_pre)
     rbc_candidate_obj = None
 
     raw_shape = (int(arr.shape[0]), int(arr.shape[1]), int(arr.shape[2]))
@@ -1489,7 +1501,9 @@ def analyze_stack(
 
     # Phase 3: capability-scoped RBC morphometry / QC.
     rbc_result_obj = None
+    rbc_estimated_obj = None
     if analysis_profile == "rbc":
+        from morphostack.core.rbc_estimation import build_display_estimate_from_occupancy
         from morphostack.core.rbc_result import build_rbc_analysis_result
 
         # Prefer full-plane occupancy when mapped; else local crop candidate.
@@ -1517,6 +1531,26 @@ def analyze_stack(
             )
         z_lo = int(z_range.zmin) if z_range is not None else 0
         z_hi = int(z_range.zmax) if z_range is not None else int(raw_shape[0])
+        # Soft cal/LSM: force unverified cal into QC so MEASURED 3D cannot pass.
+        cal_for_qc = calibration
+        if not rbc_measured_allowed and cal_for_qc is not None and cal_for_qc.all_axes_verified:
+            # Defensive: if flags disagree, still demote measured path.
+            from morphostack.core.rbc_capabilities import unverified_calibration_from_values as _unv
+
+            cal_for_qc = _unv(
+                float(voxel_size.x_um),
+                float(voxel_size.y_um),
+                float(voxel_size.z_um),
+                source_format=str(getattr(cal_for_qc, "source_format", "unknown")),
+                source="unverified",
+            )
+        rbc_estimated_obj = None
+        if not rbc_measured_allowed:
+            rbc_estimated_obj = build_display_estimate_from_occupancy(
+                rbc_occupancy_full,
+                voxel_size,
+                disclaimer_codes=tuple(rbc_issue_codes_pre),
+            )
         rbc_result_obj = build_rbc_analysis_result(
             calibration=calibration,
             candidate=cand_for_qc,
@@ -1524,9 +1558,19 @@ def analyze_stack(
             stack_z=int(raw_shape[0]),
             z_min=z_lo,
             z_max=z_hi,
+            force_estimated_only=not rbc_measured_allowed,
+            input_disclaimer_codes=tuple(rbc_issue_codes_pre),
+            estimated=rbc_estimated_obj,
+            disclaimer=(
+                rbc_input_decision.guidance
+                if rbc_input_decision is not None
+                else ""
+            ),
         )
-        rbc_withheld_flag = rbc_result_obj.capability.value == "PIXEL_PREVIEW" or bool(
-            rbc_withheld_flag
+        rbc_withheld_flag = (
+            (not rbc_measured_allowed)
+            or rbc_result_obj.capability.value == "PIXEL_PREVIEW"
+            or bool(rbc_withheld_flag)
         )
         if rbc_result_obj.issues:
             rbc_issue_codes = tuple(dict.fromkeys((*rbc_issue_codes, *rbc_result_obj.issues)))
@@ -1536,15 +1580,26 @@ def analyze_stack(
     if include_mesh:
         mesh_shape = (len(frames), full_yx_shape[0], full_yx_shape[1])
         if analysis_profile == "rbc":
-            # Only release mesh measurement when QC validates 3D occupancy.
+            # MEASURED mesh only when QC validates 3D occupancy.
+            # ESTIMATED mesh when measured path is blocked but occupancy exists.
             from morphostack.core.rbc_models import RbcCapability
 
-            allow_3d = (
-                rbc_result_obj is not None
+            allow_measured_3d = (
+                rbc_measured_allowed
+                and rbc_result_obj is not None
                 and rbc_result_obj.capability is RbcCapability.VALIDATED_3D_OCCUPANCY
                 and rbc_occupancy_full is not None
             )
-            if allow_3d and np.count_nonzero(rbc_occupancy_full) > 0:
+            allow_estimated_3d = (
+                (not rbc_measured_allowed)
+                and rbc_occupancy_full is not None
+                and np.count_nonzero(rbc_occupancy_full) > 0
+            )
+            if allow_measured_3d and np.count_nonzero(rbc_occupancy_full) > 0:
+                from morphostack.core.mesh import marching_cubes_measurement
+
+                mesh = marching_cubes_measurement(rbc_occupancy_full.astype(np.uint8), voxel_size)
+            elif allow_estimated_3d:
                 from morphostack.core.mesh import marching_cubes_measurement
 
                 mesh = marching_cubes_measurement(rbc_occupancy_full.astype(np.uint8), voxel_size)

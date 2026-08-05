@@ -1000,11 +1000,22 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
                 "sphericity": analysis.mesh.sphericity,
             }
         rbc = rbc_envelope_payload(analysis, calibration=stack.calibration)
-        # Never expose legacy mesh as measured when RBC withheld 3D.
+        # Mesh role: measured only when envelope measured volume exists;
+        # otherwise keep mesh only as ESTIMATED display when estimated block exists.
+        mesh_role = None
         if rbc is not None:
             measured = rbc.get("measured") if isinstance(rbc, dict) else None
-            if not (isinstance(measured, dict) and measured.get("volume_um3") is not None):
-                mesh = None
+            estimated = rbc.get("estimated") if isinstance(rbc, dict) else None
+            if isinstance(measured, dict) and measured.get("volume_um3") is not None:
+                mesh_role = "MEASURED"
+            elif isinstance(estimated, dict) and mesh is not None:
+                mesh_role = "ESTIMATED"
+            elif mesh is not None and not (
+                isinstance(measured, dict) and measured.get("volume_um3") is not None
+            ):
+                # No measured claim — drop unlabeled mesh
+                if estimated is None:
+                    mesh = None
         return {
             "source_path": str(stack.source_path),
             "profile": analysis.profile,
@@ -1014,6 +1025,7 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
             "voxel_size": voxel_payload(stack.voxel_size),
             "voxel_source": stack.voxel_source,
             "mesh": mesh,
+            "mesh_authority": mesh_role,
             "slice_volume": slice_volume_payload(analysis),
             "summary": analysis_summary(analysis),
             "warnings": analysis_run_warnings(analysis, voxel_source=stack.voxel_source),

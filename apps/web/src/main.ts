@@ -195,6 +195,8 @@ type RbcResultEnvelope = {
   notes?: string[];
 };
 
+// mesh_authority is set on AnalyzeResponse when profile is rbc.
+
 type AnalyzeResponse = {
   source_path: string;
   profile: AnalysisProfile;
@@ -230,6 +232,7 @@ type AnalyzeResponse = {
   manifest: Record<string, unknown>;
   rows: AnalysisRow[];
   rbc?: RbcResultEnvelope | null;
+  mesh_authority?: "MEASURED" | "ESTIMATED" | null;
 };
 
 type MetricSummary = {
@@ -4053,9 +4056,14 @@ function renderAnalysis(payload: AnalyzeResponse): void {
   downloadManifestButton.disabled = false;
   reanalyzeExcludedButton.disabled = payload.rows.length === 0;
   const rbcText = renderRbcEnvelope(payload.rbc ?? null);
+  const meshAuth = (payload as { mesh_authority?: string | null }).mesh_authority;
   const meshText =
     payload.profile === "rbc"
-      ? "" // mesh numbers only via capability-scoped rbc envelope
+      ? payload.mesh && meshAuth === "ESTIMATED"
+        ? `<br /><span class="rbc-badge rbc-badge-estimated">ESTIMATED</span> display mesh volume: ${formatNumber(payload.mesh.volume_um3)} um3 (not MEASURED)`
+        : payload.mesh && meshAuth === "MEASURED"
+          ? `<br />MEASURED mesh volume: ${formatNumber(payload.mesh.volume_um3)} um3`
+          : ""
       : payload.mesh
         ? `<br />3D mesh surface area: ${formatNumber(payload.mesh.surface_area_um2)} um2, mesh volume: ${formatNumber(payload.mesh.volume_um3)} um3, sphericity: ${formatNumber(payload.mesh.sphericity)}`
         : "";
@@ -5881,17 +5889,17 @@ function renderRbcEnvelope(rbc: RbcResultEnvelope | null | undefined): string {
     }
   } else if (rbc.authority === "WITHHELD" || rbc.capability === "PIXEL_PREVIEW") {
     measuredBlock =
-      `<div class="rbc-withheld">Physical metrics cannot be measured from this stack at the assigned capability. ` +
-      `Fix calibration, seed, or completeness — or wait for a validated estimated model.</div>`;
+      `<div class="rbc-withheld">MEASURED physical metrics are not available at this capability. ` +
+      `Convert LSM / enter manual X/Y/Z for measured values, or use the ESTIMATED mesh for visualization only.</div>`;
   }
-  // Disclaimer always precedes any estimate action (Phase 4: estimate unavailable).
+  const notes =
+    rbc.notes && rbc.notes.length > 0
+      ? `<p class="rbc-disclaimer">${rbc.notes.map((n) => escapeHtml(n)).join(" ")}</p>`
+      : "";
+  // Disclaimer first; auto ESTIMATED occupancy mesh may already be attached for LSM.
   const estimateBlock = `
     <div class="rbc-estimate-panel">
-      <p class="rbc-disclaimer">Estimated biconcavity models are not validated for production use. ` +
-    `An estimated layer appears only after you explicitly request it, and never overwrites MEASURED values.</p>
-      <button type="button" class="secondary" id="rbc-show-estimate" disabled title="Estimator not validated (Phase 5)">
-        Show estimated model (unavailable)
-      </button>
+      ${notes || `<p class="rbc-disclaimer">Estimated geometry is for display only and never overwrites MEASURED values. Convert LSM or enter manual X/Y/Z for measured morphometry.</p>`}
     </div>`;
   let estimatedLayer = "";
   if (rbc.estimated) {
@@ -5901,6 +5909,7 @@ function renderRbcEnvelope(rbc: RbcResultEnvelope | null | undefined): string {
       (rbc.estimated.volume_um3 != null
         ? ` · volume ${formatNumber(rbc.estimated.volume_um3)} µm³`
         : "") +
+      ` · ${escapeHtml(rbc.estimated.confidence_note || "display only")}` +
       `</div>`;
   }
   return `

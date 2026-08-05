@@ -70,19 +70,25 @@ REFUSAL_GUIDANCE: dict[RbcRefusalCode, str] = {
         "Select a single cell before running analysis."
     ),
     RbcRefusalCode.LSM_REQUIRES_CONVERSION_OR_MANUAL: (
-        "Direct .lsm input is inspectable but cannot start calibrated RBC analysis. "
+        "Direct .lsm input cannot produce MEASURED physical RBC metrics. "
         "Convert to a metadata-preserving TIFF/OME-TIFF, or supply manual X, Y, and Z "
-        "voxel sizes in micrometers."
+        "voxel sizes in micrometers. Analysis may still continue with a clearly labeled "
+        "ESTIMATED mesh for visualization only."
     ),
     RbcRefusalCode.INCOMPLETE_AXIS_CALIBRATION: (
-        "RBC physical measurements require verified X, Y, and Z calibration. "
-        "Provide complete metadata or manual overrides for all three axes."
+        "RBC MEASURED physical metrics require verified X, Y, and Z calibration. "
+        "Provide complete metadata or manual overrides for all three axes. "
+        "Without that, only ESTIMATED visualization is available."
     ),
     RbcRefusalCode.UNVERIFIED_CONVERTED_METADATA: (
         "Converted TIFF/OME-TIFF metadata is incomplete or unverified for at least "
-        "one axis. Supply manual X, Y, and Z calibration or a verified conversion."
+        "one axis. Supply manual X, Y, and Z calibration or a verified conversion. "
+        "Without that, only ESTIMATED visualization is available."
     ),
 }
+
+# Hard stop before segmentation (missing seed). Soft codes allow ESTIMATED-only runs.
+HARD_REFUSAL_CODES: frozenset[RbcRefusalCode] = frozenset({RbcRefusalCode.SEED_REQUIRED})
 
 
 @dataclass(frozen=True)
@@ -135,20 +141,31 @@ class CalibrationAssessment:
 
 @dataclass(frozen=True)
 class RbcInputDecision:
-    """Outcome of the shared RBC input gate (pure evaluation)."""
+    """Outcome of the shared RBC input gate (pure evaluation).
+
+    ``allowed`` — may start seeded segmentation (hard gate; seed required).
+    ``measured_allowed`` — may claim MEASURED physical metrics. False for
+    uncalibrated LSM / incomplete axes; ESTIMATED mesh may still run.
+    """
 
     allowed: bool
     reasons: tuple[RbcRefusalCode, ...]
     capability: RbcCapability | None = None
     guidance: str = ""
+    measured_allowed: bool = True
 
     @property
     def primary_code(self) -> RbcRefusalCode | None:
         return self.reasons[0] if self.reasons else None
 
+    @property
+    def hard_blocked(self) -> bool:
+        return any(code in HARD_REFUSAL_CODES for code in self.reasons)
+
     def to_dict(self) -> dict[str, object]:
         return {
             "allowed": self.allowed,
+            "measured_allowed": self.measured_allowed,
             "codes": [code.value for code in self.reasons],
             "code": self.primary_code.value if self.primary_code is not None else None,
             "capability": self.capability.value if self.capability is not None else None,
@@ -365,6 +382,8 @@ class RbcAnalysisResult:
     issues: tuple[str, ...]
     method_versions: dict[str, str] = field(default_factory=dict)
     mesh_qc: RbcMeshQc | None = None
+    estimated: RbcEstimatedOutput | None = None
+    disclaimer: str = ""
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -384,6 +403,8 @@ class RbcAnalysisResult:
             "issues": list(self.issues),
             "method_versions": dict(self.method_versions),
             "mesh_qc": self.mesh_qc.to_dict() if self.mesh_qc is not None else None,
+            "estimated": self.estimated.to_dict() if self.estimated is not None else None,
+            "disclaimer": self.disclaimer,
         }
 
 
@@ -495,7 +516,10 @@ def envelope_from_analysis_result(
         or result.surface_area_um2 is not None
     )
     measured = None
-    if has_measured_fields and result.authority is not RbcAuthority.WITHHELD:
+    if (
+        has_measured_fields
+        and result.authority is RbcAuthority.MEASURED
+    ):
         measured = RbcMeasuredOutput(
             projected_metrics=result.projected_metrics,
             volume_um3=result.volume_um3,
@@ -506,7 +530,10 @@ def envelope_from_analysis_result(
             dimple_thickness_um=result.dimple_thickness_um,
             rim_thickness_um=result.rim_thickness_um,
         )
-    # PIXEL_PREVIEW with only withheld 3D still exposes empty measured=None.
+    est = estimated if estimated is not None else result.estimated
+    notes: tuple[str, ...] = ()
+    if result.disclaimer:
+        notes = (result.disclaimer,)
     return RbcResultEnvelope(
         authority=result.authority,
         capability=result.capability,
@@ -514,7 +541,8 @@ def envelope_from_analysis_result(
         qc_issues=tuple(result.issues),
         calibration=calibration,
         measured=measured,
-        estimated=estimated,
+        estimated=est,
         method_versions=dict(result.method_versions),
         mesh_qc=result.mesh_qc,
+        notes=notes,
     )

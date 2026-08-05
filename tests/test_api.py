@@ -383,8 +383,8 @@ def test_api_refuses_rbc_without_seed(client, tmp_path):
     assert "mesh" not in response.json()
 
 
-def test_api_refuses_uncalibrated_lsm_rbc_analysis(client, tmp_path, monkeypatch):
-    """Direct .lsm without manual X/Y/Z must refuse before physical results."""
+def test_api_uncalibrated_lsm_runs_estimated_not_measured(client, tmp_path, monkeypatch):
+    """Direct .lsm without manual X/Y/Z: disclaimer + ESTIMATED mesh, no MEASURED."""
     import importlib
 
     from morphostack.core.models import ImageStack, VoxelSize
@@ -392,9 +392,13 @@ def test_api_refuses_uncalibrated_lsm_rbc_analysis(client, tmp_path, monkeypatch
 
     path = tmp_path / "cell.lsm"
     path.write_bytes(b"not-a-real-lsm")
-    gray = np.zeros((2, 8, 8), dtype=np.uint8)
-    gray[:, 2:5, 1:4] = 200
-    color = np.zeros((2, 8, 8, 3), dtype=np.uint8)
+    n, size = 9, 32
+    gray = np.zeros((n, size, size), dtype=np.uint8)
+    yy, xx = np.ogrid[:size, :size]
+    disk = (yy - size // 2) ** 2 + (xx - size // 2) ** 2 <= 8**2
+    for z in range(1, n - 1):
+        gray[z][disk] = 210
+    color = np.zeros((n, size, size, 3), dtype=np.uint8)
     fake = ImageStack(
         source_path=path,
         grayscale=gray,
@@ -412,7 +416,6 @@ def test_api_refuses_uncalibrated_lsm_rbc_analysis(client, tmp_path, monkeypatch
     def _fake_resolve(*args, **kwargs):
         return fake, "deadbeef"
 
-    # Package exports FastAPI `app` as morphostack.api.app; patch the module.
     app_module = importlib.import_module("morphostack.api.app")
     monkeypatch.setattr(app_module, "resolve_stack", _fake_resolve)
     response = client.post(
@@ -422,13 +425,26 @@ def test_api_refuses_uncalibrated_lsm_rbc_analysis(client, tmp_path, monkeypatch
             "threshold": 100,
             "profile": "rbc",
             "prefer_opencv": False,
-            "object_seed": {"x": 2.5, "y": 3.5, "frame_index": 0, "radius": 4.0},
+            "include_mesh": True,
+            "object_seed": {"x": 16.0, "y": 16.0, "frame_index": 4, "radius": 12.0},
         },
     )
-    assert response.status_code == 422
-    detail = response.json()["detail"]
-    assert detail["code"] == "lsm_requires_conversion_or_manual_calibration"
-    assert "mesh" not in response.json()
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    rbc = payload["rbc"]
+    assert rbc is not None
+    assert "lsm_requires_conversion_or_manual_calibration" in rbc["qc_issues"]
+    assert rbc["authority"] == "ESTIMATED"
+    assert rbc["measured"] is None
+    assert rbc["estimated"] is not None
+    assert rbc["estimated"]["authority"] == "ESTIMATED"
+    assert any(
+        "lsm" in str(w.get("message", "")).lower() or w.get("code") == "rbc_calibration_disclaimer"
+        for w in payload["warnings"]
+    )
+    # Mesh may be present only as ESTIMATED display.
+    if payload.get("mesh") is not None:
+        assert payload.get("mesh_authority") == "ESTIMATED"
 
 
 def test_api_rbc_estimate_unavailable_until_registered(client):

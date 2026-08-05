@@ -446,6 +446,18 @@ def analysis_run_warnings(analysis: StackAnalysis, *, voxel_source: str = "unkno
     rbc_env = rbc_envelope_payload(analysis)
     if rbc_env is not None:
         issues = rbc_env.get("qc_issues") if isinstance(rbc_env, dict) else None
+        notes = rbc_env.get("notes") if isinstance(rbc_env, dict) else None
+        if isinstance(notes, list) and notes:
+            warnings.append(
+                {
+                    "code": "rbc_calibration_disclaimer",
+                    "severity": "warning",
+                    "message": " ".join(str(n) for n in notes),
+                    "qc_issues": list(issues) if isinstance(issues, list) else [],
+                    "capability": rbc_env.get("capability"),
+                    "authority": rbc_env.get("authority"),
+                }
+            )
         if isinstance(issues, list) and issues:
             warnings.append(
                 {
@@ -460,7 +472,9 @@ def analysis_run_warnings(analysis: StackAnalysis, *, voxel_source: str = "unkno
                     "authority": rbc_env.get("authority"),
                 }
             )
-        elif rbc_env.get("capability") == "PIXEL_PREVIEW":
+        elif rbc_env.get("capability") == "PIXEL_PREVIEW" and not (
+            isinstance(notes, list) and notes
+        ):
             warnings.append(
                 {
                     "code": "rbc_pixel_preview",
@@ -471,6 +485,18 @@ def analysis_run_warnings(analysis: StackAnalysis, *, voxel_source: str = "unkno
                     ),
                     "capability": rbc_env.get("capability"),
                     "authority": rbc_env.get("authority"),
+                }
+            )
+        if rbc_env.get("estimated") is not None and rbc_env.get("authority") == "ESTIMATED":
+            warnings.append(
+                {
+                    "code": "rbc_estimated_mesh",
+                    "severity": "info",
+                    "message": (
+                        "3D mesh/volume is ESTIMATED for display only — not MEASURED. "
+                        "Enter manual X/Y/Z or convert LSM for measured metrics."
+                    ),
+                    "authority": "ESTIMATED",
                 }
             )
     return warnings

@@ -57,17 +57,18 @@ def _seed() -> ObjectSeed:
 
 
 @pytest.mark.parametrize(
-    ("suffix", "manual", "seeded", "allowed", "reason"),
+    ("suffix", "manual", "seeded", "allowed", "measured_allowed", "reason"),
     [
-        (".lsm", False, True, False, RbcRefusalCode.LSM_REQUIRES_CONVERSION_OR_MANUAL),
-        (".lsm", True, True, True, None),
-        (".ome.tif", False, False, False, RbcRefusalCode.SEED_REQUIRED),
-        (".ome.tif", True, True, True, None),
-        (".tif", False, True, False, RbcRefusalCode.UNVERIFIED_CONVERTED_METADATA),
-        (".tif", True, True, True, None),
+        # Uncalibrated LSM: analysis allowed, MEASURED blocked (ESTIMATED path).
+        (".lsm", False, True, True, False, RbcRefusalCode.LSM_REQUIRES_CONVERSION_OR_MANUAL),
+        (".lsm", True, True, True, True, None),
+        (".ome.tif", False, False, False, False, RbcRefusalCode.SEED_REQUIRED),
+        (".ome.tif", True, True, True, True, None),
+        (".tif", False, True, True, False, RbcRefusalCode.UNVERIFIED_CONVERTED_METADATA),
+        (".tif", True, True, True, True, None),
     ],
 )
-def test_rbc_input_gate(suffix, manual, seeded, allowed, reason):
+def test_rbc_input_gate(suffix, manual, seeded, allowed, measured_allowed, reason):
     if manual:
         calibration = calibration_from_override(0.1, 0.1, 0.3, source_format="test")
     else:
@@ -80,6 +81,7 @@ def test_rbc_input_gate(suffix, manual, seeded, allowed, reason):
         object_seed=_seed() if seeded else None,
     )
     assert decision.allowed is allowed
+    assert decision.measured_allowed is measured_allowed
     assert reason is None or reason in decision.reasons
 
 
@@ -145,6 +147,35 @@ def test_analyze_stack_rbc_accepts_seed_with_verified_calibration():
     )
     assert result.profile == "rbc"
     assert result.frames[0].profile == "rbc"
+
+
+def test_analyze_stack_uncalibrated_lsm_yields_estimated_mesh():
+    n, size = 9, 32
+    stack = np.zeros((n, size, size), dtype=np.uint8)
+    yy, xx = np.ogrid[:size, :size]
+    disk = (yy - size // 2) ** 2 + (xx - size // 2) ** 2 <= 8**2
+    for z in range(1, n - 1):
+        stack[z][disk] = 210
+    cal = unverified_calibration_from_values(1.0, 1.0, 1.0, source_format="lsm", source="default")
+    result = analyze_stack(
+        stack,
+        thresholds=100,
+        voxel_size=VoxelSize(1.0, 1.0, 1.0),
+        profile="rbc",
+        prefer_opencv=False,
+        object_seed=ObjectSeed(x=16.0, y=16.0, frame_index=4, radius=12.0),
+        source_path="cell.lsm",
+        calibration=cal,
+        include_mesh=True,
+    )
+    assert result.rbc_result is not None
+    assert result.rbc_result.authority is RbcAuthority.ESTIMATED
+    assert result.rbc_result.volume_um3 is None
+    assert result.rbc_result.projected_metrics is None
+    assert result.rbc_result.estimated is not None
+    assert result.rbc_result.estimated.authority is RbcAuthority.ESTIMATED
+    assert "lsm_requires_conversion_or_manual_calibration" in result.rbc_issues
+    assert result.mesh is not None  # display mesh present
 
 
 def test_analyze_stack_vesicle_unaffected_without_seed():
