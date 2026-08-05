@@ -6,8 +6,11 @@ them rather than inventing parallel strings or optional vesicle fields.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
+from typing import Any
+
+import numpy as np
 
 
 class RbcCapability(str, Enum):
@@ -162,3 +165,68 @@ class RbcInputRefused(Exception):
             decision.primary_code.value if decision.primary_code is not None else "RBC input refused"
         )
         super().__init__(message)
+
+
+class RbcTopologyIssue(str, Enum):
+    """Topology / association issues for loop-aware RBC reconstruction."""
+
+    EMPTY = "empty"
+    MULTIPLE_OUTER_COMPONENTS = "multiple_outer_components"
+    UNSUPPORTED_NESTING = "unsupported_nesting"
+    RASTER_MISMATCH = "raster_mismatch"
+    LATERAL_CLIPPING = "lateral_clipping"
+    UNRESOLVED_MERGE = "unresolved_merge"
+    INTERNAL_GAP = "internal_gap"
+    NO_VALID_SLICES = "no_valid_slices"
+    SEED_SLICE_FAILED = "seed_slice_failed"
+
+
+@dataclass(frozen=True)
+class RbcBoundaryLoop:
+    """Closed polyline in full-image XY coordinates (N, 2)."""
+
+    xy: np.ndarray
+    role: str  # "outer" | "inner"
+
+    def __post_init__(self) -> None:
+        arr = np.asarray(self.xy, dtype=np.float64)
+        if arr.ndim != 2 or arr.shape[1] != 2:
+            raise ValueError("boundary loop must have shape (N, 2)")
+        object.__setattr__(self, "xy", arr)
+
+
+@dataclass(frozen=True)
+class RbcSliceTopology:
+    """Loop-aware representation of one RBC Z slice."""
+
+    frame_index: int
+    outer_loop_xy: np.ndarray | None
+    inner_loops_xy: tuple[np.ndarray, ...]
+    occupancy_mask: np.ndarray | None
+    issues: tuple[RbcTopologyIssue, ...]
+    ok: bool
+    method: str = ""
+    center_xy: tuple[float, float] | None = None
+    area_px: float = 0.0
+    merge_suspect: bool = False
+
+    @property
+    def inner_loop_count(self) -> int:
+        return len(self.inner_loops_xy)
+
+
+@dataclass(frozen=True)
+class RbcStackCandidate:
+    """Full-stack topology-preserving occupancy candidate (provisional)."""
+
+    seed_frame_index: int
+    slices: tuple[RbcSliceTopology, ...]
+    occupancy_mask: np.ndarray | None
+    valid_slice_indices: tuple[int, ...]
+    internal_gap_indices: tuple[int, ...]
+    issues: tuple[RbcTopologyIssue, ...]
+    withheld: bool
+    ok: bool
+    method: str = "rbc_topology_occupancy_v1"
+    algorithm_version: str = "rbc_topology_v1"
+    provenance: dict[str, Any] = field(default_factory=dict)

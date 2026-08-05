@@ -407,18 +407,45 @@ def segmentation_candidate_from_analysis(
 
     Does not change ``analyze_stack`` outputs. Active-surfaces and exact tracks
     remain candidates until :func:`authoritative_mask_from_analysis` accepts them.
+
+    For ``profile="rbc"``, prefers topology-preserving occupancy over contour
+    hole-fill rasterization when ``analysis.rbc_occupancy`` is present.
     """
 
     from morphostack.core.mesh import contours_to_mask_stack
 
-    contours = mesh_contours_from_analysis(analysis)
     if len(shape) != 3:
         raise ValueError("shape must be (z, y, x)")
+
+    profile = str(analysis.profile)
+    if profile == "rbc" and analysis.rbc_occupancy is not None:
+        mask = np.asarray(analysis.rbc_occupancy)
+        if mask.shape != shape:
+            raise ValueError(
+                f"rbc_occupancy shape {mask.shape} does not match requested shape {shape}"
+            )
+        resolved_method = method or "rbc_topology_occupancy"
+        if algorithm_version is None:
+            algorithm_version = "rbc_topology_v1"
+        # RBC occupancy remains provisional until Phase 3 QC accepts it.
+        return SegmentationCandidate(
+            source_revision=source_revision,
+            method=resolved_method,
+            algorithm_version=str(algorithm_version),
+            completeness=completeness,  # type: ignore[arg-type]
+            is_full_resolution=is_full_resolution,
+            provisional=True,
+            mask=mask.astype(np.uint8, copy=False),
+            contours=mesh_contours_from_analysis(analysis),
+            qc={"rbc_issues": list(analysis.rbc_issues), "rbc_withheld": analysis.rbc_withheld},
+            provenance={"profile": "rbc", "representation": "topology_occupancy"},
+        )
+
+    contours = mesh_contours_from_analysis(analysis)
     if len(contours) != shape[0]:
         raise ValueError("contour count must match shape[0] (z)")
 
     mask = contours_to_mask_stack(contours, shape=shape)
-    profile = str(analysis.profile)
     resolved_method = method or (
         "active_surfaces" if profile == "active_surfaces" else f"exact_{profile}"
     )
@@ -720,6 +747,10 @@ class StackAnalysis:
     z_range: ZRange | None = None
     tracking: TrackingDiagnostics | None = None
     excluded_frames: frozenset[int] = field(default_factory=frozenset)
+    # Phase 2: topology-preserving RBC occupancy (z,y,x), provisional until Phase 3 QC.
+    rbc_occupancy: np.ndarray | None = None
+    rbc_withheld: bool = False
+    rbc_issues: tuple[str, ...] = ()
 
     @property
     def valid_frames(self) -> tuple[FrameAnalysis, ...]:
@@ -875,6 +906,10 @@ def analyze_stack(
     arr = np.asarray(stack)
     if arr.ndim != 3:
         raise ValueError("analyze_stack expects a grayscale stack shaped as (z, y, x)")
+
+    rbc_occupancy_local: np.ndarray | None = None
+    rbc_withheld_flag = False
+    rbc_issue_codes: tuple[str, ...] = ()
 
     raw_shape = (int(arr.shape[0]), int(arr.shape[1]), int(arr.shape[2]))
     frame_offset = 0
@@ -1113,20 +1148,47 @@ def analyze_stack(
                 # Gate in physical XY: hypot(dx*x_um, dy*y_um) <= max_um (not mean spacing).
                 jump_um = float(local_seed.max_tracking_dist_um)
             seed_r = effective_seed_radius(float(local_seed.radius) if local_seed.radius else None)
-            seeded_results = track_seeded_vesicle_stack(
-                arr,
-                seed_x=float(local_seed.x),
-                seed_y=float(local_seed.y),
-                seed_frame=int(local_seed.frame_index),
-                seed_radius=seed_r,
-                max_centroid_jump_px=jump_px,
-                max_centroid_jump_um=jump_um,
-                voxel_x_um=vx_um,
-                voxel_y_um=vy_um,
-                competitive_isolation=bool(competitive_tracking),
-                multiscale_consensus=bool(multiscale_consensus),
-                profile=analysis_profile,
-            )
+            if analysis_profile == "rbc":
+                from morphostack.core.rbc_segmentation import track_rbc_stack
+
+                rbc_cand = track_rbc_stack(
+                    arr,
+                    seed=local_seed,
+                    max_centroid_jump_px=jump_px,
+                    max_centroid_jump_um=jump_um,
+                    voxel_x_um=vx_um,
+                    voxel_y_um=vy_um,
+                    competitive_isolation=bool(competitive_tracking),
+                    multiscale_consensus=bool(multiscale_consensus),
+                )
+                rbc_withheld_flag = bool(rbc_cand.withheld)
+                rbc_issue_codes = tuple(iss.value for iss in rbc_cand.issues)
+                if rbc_cand.occupancy_mask is not None:
+                    # Occupancy is in the cropped/view frame; map to full YX later if needed.
+                    rbc_occupancy_local = np.asarray(rbc_cand.occupancy_mask, dtype=bool)
+                # Convert to SeededSliceResult-shaped list for shared frame builder.
+                from morphostack.core.rbc_segmentation import seeded_results_from_rbc_candidate
+
+                seeded_results = seeded_results_from_rbc_candidate(
+                    rbc_cand,
+                    fallback_center=(float(local_seed.x), float(local_seed.y)),
+                )
+            else:
+                seeded_results = track_seeded_vesicle_stack(
+                    arr,
+                    seed_x=float(local_seed.x),
+                    seed_y=float(local_seed.y),
+                    seed_frame=int(local_seed.frame_index),
+                    seed_radius=seed_r,
+                    max_centroid_jump_px=jump_px,
+                    max_centroid_jump_um=jump_um,
+                    voxel_x_um=vx_um,
+                    voxel_y_um=vy_um,
+                    competitive_isolation=bool(competitive_tracking),
+                    multiscale_consensus=bool(multiscale_consensus),
+                    profile=analysis_profile,
+                    fill_holes=True,
+                )
             frames_list = []
             track_records: list[FrameTrackingRecord] = []
             # Resolve seed-frame area first so pre-seed Z frames can still get merge flags.
@@ -1391,20 +1453,50 @@ def analyze_stack(
         invalid = sorted(excluded_set - frame_indices)
         if invalid:
             raise ValueError(f"excluded frame index(es) not in analyzed stack: {invalid}")
+
+    # Map crop-local RBC occupancy into full-image YX when isolation cropped XY.
+    rbc_occupancy_full: np.ndarray | None = None
+    if rbc_occupancy_local is not None:
+        local = np.asarray(rbc_occupancy_local, dtype=bool)
+        mesh_shape_zyx = (len(frames), full_yx_shape[0], full_yx_shape[1])
+        if local.shape == mesh_shape_zyx:
+            rbc_occupancy_full = local
+        else:
+            # Local crop coordinates → full plane.
+            full = np.zeros(mesh_shape_zyx, dtype=bool)
+            y0 = int(transform.y_offset) if hasattr(transform, "y_offset") else 0
+            x0 = int(transform.x_offset) if hasattr(transform, "x_offset") else 0
+            zh, yh, xh = local.shape
+            y1 = min(full_yx_shape[0], y0 + yh)
+            x1 = min(full_yx_shape[1], x0 + xh)
+            full[:zh, y0:y1, x0:x1] = local[:zh, : y1 - y0, : x1 - x0]
+            rbc_occupancy_full = full
+
     mesh = None
     slice_volume = None
     if include_mesh:
-        mesh_contours = tuple(
-            None if frame.frame_index in excluded_set else frame.contour for frame in frames
-        )
-        # Contours are full-image XY after isolation; rasterize into full YX plane.
         mesh_shape = (len(frames), full_yx_shape[0], full_yx_shape[1])
-        mesh = measure_contour_stack(
-            mesh_contours,
-            shape=mesh_shape,
-            voxel=voxel_size,
-        )
-        slice_volume = measure_slice_integrated_volume(mesh_contours, voxel=voxel_size)
+        if analysis_profile == "rbc" and rbc_occupancy_full is not None and not rbc_withheld_flag:
+            from morphostack.core.mesh import marching_cubes_measurement
+
+            if np.count_nonzero(rbc_occupancy_full) > 0:
+                mesh = marching_cubes_measurement(rbc_occupancy_full.astype(np.uint8), voxel_size)
+            # Volume cross-check still uses outer contours (diagnostic).
+            mesh_contours = tuple(
+                None if frame.frame_index in excluded_set else frame.contour for frame in frames
+            )
+            slice_volume = measure_slice_integrated_volume(mesh_contours, voxel=voxel_size)
+        else:
+            mesh_contours = tuple(
+                None if frame.frame_index in excluded_set else frame.contour for frame in frames
+            )
+            # Contours are full-image XY after isolation; rasterize into full YX plane.
+            mesh = measure_contour_stack(
+                mesh_contours,
+                shape=mesh_shape,
+                voxel=voxel_size,
+            )
+            slice_volume = measure_slice_integrated_volume(mesh_contours, voxel=voxel_size)
     return StackAnalysis(
         voxel_size=voxel_size,
         profile=analysis_profile,
@@ -1414,6 +1506,9 @@ def analyze_stack(
         z_range=z_range,
         tracking=tracking,
         excluded_frames=excluded_set,
+        rbc_occupancy=rbc_occupancy_full,
+        rbc_withheld=bool(rbc_withheld_flag),
+        rbc_issues=tuple(rbc_issue_codes),
     )
 
 

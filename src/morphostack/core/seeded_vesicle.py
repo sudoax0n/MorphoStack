@@ -717,11 +717,15 @@ def _pick_component_in_disk(
     R: float,
     ref_area: float | None = None,
     cheap: bool = False,
+    fill_holes: bool = True,
 ) -> np.ndarray | None:
     """Pick CC inside disk: prefer exterior containing seed, area near ref/R.
 
     Neck-fused multi-vesicle masks are split via DT watershed before labeling
     so the seed's vesicle is isolated from a connecting neighbor.
+
+    When ``fill_holes`` is False (RBC path), scoring still uses the filled
+    exterior for area/contains gates, but the returned mask keeps holes.
     """
     masked = np.asarray(fg_mask, dtype=bool) & np.asarray(disk, dtype=bool)
     if not np.any(masked):
@@ -756,19 +760,20 @@ def _pick_component_in_disk(
 
     for lab in range(1, nlab + 1):
         comp = labeled == lab
-        solid = _fill_holes(comp)
-        solid_area = float(np.count_nonzero(solid))
+        solid_filled = _fill_holes(comp)
+        solid_area = float(np.count_nonzero(solid_filled))
         if solid_area < min_area or solid_area > max_area:
             continue
-        contains = _component_exterior_contains(solid, local_cx, local_cy)
-        ys, xs = np.where(solid)
+        contains = _component_exterior_contains(solid_filled, local_cx, local_cy)
+        ys, xs = np.where(solid_filled)
         if ys.size == 0:
             continue
         scx, scy = float(xs.mean()), float(ys.mean())
         dist = float(np.hypot(scx - local_cx, scy - local_cy))
         area_term = abs(solid_area - target) / max(target, 1.0)
         score = area_term + 0.15 * (dist / max(R, 1.0)) + (0.0 if contains else 2.5)
-        scored.append((score, solid))
+        returned = solid_filled if fill_holes else np.asarray(comp, dtype=bool)
+        scored.append((score, returned))
 
     if not scored:
         return None
@@ -1152,6 +1157,7 @@ def segment_slice_seeded(
     competitive_isolation: bool | None = None,
     multiscale_consensus: bool = False,
     profile: str = "vesicle",
+    fill_holes: bool = True,
 ) -> SeededSliceResult:
     """Segment one slice with a user circle (cx, cy, R) in full-image coords.
 
@@ -1337,7 +1343,14 @@ def segment_slice_seeded(
                 if _instr:
                     _t0 = time.perf_counter()
                 solid = _pick_component_in_disk(
-                    fg, disk, local_cx, local_cy, R, ref_area=ref_area, cheap=fast_preview
+                    fg,
+                    disk,
+                    local_cx,
+                    local_cy,
+                    R,
+                    ref_area=ref_area,
+                    cheap=fast_preview,
+                    fill_holes=fill_holes,
                 )
                 if _instr:
                     _instr_record_stage("pick_component", (time.perf_counter() - _t0) * 1000.0)
@@ -1397,7 +1410,11 @@ def segment_slice_seeded(
             _instr_record_stage("segment_total", (time.perf_counter() - _t_seg0) * 1000.0, method="circle_seed_fail", ok=False)
         return SeededSliceResult(None, None, (sx, sy), 0.0, 0.0, "circle_seed_fail", False)
 
-    solid = _fill_holes(solid) & disk
+    if fill_holes:
+        solid = _fill_holes(solid) & disk
+    else:
+        # RBC topology path: keep membrane holes; never fill the dimple.
+        solid = np.asarray(solid, dtype=bool) & disk
     if not np.any(solid):
         if _instr:
             _instr_record_stage("segment_total", (time.perf_counter() - _t_seg0) * 1000.0, method="circle_seed_fail", ok=False)
@@ -1510,6 +1527,11 @@ def segment_slice_seeded(
                 return _reject_merge(qc)
         elif competitive_used:
             pass
+        elif not fill_holes:
+            # Topology-preserving path: do not run fill-based split/polar repairs.
+            if fail_closed(qc):
+                _EXACT_PATH_COUNTERS.merge_rejects += 1
+                return _reject_merge(qc)
         elif not clean_pre_refine and not accept_as_is(qc):
 
             # 1) Thin-neck / multi-marker: marker-controlled watershed child only.
@@ -1598,7 +1620,8 @@ def segment_slice_seeded(
     # MorphGAC when refine=True. Competitive isolation already hard-gated
     # multi-body/star-convex; skip MorphGAC there (Packet 02 continuity).
     # Packet 06 MorphGAC-skip-when-clean switch deleted (science REJECT).
-    run_morphgac = bool(refine and not fast_preview)
+    # Topology-preserving RBC path skips MorphGAC — it tends to fill dimples.
+    run_morphgac = bool(refine and not fast_preview and fill_holes)
     if run_morphgac and (competitive_used or use_consensus):
         run_morphgac = False
         _EXACT_PATH_COUNTERS.morphgac_skipped_clean += 1
@@ -2091,6 +2114,7 @@ def track_seeded_vesicle_stack(
     competitive_isolation: bool | None = None,
     multiscale_consensus: bool = False,
     profile: str = "vesicle",
+    fill_holes: bool = True,
 ) -> list[SeededSliceResult]:
     """Z tracking with user circle radius R.
 
@@ -2162,6 +2186,7 @@ def track_seeded_vesicle_stack(
         competitive_isolation=use_competitive,
         multiscale_consensus=use_consensus,
         profile=profile,
+        fill_holes=fill_holes,
     )
     results[seed_frame] = first
     if not first.ok:
@@ -2319,6 +2344,7 @@ def track_seeded_vesicle_stack(
                     competitive_isolation=use_competitive,
                     multiscale_consensus=use_consensus,
                     profile=profile,
+                    fill_holes=fill_holes,
                 )
                 accepted = _candidate_accepted(
                     cand,
@@ -2530,6 +2556,7 @@ def extend_track(
     competitive_isolation: bool | None = None,
     multiscale_consensus: bool = False,
     profile: str = "vesicle",
+    fill_holes: bool = True,
 ) -> list[SeededSliceResult]:
     """Extend a previously cached tracking result toward ``target_frame``.
 
@@ -2750,6 +2777,7 @@ def extend_track(
                     competitive_isolation=use_competitive,
                     multiscale_consensus=use_consensus,
                     profile=profile,
+                    fill_holes=fill_holes,
                 )
                 accepted = _candidate_accepted(
                     cand,
