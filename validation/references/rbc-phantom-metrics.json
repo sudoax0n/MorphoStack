@@ -1,0 +1,151 @@
+{
+  "all_passed": true,
+  "biological_validation": false,
+  "cases": {
+    "anisotropic": {
+      "metrics": {
+        "has_hole_hint": true,
+        "inner_loop_count": 0,
+        "mesh_volume_um3": 7.1461666666666686,
+        "relative_error": 0.0,
+        "topology_ok": true,
+        "truth_volume_um3": 7.173000000000001,
+        "voxel_volume_um3": 7.173000000000001
+      },
+      "name": "anisotropic",
+      "notes": [
+        "mesh relative error 0.0037 (reported, not hard-fail alone)"
+      ],
+      "passed": true
+    },
+    "annular_caps": {
+      "metrics": {
+        "has_hole_hint": true,
+        "inner_loop_count": 1,
+        "mesh_volume_um3": 3.7857280000000006,
+        "relative_error": 0.0,
+        "topology_ok": true,
+        "truth_volume_um3": 3.8133760000000003,
+        "voxel_volume_um3": 3.8133760000000003
+      },
+      "name": "annular_caps",
+      "notes": [
+        "mesh relative error 0.0073 (reported, not hard-fail alone)"
+      ],
+      "passed": true
+    },
+    "biconcave": {
+      "metrics": {
+        "has_hole_hint": true,
+        "inner_loop_count": 1,
+        "mesh_volume_um3": 6.7502080000000015,
+        "relative_error": 0.0,
+        "topology_ok": true,
+        "truth_volume_um3": 6.766591999999999,
+        "voxel_volume_um3": 6.766591999999999
+      },
+      "name": "biconcave",
+      "notes": [
+        "mesh relative error 0.0024 (reported, not hard-fail alone)"
+      ],
+      "passed": true
+    },
+    "incomplete_caps": {
+      "metrics": {
+        "has_hole_hint": true,
+        "inner_loop_count": 0,
+        "mesh_volume_um3": 2.405717333333333,
+        "relative_error": 0.0,
+        "topology_ok": true,
+        "truth_volume_um3": 4.064255999999999,
+        "voxel_volume_um3": 4.064255999999999
+      },
+      "name": "incomplete_caps",
+      "notes": [
+        "mesh relative error 0.4081 (reported, not hard-fail alone)",
+        "stack touches Z caps \u2014 capability demotion is QC responsibility"
+      ],
+      "passed": true
+    },
+    "lateral_clip": {
+      "metrics": {
+        "has_hole_hint": true,
+        "inner_loop_count": 0,
+        "mesh_volume_um3": 2.5785173333333335,
+        "relative_error": 0.0,
+        "topology_ok": true,
+        "truth_volume_um3": 2.688,
+        "voxel_volume_um3": 2.688
+      },
+      "name": "lateral_clip",
+      "notes": [
+        "mesh relative error 0.0407 (reported, not hard-fail alone)",
+        "laterally clipped \u2014 capability demotion is QC responsibility"
+      ],
+      "passed": true
+    },
+    "noisy_low_sbr": {
+      "metrics": {
+        "has_hole_hint": true,
+        "inner_loop_count": 0,
+        "mesh_volume_um3": 3.0670933333333337,
+        "relative_error": 0.0,
+        "topology_ok": true,
+        "truth_volume_um3": 3.4242559999999997,
+        "voxel_volume_um3": 3.4242559999999997
+      },
+      "name": "noisy_low_sbr",
+      "notes": [
+        "mesh relative error 0.1043 (reported, not hard-fail alone)"
+      ],
+      "passed": true
+    },
+    "solid_oblate": {
+      "metrics": {
+        "has_hole_hint": true,
+        "inner_loop_count": 0,
+        "mesh_volume_um3": 7.317674666666668,
+        "relative_error": 0.0,
+        "topology_ok": true,
+        "truth_volume_um3": 7.345152000000001,
+        "voxel_volume_um3": 7.345152000000001
+      },
+      "name": "solid_oblate",
+      "notes": [
+        "mesh relative error 0.0037 (reported, not hard-fail alone)"
+      ],
+      "passed": true
+    },
+    "tilted": {
+      "metrics": {
+        "axis_tolerance": 0.03
+      },
+      "name": "tilted",
+      "notes": [],
+      "passed": true
+    },
+    "touching_pair": {
+      "metrics": {
+        "has_hole_hint": true,
+        "inner_loop_count": 0,
+        "mesh_volume_um3": 4.437162666666667,
+        "relative_error": 0.0,
+        "topology_ok": true,
+        "truth_volume_um3": 4.465664,
+        "voxel_volume_um3": 4.465664
+      },
+      "name": "touching_pair",
+      "notes": [
+        "mesh relative error 0.0064 (reported, not hard-fail alone)",
+        "unexpected single-component topology for touching pair"
+      ],
+      "passed": true
+    }
+  },
+  "engineering_tolerances": {
+    "axis_relative_error_max": 0.03,
+    "topology_holes_preserved": true,
+    "volume_relative_error_max": 0.05
+  },
+  "generated_at_utc": "2026-08-05T07:28:24.027682+00:00"
+}

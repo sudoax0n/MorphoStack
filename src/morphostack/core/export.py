@@ -17,6 +17,8 @@ from morphostack.core.pipeline import (
     object_seed_payload,
     tracking_diagnostics_payload,
 )
+from morphostack.core.rbc_models import CalibrationAssessment
+from morphostack.core.rbc_serialize import rbc_envelope_payload
 
 CSV_COLUMNS = (
     "frame_index",
@@ -134,9 +136,18 @@ def analysis_rows(analysis: StackAnalysis) -> list[dict[str, object]]:
     slice_volume = analysis.slice_volume
     integrated_volume = slice_volume.volume_um3 if slice_volume is not None else None
     volume_difference = slice_volume_relative_difference(analysis)
+    # RBC authority-safe mesh columns: blank when 3D not validated.
+    rbc_env = rbc_envelope_payload(analysis)
+    rbc_mesh_allowed = False
+    if rbc_env is None:
+        rbc_mesh_allowed = True  # non-RBC uses legacy mesh fields
+    else:
+        measured = rbc_env.get("measured") if isinstance(rbc_env, dict) else None
+        if isinstance(measured, dict) and measured.get("volume_um3") is not None:
+            rbc_mesh_allowed = True
     for frame in analysis.frames:
         metrics = frame.metrics
-        mesh = analysis.mesh
+        mesh = analysis.mesh if rbc_mesh_allowed else None
         excluded = frame.frame_index in analysis.excluded_frames
         def _csv_num(v: float | None) -> float | str:
             if v is None:
@@ -153,6 +164,9 @@ def analysis_rows(analysis: StackAnalysis) -> list[dict[str, object]]:
         eff = getattr(frame, "effective_threshold", None)
         sem = getattr(frame, "threshold_semantics", None) or "global_intensity"
         legacy = frame.threshold
+        # For RBC, deformation_index is legacy bbox-only; still exported under the
+        # same column name for CSV compatibility but should not be primary report.
+        di = metrics.deformation_index if metrics else 0.0
         rows.append(
             {
                 "frame_index": frame.frame_index,
@@ -173,7 +187,7 @@ def analysis_rows(analysis: StackAnalysis) -> list[dict[str, object]]:
                 "bbox_height_um": metrics.bbox_height_um if metrics else 0.0,
                 "aspect_ratio": metrics.aspect_ratio if metrics else 0.0,
                 "elongation": metrics.elongation if metrics else 0.0,
-                "deformation_index": metrics.deformation_index if metrics else 0.0,
+                "deformation_index": di,
                 "extent": metrics.extent if metrics else 0.0,
                 "equivalent_diameter_um": metrics.equivalent_diameter_um if metrics else 0.0,
                 "solidity": metrics.solidity if metrics else 0.0,
@@ -429,6 +443,36 @@ def analysis_run_warnings(analysis: StackAnalysis, *, voxel_source: str = "unkno
                 ),
             }
         )
+    rbc_env = rbc_envelope_payload(analysis)
+    if rbc_env is not None:
+        issues = rbc_env.get("qc_issues") if isinstance(rbc_env, dict) else None
+        if isinstance(issues, list) and issues:
+            warnings.append(
+                {
+                    "code": "rbc_qc",
+                    "severity": "warning",
+                    "message": (
+                        f"RBC capability {rbc_env.get('capability')}, authority "
+                        f"{rbc_env.get('authority')}: {', '.join(str(i) for i in issues)}"
+                    ),
+                    "qc_issues": list(issues),
+                    "capability": rbc_env.get("capability"),
+                    "authority": rbc_env.get("authority"),
+                }
+            )
+        elif rbc_env.get("capability") == "PIXEL_PREVIEW":
+            warnings.append(
+                {
+                    "code": "rbc_pixel_preview",
+                    "severity": "warning",
+                    "message": (
+                        "RBC physical morphometry is withheld (PIXEL_PREVIEW). "
+                        "Check calibration, seed, and stack completeness."
+                    ),
+                    "capability": rbc_env.get("capability"),
+                    "authority": rbc_env.get("authority"),
+                }
+            )
     return warnings
 
 
@@ -500,6 +544,7 @@ def analysis_manifest(
     prefer_opencv: bool = True,
     voxel_source: str = "unknown",
     object_seed: ObjectSeed | None = None,
+    calibration: CalibrationAssessment | None = None,
 ) -> dict[str, object]:
     mesh = None
     if analysis.mesh:
@@ -509,6 +554,15 @@ def analysis_manifest(
             "equivalent_sphere_diameter_um": analysis.mesh.equivalent_sphere_diameter_um,
             "sphericity": analysis.mesh.sphericity,
         }
+    # RBC: never present legacy mesh as measured when QC withheld 3D.
+    rbc_payload = rbc_envelope_payload(analysis, calibration=calibration)
+    if rbc_payload is not None:
+        measured = rbc_payload.get("measured") if isinstance(rbc_payload, dict) else None
+        measured_vol = None
+        if isinstance(measured, dict):
+            measured_vol = measured.get("volume_um3")
+        if measured_vol is None:
+            mesh = None
     seeded_adaptive = _seeded_adaptive_threshold_used(analysis, object_seed)
     # Run-level semantics: per-frame fields are authoritative for polar/unavailable.
     run_semantics = "seeded_adaptive_local" if seeded_adaptive else "global_intensity"
@@ -567,6 +621,7 @@ def analysis_manifest(
         "object_seed": object_seed_payload(object_seed),
         "tracking": tracking_diagnostics_payload(analysis.tracking),
         "columns": list(CSV_COLUMNS),
+        "rbc": rbc_payload,
     }
 
 

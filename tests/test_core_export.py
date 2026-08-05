@@ -107,7 +107,7 @@ def test_analysis_manifest_records_run_settings():
         stack,
         thresholds=100,
         voxel_size=VoxelSize(0.5, 0.5, 1.0),
-        profile="rbc",
+        profile="vesicle",
         prefer_opencv=False,
     )
 
@@ -124,7 +124,7 @@ def test_analysis_manifest_records_run_settings():
 
     assert manifest["source_path"] == "stack.tif"
     assert manifest["source_sha256"] == "abc123"
-    assert manifest["profile"] == "rbc"
+    assert manifest["profile"] == "vesicle"
     assert manifest["threshold"] == 100
     assert manifest["roi"] == {"xmin": 1, "xmax": 4, "ymin": 2, "ymax": 6}
     assert manifest["voxel_size"] == {"x_um": 0.5, "y_um": 0.5, "z_um": 1.0}
@@ -133,6 +133,55 @@ def test_analysis_manifest_records_run_settings():
     assert manifest["summary"]["metrics"]["area_um2"]["mean"] == 2.25
     assert "created_at_utc" in manifest
     assert manifest["warnings"] == []
+    assert manifest["rbc"] is None
+
+
+def test_rbc_manifest_carries_capability_envelope():
+    from morphostack.core.pipeline import ObjectSeed
+    from morphostack.core.rbc_capabilities import calibration_from_override
+    from morphostack.core.rbc_models import RBC_METRIC_DEFINITION_VERSION
+
+    n, size = 9, 48
+    stack = np.zeros((n, size, size), dtype=np.uint8)
+    yy, xx = np.ogrid[:size, :size]
+    disk = (yy - size // 2) ** 2 + (xx - size // 2) ** 2 <= 12**2
+    for z in range(1, n - 1):
+        stack[z][disk] = 210
+    cal = calibration_from_override(0.1, 0.1, 0.2, source_format="tiff")
+    analysis = analyze_stack(
+        stack,
+        thresholds=100,
+        voxel_size=VoxelSize(0.1, 0.1, 0.2),
+        profile="rbc",
+        prefer_opencv=False,
+        object_seed=ObjectSeed(x=24.0, y=24.0, frame_index=4, radius=16.0),
+        source_path="cell.tif",
+        calibration=cal,
+        include_mesh=True,
+    )
+    manifest = analysis_manifest(
+        analysis,
+        source_path="cell.tif",
+        threshold=100,
+        voxel_source="override",
+        calibration=cal,
+    )
+    rbc = manifest["rbc"]
+    assert rbc is not None
+    assert rbc["metric_definition_version"] == RBC_METRIC_DEFINITION_VERSION
+    assert rbc["authority"] in {"MEASURED", "WITHHELD"}
+    assert rbc["capability"] in {
+        "PIXEL_PREVIEW",
+        "2D_OUTER_CONTOUR",
+        "3D_OCCUPANCY_VALIDATED",
+    }
+    # Withheld / 2D-only must not publish measured mesh volume as zeros.
+    if rbc["capability"] != "3D_OCCUPANCY_VALIDATED":
+        assert manifest["mesh"] is None or (
+            rbc.get("measured") is None or rbc["measured"].get("volume_um3") is None
+        )
+        if rbc.get("measured") is not None:
+            assert rbc["measured"].get("volume_um3") is None
 
 
 def test_analysis_summary_uses_valid_frames_only():
@@ -263,7 +312,7 @@ def test_analysis_report_markdown_summarizes_run():
         stack,
         thresholds=100,
         voxel_size=VoxelSize(1.0, 1.0, 1.0),
-        profile="rbc",
+        profile="vesicle",
         prefer_opencv=False,
     )
 
@@ -280,7 +329,7 @@ def test_analysis_report_markdown_summarizes_run():
     assert report.startswith("# MorphoStack Analysis Report")
     assert "- Source: `stack.tif`" in report
     assert "- Source SHA-256: `abc123`" in report
-    assert "- Profile: `rbc`" in report
+    assert "- Profile: `vesicle`" in report
     assert "- Valid frames: 1" in report
     assert "`partial_contours`" in report
     assert "| area_um2 | 9 | 9 | 9 | 0 |" in report

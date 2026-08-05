@@ -244,6 +244,20 @@ def test_validated_occupancy_result_reports_measured_volume():
     assert result.rim_thickness_um is None
 
 
+def test_validator_reports_every_required_phantom(tmp_path):
+    import importlib.util
+    from pathlib import Path
+
+    script = Path(__file__).resolve().parents[1] / "scripts" / "validate_rbc_phantoms.py"
+    spec = importlib.util.spec_from_file_location("validate_rbc_phantoms", script)
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    report = mod.run_rbc_phantom_validation(output_dir=tmp_path)
+    assert set(report.cases) == set(mod.REQUIRED_CASES)
+    assert report.biological_validation is False
+
+
 def test_pipeline_attaches_rbc_result():
     pytest.importorskip("cv2")
     n, size = 9, 64

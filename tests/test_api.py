@@ -310,15 +310,26 @@ def test_upload_analyze_stack_with_mesh(client):
     codes = {w["code"] for w in payload["warnings"]}
     assert "slice_volume_stack_boundary" in codes
     assert "sparse_z_sampling" in codes
-    assert payload["summary"]["metrics"]["area_um2"]["mean"] > 0
     assert payload["frame_count"] == 3
     assert payload["valid_frame_count"] == 3
     assert payload["rows"][0]["area_um2"] > 0
     assert payload["rows"][0]["equivalent_diameter_um"] > 0
-    assert payload["mesh"]["surface_area_um2"] > 0
-    assert payload["mesh"]["volume_um3"] > 0
-    assert payload["mesh"]["equivalent_sphere_diameter_um"] > 0
-    assert payload["mesh"]["sphericity"] > 0
+    # Short stacks touch Z caps → 3D mesh withheld; envelope carries capability.
+    assert payload["rbc"] is not None
+    assert payload["rbc"]["capability"] in {
+        "PIXEL_PREVIEW",
+        "2D_OUTER_CONTOUR",
+        "3D_OCCUPANCY_VALIDATED",
+    }
+    if payload["rbc"]["capability"] == "3D_OCCUPANCY_VALIDATED":
+        assert payload["mesh"] is not None
+        assert payload["mesh"]["surface_area_um2"] > 0
+        assert payload["mesh"]["volume_um3"] > 0
+    else:
+        assert payload["mesh"] is None
+        assert payload["rbc"].get("measured") is None or payload["rbc"]["measured"].get(
+            "volume_um3"
+        ) is None
 
 
 def test_upload_batch_analyze_returns_summary_rows(client):
@@ -418,6 +429,48 @@ def test_api_refuses_uncalibrated_lsm_rbc_analysis(client, tmp_path, monkeypatch
     detail = response.json()["detail"]
     assert detail["code"] == "lsm_requires_conversion_or_manual_calibration"
     assert "mesh" not in response.json()
+
+
+def test_api_rbc_estimate_unavailable_until_registered(client):
+    response = client.post("/rbc/estimate", json={})
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["code"] == "rbc_estimator_not_validated"
+
+
+def test_api_rbc_analyze_includes_envelope(client, tmp_path):
+    tifffile = pytest.importorskip("tifffile")
+    path = tmp_path / "rbc.tif"
+    n, size = 9, 48
+    stack = np.zeros((n, size, size), dtype=np.uint8)
+    yy, xx = np.ogrid[:size, :size]
+    disk = (yy - size // 2) ** 2 + (xx - size // 2) ** 2 <= 12**2
+    for z in range(1, n - 1):
+        stack[z][disk] = 210
+    tifffile.imwrite(path, stack, photometric="minisblack")
+    response = client.post(
+        "/analyze",
+        json={
+            "path": str(path),
+            "threshold": 100,
+            "profile": "rbc",
+            "voxel": {"x_um": 0.1, "y_um": 0.1, "z_um": 0.2},
+            "prefer_opencv": False,
+            "include_mesh": True,
+            "object_seed": {"x": 24.0, "y": 24.0, "frame_index": 4, "radius": 16.0},
+        },
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert "rbc" in payload and payload["rbc"] is not None
+    assert payload["rbc"]["authority"] in {"MEASURED", "WITHHELD"}
+    assert "qc_issues" in payload["rbc"]
+    assert payload["manifest"]["rbc"]["capability"] == payload["rbc"]["capability"]
+    # No unlabeled estimated block in production.
+    assert payload["rbc"]["estimated"] is None
+    measured = payload["rbc"].get("measured")
+    if measured is None or measured.get("volume_um3") is None:
+        assert payload["mesh"] is None
 
 
 def test_upload_validate_csv_passes_matching_metrics(client):

@@ -897,6 +897,75 @@ legend {
   color: #657089;
 }
 
+/* RBC capability / authority product states (Phase 4) */
+.rbc-result-panel {
+  margin-top: 0.65rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--border, #2a3340);
+  border-radius: 6px;
+  background: rgba(20, 28, 36, 0.45);
+}
+.rbc-badge {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 0.15rem 0.45rem;
+  border-radius: 3px;
+  margin-right: 0.4rem;
+  vertical-align: middle;
+}
+.rbc-badge-measured {
+  background: #1f4d36;
+  color: #b8f0ce;
+}
+.rbc-badge-estimated {
+  background: #5c4210;
+  color: #ffd789;
+  border: 1px dashed #d4a017;
+}
+.rbc-badge-withheld {
+  background: #3a2222;
+  color: #f0b8b8;
+}
+.rbc-capability {
+  font-size: 0.85rem;
+  opacity: 0.9;
+}
+.rbc-qc-issues {
+  margin-top: 0.35rem;
+  font-size: 0.85rem;
+  color: #e0b080;
+}
+.rbc-measured {
+  margin-top: 0.4rem;
+  font-size: 0.9rem;
+}
+.rbc-withheld {
+  margin-top: 0.4rem;
+  font-size: 0.9rem;
+  color: #d0a0a0;
+}
+.rbc-estimate-panel {
+  margin-top: 0.55rem;
+  padding-top: 0.45rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+.rbc-disclaimer {
+  margin: 0 0 0.45rem;
+  font-size: 0.82rem;
+  color: #c8c0a8;
+  line-height: 1.35;
+}
+.rbc-estimated-layer {
+  margin-top: 0.45rem;
+  padding: 0.4rem 0.5rem;
+  border: 1px dashed #d4a017;
+  border-radius: 4px;
+  background: rgba(92, 66, 16, 0.25);
+  font-size: 0.88rem;
+}
+
 .warning-list {
   display: grid;
   gap: 6px;

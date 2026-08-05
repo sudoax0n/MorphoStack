@@ -70,7 +70,14 @@ from morphostack.core.preview import (
     with_global_frame_index,
 )
 from morphostack.core.segmentation import apply_rect_roi, apply_z_range
+from morphostack.core.rbc_estimation import (
+    RbcEstimateRequest,
+    RbcEstimatorUnavailable,
+    get_production_estimator,
+    request_rbc_estimate,
+)
 from morphostack.core.rbc_models import RbcInputRefused
+from morphostack.core.rbc_serialize import rbc_envelope_payload
 
 
 _PREVIEW_IMAGE_MAX_ENTRIES = 32
@@ -92,6 +99,8 @@ def _rbc_context_kwargs(stack: ImageStack) -> dict[str, object]:
 def _http_for_exception(exc: Exception) -> HTTPException:
     if isinstance(exc, RbcInputRefused):
         return HTTPException(status_code=422, detail=exc.decision.to_dict())
+    if isinstance(exc, RbcEstimatorUnavailable):
+        return HTTPException(status_code=409, detail=exc.detail)
     return HTTPException(status_code=400, detail=str(exc))
 
 # Display-plane VolumeSource for provisional path-based previews (packet 10).
@@ -990,6 +999,12 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
                 "equivalent_sphere_diameter_um": analysis.mesh.equivalent_sphere_diameter_um,
                 "sphericity": analysis.mesh.sphericity,
             }
+        rbc = rbc_envelope_payload(analysis, calibration=stack.calibration)
+        # Never expose legacy mesh as measured when RBC withheld 3D.
+        if rbc is not None:
+            measured = rbc.get("measured") if isinstance(rbc, dict) else None
+            if not (isinstance(measured, dict) and measured.get("volume_um3") is not None):
+                mesh = None
         return {
             "source_path": str(stack.source_path),
             "profile": analysis.profile,
@@ -1004,6 +1019,7 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
             "warnings": analysis_run_warnings(analysis, voxel_source=stack.voxel_source),
             "object_seed": object_seed_payload(analyze_seed),
             "tracking": tracking_diagnostics_payload(analysis.tracking),
+            "rbc": rbc,
             "manifest": analysis_manifest(
                 analysis,
                 source_path=str(stack.source_path),
@@ -1015,6 +1031,7 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
                 prefer_opencv=request.prefer_opencv,
                 voxel_source=stack.voxel_source,
                 object_seed=analyze_seed,
+                calibration=stack.calibration,
             ),
             "rows": analysis_rows(analysis),
         }
@@ -1675,6 +1692,23 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
             "excluded_frames": sorted(analysis.excluded_frames),
         }
 
+    @app.post("/rbc/estimate")
+    def rbc_estimate(request: dict[str, object] | None = None) -> dict[str, object]:
+        """Estimated RBC model endpoint (unavailable until Phase 5 registers a provider)."""
+
+        _ = request  # payload reserved for Phase 5; production has no estimator
+        try:
+            output = request_rbc_estimate(
+                RbcEstimateRequest(
+                    projected_metrics=None,
+                    calibration=None,
+                ),
+                provider=get_production_estimator(),
+            )
+        except RbcEstimatorUnavailable as exc:
+            raise _http_for_exception(exc) from exc
+        return {"estimated": output.to_dict()}
+
     @app.post("/sweep")
     def sweep(request: SweepRequest) -> dict[str, object]:
         try:
@@ -1903,6 +1937,11 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
                 "equivalent_sphere_diameter_um": analysis.mesh.equivalent_sphere_diameter_um,
                 "sphericity": analysis.mesh.sphericity,
             }
+        rbc = rbc_envelope_payload(analysis, calibration=stack.calibration)
+        if rbc is not None:
+            measured = rbc.get("measured") if isinstance(rbc, dict) else None
+            if not (isinstance(measured, dict) and measured.get("volume_um3") is not None):
+                mesh = None
         return {
             "source_path": file.filename or str(temp_path.name),
             "profile": analysis.profile,
@@ -1915,6 +1954,7 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
             "slice_volume": slice_volume_payload(analysis),
             "summary": analysis_summary(analysis),
             "warnings": analysis_run_warnings(analysis, voxel_source=stack.voxel_source),
+            "rbc": rbc,
             "manifest": analysis_manifest(
                 analysis,
                 source_path=file.filename or str(temp_path.name),
@@ -1925,6 +1965,7 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
                 include_mesh=include_mesh,
                 prefer_opencv=prefer_opencv,
                 voxel_source=stack.voxel_source,
+                calibration=stack.calibration,
             ),
             "rows": analysis_rows(analysis),
         }

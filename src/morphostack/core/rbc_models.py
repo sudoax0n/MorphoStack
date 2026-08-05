@@ -344,6 +344,9 @@ class RbcQcResult:
         }
 
 
+RBC_METRIC_DEFINITION_VERSION = "rbc_metrics_v1"
+
+
 @dataclass(frozen=True)
 class RbcAnalysisResult:
     """Capability-scoped RBC morphometry attached to a stack analysis."""
@@ -382,3 +385,136 @@ class RbcAnalysisResult:
             "method_versions": dict(self.method_versions),
             "mesh_qc": self.mesh_qc.to_dict() if self.mesh_qc is not None else None,
         }
+
+
+@dataclass(frozen=True)
+class RbcMeasuredOutput:
+    """Measured fields only — never mixed with estimated model output."""
+
+    projected_metrics: RbcProjectedMetrics | None = None
+    volume_um3: float | None = None
+    surface_area_um2: float | None = None
+    voxel_volume_um3: float | None = None
+    mesh_volume_um3: float | None = None
+    volume_relative_disagreement: float | None = None
+    dimple_thickness_um: float | None = None
+    rim_thickness_um: float | None = None
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "projected_metrics": (
+                self.projected_metrics.to_dict() if self.projected_metrics is not None else None
+            ),
+            "volume_um3": self.volume_um3,
+            "surface_area_um2": self.surface_area_um2,
+            "voxel_volume_um3": self.voxel_volume_um3,
+            "mesh_volume_um3": self.mesh_volume_um3,
+            "volume_relative_disagreement": self.volume_relative_disagreement,
+            "dimple_thickness_um": self.dimple_thickness_um,
+            "rim_thickness_um": self.rim_thickness_um,
+        }
+
+
+@dataclass(frozen=True)
+class RbcEstimatedOutput:
+    """Estimated geometry/metrics — always ESTIMATED authority, never measured."""
+
+    authority: RbcAuthority
+    model_id: str
+    model_version: str
+    assumptions: tuple[str, ...]
+    confidence_note: str
+    volume_um3: float | None = None
+    surface_area_um2: float | None = None
+    geometry_role: str = "estimated_display_only"
+
+    def __post_init__(self) -> None:
+        if self.authority is not RbcAuthority.ESTIMATED:
+            raise ValueError("RbcEstimatedOutput.authority must be ESTIMATED")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "authority": self.authority.value,
+            "model_id": self.model_id,
+            "model_version": self.model_version,
+            "assumptions": list(self.assumptions),
+            "confidence_note": self.confidence_note,
+            "volume_um3": self.volume_um3,
+            "surface_area_um2": self.surface_area_um2,
+            "geometry_role": self.geometry_role,
+        }
+
+
+@dataclass(frozen=True)
+class RbcResultEnvelope:
+    """Serialized RBC product envelope shared by API, export, CLI, and UI.
+
+    Adapters may rename fields for JSON conventions but must not recalculate
+    capability, authority, or QC permission.
+    """
+
+    authority: RbcAuthority
+    capability: RbcCapability
+    engineering_qc: EngineeringQcStatus
+    qc_issues: tuple[str, ...]
+    calibration: CalibrationAssessment | None
+    measured: RbcMeasuredOutput | None
+    estimated: RbcEstimatedOutput | None = None
+    metric_definition_version: str = RBC_METRIC_DEFINITION_VERSION
+    method_versions: dict[str, str] = field(default_factory=dict)
+    mesh_qc: RbcMeshQc | None = None
+    notes: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "authority": self.authority.value,
+            "capability": self.capability.value,
+            "engineering_qc": self.engineering_qc.value,
+            "qc_issues": list(self.qc_issues),
+            "calibration": self.calibration.to_dict() if self.calibration is not None else None,
+            "measured": self.measured.to_dict() if self.measured is not None else None,
+            "estimated": self.estimated.to_dict() if self.estimated is not None else None,
+            "metric_definition_version": self.metric_definition_version,
+            "method_versions": dict(self.method_versions),
+            "mesh_qc": self.mesh_qc.to_dict() if self.mesh_qc is not None else None,
+            "notes": list(self.notes),
+        }
+
+
+def envelope_from_analysis_result(
+    result: RbcAnalysisResult,
+    *,
+    calibration: CalibrationAssessment | None = None,
+    estimated: RbcEstimatedOutput | None = None,
+) -> RbcResultEnvelope:
+    """Build the product envelope from a core ``RbcAnalysisResult`` (no re-gating)."""
+
+    has_measured_fields = (
+        result.projected_metrics is not None
+        or result.volume_um3 is not None
+        or result.surface_area_um2 is not None
+    )
+    measured = None
+    if has_measured_fields and result.authority is not RbcAuthority.WITHHELD:
+        measured = RbcMeasuredOutput(
+            projected_metrics=result.projected_metrics,
+            volume_um3=result.volume_um3,
+            surface_area_um2=result.surface_area_um2,
+            voxel_volume_um3=result.voxel_volume_um3,
+            mesh_volume_um3=result.mesh_volume_um3,
+            volume_relative_disagreement=result.volume_relative_disagreement,
+            dimple_thickness_um=result.dimple_thickness_um,
+            rim_thickness_um=result.rim_thickness_um,
+        )
+    # PIXEL_PREVIEW with only withheld 3D still exposes empty measured=None.
+    return RbcResultEnvelope(
+        authority=result.authority,
+        capability=result.capability,
+        engineering_qc=result.engineering_qc,
+        qc_issues=tuple(result.issues),
+        calibration=calibration,
+        measured=measured,
+        estimated=estimated,
+        method_versions=dict(result.method_versions),
+        mesh_qc=result.mesh_qc,
+    )

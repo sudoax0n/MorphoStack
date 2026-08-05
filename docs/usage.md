@@ -13,7 +13,7 @@ The UI **Mode** selector maps to CLI `--profile` names. MorphoStack always analy
 | UI label | CLI `--profile` | What it does | Use for |
 | --- | --- | --- | --- |
 | **Standard — GUVs / vesicles** | `vesicle` | **With Select Object:** seeded lumen/outside segmentation (random walker) + Z centroid propagation (research-backed). **Without seed:** threshold + largest component. Optional skeleton. | Default for single or multi-vesicle stacks |
-| **Red blood cells (RBC)** | `rbc` | Same contour engine as Standard; RBC-oriented defaults | RBC / erythrocyte stacks |
+| **Red blood cells (RBC)** | `rbc` | One seed + verified X/Y/Z; capability-scoped metrics (MEASURED / WITHHELD); estimated model not production | Single-cell RBC stacks |
 | **Experimental — slow 3D refine** | `active_surfaces` | Seeded surfel optimization → mask → contour → metrics / mesh | Only when Standard cannot lock a weak or leaky membrane |
 
 ### Single vesicle vs multi-vesicle (which mode?)
@@ -165,7 +165,7 @@ morphostack validate ref_batch.csv new_batch.csv --key-column source_path --all-
 
 Be explicit about RBC:
 
-> The RBC profile currently shares the vesicle threshold-contour engine. Domain-specific RBC metrics still need lab validation.
+> The RBC profile uses topology-preserving occupancy and a capability ladder (pixel preview → calibrated 2D → validated 3D occupancy). Estimated biconcavity models are not production-validated; biological accuracy still needs lab evidence (Phase 5).
 
 Be explicit about default voxels:
 

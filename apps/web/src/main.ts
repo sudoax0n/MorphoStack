@@ -153,6 +153,48 @@ type TrackingRecord = {
   method?: string | null;
 };
 
+type RbcMeasuredOutput = {
+  projected_metrics?: {
+    area_um2: number;
+    major_axis_um: number;
+    minor_axis_um: number;
+    aspect_ratio_L_over_W: number;
+    static_elongation_index: number;
+    circularity: number;
+    solidity: number;
+    equivalent_diameter_um: number;
+  } | null;
+  volume_um3?: number | null;
+  surface_area_um2?: number | null;
+  voxel_volume_um3?: number | null;
+  mesh_volume_um3?: number | null;
+  dimple_thickness_um?: number | null;
+  rim_thickness_um?: number | null;
+};
+
+type RbcEstimatedOutput = {
+  authority: "ESTIMATED";
+  model_id: string;
+  model_version: string;
+  assumptions: string[];
+  confidence_note: string;
+  volume_um3?: number | null;
+  surface_area_um2?: number | null;
+  geometry_role?: string;
+};
+
+type RbcResultEnvelope = {
+  authority: "MEASURED" | "ESTIMATED" | "WITHHELD";
+  capability: string;
+  engineering_qc: string;
+  qc_issues: string[];
+  measured: RbcMeasuredOutput | null;
+  estimated: RbcEstimatedOutput | null;
+  metric_definition_version: string;
+  method_versions?: Record<string, string>;
+  notes?: string[];
+};
+
 type AnalyzeResponse = {
   source_path: string;
   profile: AnalysisProfile;
@@ -187,6 +229,7 @@ type AnalyzeResponse = {
   warnings: AnalysisWarning[];
   manifest: Record<string, unknown>;
   rows: AnalysisRow[];
+  rbc?: RbcResultEnvelope | null;
 };
 
 type MetricSummary = {
@@ -4009,23 +4052,30 @@ function renderAnalysis(payload: AnalyzeResponse): void {
   downloadReportButton.disabled = false;
   downloadManifestButton.disabled = false;
   reanalyzeExcludedButton.disabled = payload.rows.length === 0;
-  const meshText = payload.mesh
-    ? `<br />3D mesh surface area: ${formatNumber(payload.mesh.surface_area_um2)} um2, mesh volume: ${formatNumber(payload.mesh.volume_um3)} um3, sphericity: ${formatNumber(payload.mesh.sphericity)}`
-    : "";
-  const sliceVolumeText = payload.slice_volume
-    ? payload.slice_volume.volume_um3 === null
-      ? `<br />Slice-integrated volume: withheld because contour coverage is incomplete.`
-      : `<br />Slice-integrated volume (trapezoidal): ${formatNumber(payload.slice_volume.volume_um3)} um3${
-          payload.slice_volume.relative_difference_from_mesh === null
-            ? ""
-            : `, mesh difference ${formatNumber(payload.slice_volume.relative_difference_from_mesh * 100)}%`
-        }`
-    : "";
+  const rbcText = renderRbcEnvelope(payload.rbc ?? null);
+  const meshText =
+    payload.profile === "rbc"
+      ? "" // mesh numbers only via capability-scoped rbc envelope
+      : payload.mesh
+        ? `<br />3D mesh surface area: ${formatNumber(payload.mesh.surface_area_um2)} um2, mesh volume: ${formatNumber(payload.mesh.volume_um3)} um3, sphericity: ${formatNumber(payload.mesh.sphericity)}`
+        : "";
+  const sliceVolumeText =
+    payload.profile === "rbc"
+      ? ""
+      : payload.slice_volume
+        ? payload.slice_volume.volume_um3 === null
+          ? `<br />Slice-integrated volume: withheld because contour coverage is incomplete.`
+          : `<br />Slice-integrated volume (trapezoidal): ${formatNumber(payload.slice_volume.volume_um3)} um3${
+              payload.slice_volume.relative_difference_from_mesh === null
+                ? ""
+                : `, mesh difference ${formatNumber(payload.slice_volume.relative_difference_from_mesh * 100)}%`
+            }`
+        : "";
   const warningText =
     payload.warnings.length > 0
       ? `<div class="warning-list">${payload.warnings.map((warning) => `<div><strong>${escapeHtml(warning.severity)}</strong>: ${escapeHtml(warning.message)}</div>`).join("")}</div>`
       : "";
-  const summaryText = renderSummaryMetrics(payload.summary);
+  const summaryText = payload.profile === "rbc" ? "" : renderSummaryMetrics(payload.summary);
   analysisSummary.innerHTML = `
     <strong>${escapeHtml(payload.source_path)}</strong><br />
     Profile: ${escapeHtml(payload.profile)}<br />
@@ -4034,7 +4084,7 @@ function renderAnalysis(payload: AnalyzeResponse): void {
         ? `, excluded: ${payload.excluded_frames.join(", ")}`
         : ""
     }<br />
-    ${voxelSourceMarkup(payload.voxel_source)}${summaryText}${meshText}${sliceVolumeText}
+    ${voxelSourceMarkup(payload.voxel_source)}${rbcText}${summaryText}${meshText}${sliceVolumeText}
     ${warningText}
   `;
   applyVoxelDefaultStyling(payload.voxel_source);
@@ -5783,7 +5833,8 @@ function updateProfileHelp(): void {
       help.textContent =
         "Standard: select one object, set threshold, then Analyze or View 3D Mesh.";
     } else if (profile === "rbc") {
-      help.textContent = "RBC: same pipeline with red-blood-cell oriented defaults.";
+      help.textContent =
+        "RBC: one selected cell, verified X/Y/Z calibration required. Capability badges show MEASURED / ESTIMATED / WITHHELD. 3D volume only when QC validates occupancy. Estimated model unavailable until lab validation.";
     } else {
       help.textContent =
         "Experimental 3D surface refinement. Slower; use only if Standard cannot lock the membrane. Requires Select Object.";
@@ -5792,6 +5843,75 @@ function updateProfileHelp(): void {
   if (warn instanceof HTMLElement) {
     warn.hidden = profile !== "active_surfaces";
   }
+}
+
+function renderRbcEnvelope(rbc: RbcResultEnvelope | null | undefined): string {
+  if (!rbc) {
+    return "";
+  }
+  const badgeClass =
+    rbc.authority === "MEASURED"
+      ? "rbc-badge rbc-badge-measured"
+      : rbc.authority === "ESTIMATED"
+        ? "rbc-badge rbc-badge-estimated"
+        : "rbc-badge rbc-badge-withheld";
+  const issues =
+    rbc.qc_issues && rbc.qc_issues.length > 0
+      ? `<div class="rbc-qc-issues">QC: ${rbc.qc_issues.map((i) => escapeHtml(i)).join(", ")}</div>`
+      : "";
+  let measuredBlock = "";
+  if (rbc.measured) {
+    const p = rbc.measured.projected_metrics;
+    const parts: string[] = [];
+    if (p) {
+      parts.push(
+        `projected major/minor ${formatNumber(p.major_axis_um)} / ${formatNumber(p.minor_axis_um)} µm`,
+        `aspect L/W ${formatNumber(p.aspect_ratio_L_over_W)}`,
+        `static elongation ${formatNumber(p.static_elongation_index)}`
+      );
+    }
+    if (rbc.measured.volume_um3 != null) {
+      parts.push(`volume ${formatNumber(rbc.measured.volume_um3)} µm³ (MEASURED)`);
+    }
+    if (rbc.measured.surface_area_um2 != null) {
+      parts.push(`surface area ${formatNumber(rbc.measured.surface_area_um2)} µm²`);
+    }
+    if (parts.length > 0) {
+      measuredBlock = `<div class="rbc-measured">${parts.map((t) => escapeHtml(t)).join("; ")}</div>`;
+    }
+  } else if (rbc.authority === "WITHHELD" || rbc.capability === "PIXEL_PREVIEW") {
+    measuredBlock =
+      `<div class="rbc-withheld">Physical metrics cannot be measured from this stack at the assigned capability. ` +
+      `Fix calibration, seed, or completeness — or wait for a validated estimated model.</div>`;
+  }
+  // Disclaimer always precedes any estimate action (Phase 4: estimate unavailable).
+  const estimateBlock = `
+    <div class="rbc-estimate-panel">
+      <p class="rbc-disclaimer">Estimated biconcavity models are not validated for production use. ` +
+    `An estimated layer appears only after you explicitly request it, and never overwrites MEASURED values.</p>
+      <button type="button" class="secondary" id="rbc-show-estimate" disabled title="Estimator not validated (Phase 5)">
+        Show estimated model (unavailable)
+      </button>
+    </div>`;
+  let estimatedLayer = "";
+  if (rbc.estimated) {
+    estimatedLayer =
+      `<div class="rbc-estimated-layer"><span class="rbc-badge rbc-badge-estimated">ESTIMATED</span> ` +
+      `model ${escapeHtml(rbc.estimated.model_id)} ${escapeHtml(rbc.estimated.model_version)}` +
+      (rbc.estimated.volume_um3 != null
+        ? ` · volume ${formatNumber(rbc.estimated.volume_um3)} µm³`
+        : "") +
+      `</div>`;
+  }
+  return `
+    <div class="rbc-result-panel">
+      <span class="${badgeClass}">${escapeHtml(rbc.authority)}</span>
+      <span class="rbc-capability">capability ${escapeHtml(rbc.capability)}</span>
+      ${issues}
+      ${measuredBlock}
+      ${estimateBlock}
+      ${estimatedLayer}
+    </div>`;
 }
 
 function readRoi(): RectRoi | null {

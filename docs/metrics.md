@@ -84,7 +84,7 @@ Excluded frames:
 | Profile | Metrics engine | Caveat |
 | --- | --- | --- |
 | `vesicle` (UI: **Standard**) | Threshold contours + optional seed tracking + optional skeleton | Default for single **and** multi-vesicle (seed the target) |
-| `rbc` (UI: **RBC**) | Same contour engine | No validated biconcavity/thickness suite yet |
+| `rbc` (UI: **RBC**) | Topology occupancy + capability QC | Projected L/W & static elongation; volume only under `3D_OCCUPANCY_VALIDATED`. Dimple/rim thickness withheld. |
 | `active_surfaces` (UI: **Experimental**) | Surfel refinement → masks → same metric layer | Slow single-object fallback; not multi-label |
 
 ## Related

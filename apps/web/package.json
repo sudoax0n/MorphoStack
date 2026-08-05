@@ -7,7 +7,7 @@
     "dev": "vite --host 127.0.0.1",
     "build": "tsc && vite build",
     "preview": "vite preview --host 127.0.0.1",
-    "test": "node tests/previewQueue.test.mjs && node tests/previewBusyLifecycle.test.mjs && node tests/volumeViewer.test.mjs && node tests/seedMapping.test.mjs && node tests/meshPreview.test.mjs && node tests/previewCoords.test.mjs && node tests/competitiveTrackingUi.test.mjs && node tests/theatreMode.test.mjs && node tests/multiscaleConsensusUi.test.mjs && node tests/workflowStepper.test.mjs && node tests/kimiAuditUi.test.mjs"
+    "test": "node tests/previewQueue.test.mjs && node tests/previewBusyLifecycle.test.mjs && node tests/volumeViewer.test.mjs && node tests/seedMapping.test.mjs && node tests/meshPreview.test.mjs && node tests/previewCoords.test.mjs && node tests/competitiveTrackingUi.test.mjs && node tests/theatreMode.test.mjs && node tests/multiscaleConsensusUi.test.mjs && node tests/workflowStepper.test.mjs && node tests/kimiAuditUi.test.mjs && node tests/rbcResultStates.test.mjs"
   },
   "devDependencies": {
     "typescript": "^5.9.3",
