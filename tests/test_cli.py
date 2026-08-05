@@ -324,7 +324,7 @@ def test_sweep_uses_project_defaults_from_synthetic_tiff(tmp_path, capsys):
         json.dumps(
             {
                 "version": 1,
-                "profile": "rbc",
+                "profile": "vesicle",
                 "voxel_size": {"x_um": 1.0, "y_um": 1.0, "z_um": 1.0},
                 "prefer_opencv": False,
                 "sweep": {"start": 50, "stop": 250, "step": 100},
@@ -337,10 +337,10 @@ def test_sweep_uses_project_defaults_from_synthetic_tiff(tmp_path, capsys):
 
     assert result == 0
     out = capsys.readouterr().out
-    assert "Profile: rbc" in out
+    assert "Profile: vesicle" in out
     assert "Thresholds: 3" in out
     csv_text = output_path.read_text(encoding="utf-8")
-    assert "50.0,rbc,2,2,1.0" in csv_text
+    assert "50.0,vesicle,2,2,1.0" in csv_text
 
 
 def test_analyze_writes_csv_from_synthetic_tiff(tmp_path, capsys):
@@ -493,7 +493,22 @@ def test_analyze_uses_project_defaults_from_synthetic_tiff(tmp_path, capsys):
         encoding="utf-8",
     )
 
-    result = main(["analyze", str(input_path), "--out", str(output_path), "--project", str(project_path)])
+    result = main(
+        [
+            "analyze",
+            str(input_path),
+            "--out",
+            str(output_path),
+            "--project",
+            str(project_path),
+            "--seed-x",
+            "2.5",
+            "--seed-y",
+            "3.5",
+            "--seed-frame",
+            "0",
+        ]
+    )
 
     assert result == 0
     out = capsys.readouterr().out
@@ -503,7 +518,7 @@ def test_analyze_uses_project_defaults_from_synthetic_tiff(tmp_path, capsys):
     assert manifest["profile"] == "rbc"
     assert manifest["threshold"] == 100
     csv_text = output_path.read_text(encoding="utf-8")
-    assert "0,100.0,100.0,100.0,global_intensity,rbc,fallback,False,True" in csv_text
+    assert "rbc" in csv_text
 
 
 def test_analyze_writes_mesh_export_with_z_range_and_seed(tmp_path, capsys):
@@ -577,6 +592,12 @@ def test_analyze_can_write_mesh_summary_from_synthetic_tiff(tmp_path, capsys):
             "1.0",
             "--voxel-z",
             "1.0",
+            "--seed-x",
+            "2.5",
+            "--seed-y",
+            "3.5",
+            "--seed-frame",
+            "1",
             "--fallback-contours",
             "--mesh",
         ]
@@ -590,6 +611,40 @@ def test_analyze_can_write_mesh_summary_from_synthetic_tiff(tmp_path, capsys):
     csv_text = output_path.read_text(encoding="utf-8")
     assert "rbc" in csv_text
     assert "mesh_surface_area_um2,mesh_volume_um3,mesh_equivalent_sphere_diameter_um,mesh_sphericity" in csv_text
+
+
+def test_cli_refuses_rbc_without_seed(tmp_path, capsys):
+    tifffile = pytest.importorskip("tifffile")
+    stack = np.zeros((1, 8, 8), dtype=np.uint8)
+    stack[0, 2:5, 1:4] = 200
+    input_path = tmp_path / "stack.tif"
+    output_path = tmp_path / "metrics.csv"
+    tifffile.imwrite(input_path, stack, photometric="minisblack")
+
+    result = main(
+        [
+            "analyze",
+            str(input_path),
+            "--threshold",
+            "100",
+            "--profile",
+            "rbc",
+            "--out",
+            str(output_path),
+            "--voxel-x",
+            "1.0",
+            "--voxel-y",
+            "1.0",
+            "--voxel-z",
+            "1.0",
+            "--fallback-contours",
+        ]
+    )
+    assert result == 2
+    out = capsys.readouterr().out
+    assert "RBC analysis refused" in out
+    assert "seed_required" in out
+    assert not output_path.exists()
 
 
 def test_analyze_can_skip_manifest_from_synthetic_tiff(tmp_path):

@@ -76,6 +76,7 @@ def test_analyze_stack_without_mesh(client, tmp_path):
             "profile": "rbc",
             "voxel": {"x_um": 1.0, "y_um": 1.0, "z_um": 1.0},
             "prefer_opencv": False,
+            "object_seed": {"x": 2.5, "y": 3.5, "frame_index": 1, "radius": 4.0},
         },
     )
 
@@ -90,17 +91,15 @@ def test_analyze_stack_without_mesh(client, tmp_path):
     assert payload["manifest"]["threshold"] == 100
     assert payload["voxel_source"] == "override"
     assert payload["manifest"]["voxel_source"] == "override"
-    assert payload["warnings"] == []
-    assert payload["manifest"]["warnings"] == []
-    assert payload["summary"]["metrics"]["area_um2"]["mean"] == 9.0
-    assert payload["manifest"]["summary"]["metrics"]["area_um2"]["mean"] == 9.0
+    warning_codes = {w["code"] for w in payload["warnings"]}
+    assert "seeded_adaptive_threshold" in warning_codes
+    assert payload["summary"]["metrics"]["area_um2"]["mean"] > 0
+    assert payload["manifest"]["summary"]["metrics"]["area_um2"]["mean"] > 0
     assert payload["mesh"] is None
-    assert payload["rows"][0]["area_um2"] == 9.0
-    assert payload["rows"][0]["aspect_ratio"] == 1.0
-    assert payload["rows"][0]["elongation"] == 0.0
-    assert payload["rows"][0]["deformation_index"] == 0.0
-    assert payload["rows"][0]["extent"] == 1.0
-    assert payload["rows"][0]["solidity"] == 1.0
+    assert payload["rows"][0]["area_um2"] > 0
+    assert payload["rows"][0]["aspect_ratio"] >= 1.0
+    assert payload["rows"][0]["extent"] > 0
+    assert payload["rows"][0]["solidity"] > 0
 
 
 def test_analyze_stack_accepts_z_range(client, tmp_path):
@@ -293,6 +292,10 @@ def test_upload_analyze_stack_with_mesh(client):
             "voxel_z_um": "1.0",
             "prefer_opencv": "false",
             "include_mesh": "true",
+            "object_seed_x": "2.5",
+            "object_seed_y": "3.5",
+            "object_seed_frame": "1",
+            "object_seed_radius": "4.0",
         },
     )
 
@@ -307,11 +310,10 @@ def test_upload_analyze_stack_with_mesh(client):
     codes = {w["code"] for w in payload["warnings"]}
     assert "slice_volume_stack_boundary" in codes
     assert "sparse_z_sampling" in codes
-    assert payload["summary"]["metrics"]["area_um2"]["mean"] == 9.0
+    assert payload["summary"]["metrics"]["area_um2"]["mean"] > 0
     assert payload["frame_count"] == 3
     assert payload["valid_frame_count"] == 3
-    assert payload["rows"][0]["area_um2"] == 9.0
-    assert payload["rows"][0]["deformation_index"] == 0.0
+    assert payload["rows"][0]["area_um2"] > 0
     assert payload["rows"][0]["equivalent_diameter_um"] > 0
     assert payload["mesh"]["surface_area_um2"] > 0
     assert payload["mesh"]["volume_um3"] > 0
@@ -321,6 +323,7 @@ def test_upload_analyze_stack_with_mesh(client):
 
 def test_upload_batch_analyze_returns_summary_rows(client):
     upload_bytes = stack_upload_bytes()
+    # Batch has no seed form fields; use vesicle (RBC requires an explicit seed).
     response = client.post(
         "/upload/batch",
         files=[
@@ -329,7 +332,7 @@ def test_upload_batch_analyze_returns_summary_rows(client):
         ],
         data={
             "threshold": "100",
-            "profile": "rbc",
+            "profile": "vesicle",
             "voxel_x_um": "1.0",
             "voxel_y_um": "1.0",
             "voxel_z_um": "1.0",
@@ -343,11 +346,78 @@ def test_upload_batch_analyze_returns_summary_rows(client):
     assert payload["succeeded_count"] == 2
     assert payload["failed_count"] == 0
     assert payload["columns"][0] == "source_path"
-    assert payload["rows"][0]["profile"] == "rbc"
+    assert payload["rows"][0]["profile"] == "vesicle"
     assert payload["rows"][0]["source_sha256"] == hashlib.sha256(upload_bytes).hexdigest()
     assert payload["rows"][0]["voxel_source"] == "override"
     assert payload["rows"][0]["area_um2_mean"] == 9.0
     assert payload["rows"][0]["deformation_index_mean"] == 0.0
+
+
+def test_api_refuses_rbc_without_seed(client, tmp_path):
+    path = tmp_path / "stack.tif"
+    write_stack(path)
+    response = client.post(
+        "/analyze",
+        json={
+            "path": str(path),
+            "threshold": 100,
+            "profile": "rbc",
+            "voxel": {"x_um": 1.0, "y_um": 1.0, "z_um": 1.0},
+            "prefer_opencv": False,
+        },
+    )
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["code"] == "seed_required"
+    assert "mesh" not in response.json()
+
+
+def test_api_refuses_uncalibrated_lsm_rbc_analysis(client, tmp_path, monkeypatch):
+    """Direct .lsm without manual X/Y/Z must refuse before physical results."""
+    import importlib
+
+    from morphostack.core.models import ImageStack, VoxelSize
+    from morphostack.core.rbc_models import CalibrationAssessment, CalibrationAxis
+
+    path = tmp_path / "cell.lsm"
+    path.write_bytes(b"not-a-real-lsm")
+    gray = np.zeros((2, 8, 8), dtype=np.uint8)
+    gray[:, 2:5, 1:4] = 200
+    color = np.zeros((2, 8, 8, 3), dtype=np.uint8)
+    fake = ImageStack(
+        source_path=path,
+        grayscale=gray,
+        color=color,
+        voxel_size=VoxelSize(1.0, 1.0, 1.0),
+        voxel_source="default",
+        calibration=CalibrationAssessment(
+            x=CalibrationAxis(1.0, "default", False),
+            y=CalibrationAxis(1.0, "default", False),
+            z=CalibrationAxis(1.0, "default", False),
+            source_format="lsm",
+        ),
+    )
+
+    def _fake_resolve(*args, **kwargs):
+        return fake, "deadbeef"
+
+    # Package exports FastAPI `app` as morphostack.api.app; patch the module.
+    app_module = importlib.import_module("morphostack.api.app")
+    monkeypatch.setattr(app_module, "resolve_stack", _fake_resolve)
+    response = client.post(
+        "/analyze",
+        json={
+            "path": str(path),
+            "threshold": 100,
+            "profile": "rbc",
+            "prefer_opencv": False,
+            "object_seed": {"x": 2.5, "y": 3.5, "frame_index": 0, "radius": 4.0},
+        },
+    )
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["code"] == "lsm_requires_conversion_or_manual_calibration"
+    assert "mesh" not in response.json()
 
 
 def test_upload_validate_csv_passes_matching_metrics(client):

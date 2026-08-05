@@ -32,15 +32,23 @@ def test_load_image_stack_rejects_unsupported_extension():
 
 def test_load_image_stack_uses_override_before_detected_metadata(monkeypatch):
     raw = np.arange(16, dtype=np.uint8).reshape(1, 4, 4)
-    detected = VoxelSize(x_um=9.0, y_um=9.0, z_um=9.0)
+    from morphostack.core.rbc_models import CalibrationAssessment, CalibrationAxis
+
+    detected = CalibrationAssessment(
+        x=CalibrationAxis(9.0, "metadata", True),
+        y=CalibrationAxis(9.0, "metadata", True),
+        z=CalibrationAxis(9.0, "metadata", True),
+        source_format="tiff",
+    )
     override = VoxelSize(x_um=0.1, y_um=0.2, z_um=0.3)
 
-    monkeypatch.setattr(io, "read_tiff", lambda _: (raw, detected))
+    monkeypatch.setattr(io, "read_tiff_axes", lambda path, source_format=None: (raw, detected))
     loaded = load_image_stack("sample.tif", voxel_override=override)
 
     assert loaded.source_path == Path("sample.tif")
     assert loaded.voxel_size == override
     assert loaded.voxel_source == "override"
+    assert loaded.calibration.all_axes_from_override
     assert loaded.grayscale.shape == (1, 4, 4)
     assert loaded.color.shape == (1, 4, 4, 3)
 
@@ -49,7 +57,7 @@ def test_load_image_stack_skips_full_color_by_default(monkeypatch):
     """Default include_color=False avoids tripling RAM; shape still reports RGB."""
     # Use width != 3/4 so grayscale loader does not treat last axis as RGB/RGBA.
     raw = np.arange(2 * 8 * 8, dtype=np.uint8).reshape(2, 8, 8)
-    monkeypatch.setattr(io, "read_tiff", lambda _: (raw, None))
+    monkeypatch.setattr(io, "read_tiff_axes", lambda path, source_format=None: (raw, None))
 
     loaded = load_image_stack("sample.tif")
     assert loaded.grayscale.shape == (2, 8, 8)
@@ -67,34 +75,44 @@ def test_load_image_stack_skips_full_color_by_default(monkeypatch):
 
 def test_load_image_stack_uses_default_voxel_when_metadata_missing(monkeypatch):
     raw = np.arange(16, dtype=np.uint8).reshape(1, 4, 4)
-    monkeypatch.setattr(io, "read_tiff", lambda _: (raw, None))
+    monkeypatch.setattr(io, "read_tiff_axes", lambda path, source_format=None: (raw, None))
 
     loaded = load_image_stack("sample.tiff")
 
     assert loaded.voxel_size == io.DEFAULT_VOXEL_SIZE
     assert loaded.voxel_source == "default"
+    assert not loaded.calibration.all_axes_verified
 
 
 def test_load_image_stack_reads_lsm_as_tiff_like(monkeypatch):
     raw = np.arange(16, dtype=np.uint8).reshape(1, 4, 4)
-    monkeypatch.setattr(io, "read_tiff", lambda _: (raw, None))
+    monkeypatch.setattr(io, "read_tiff_axes", lambda path, source_format=None: (raw, None))
 
     loaded = load_image_stack("sample.lsm")
 
     assert loaded.source_path == Path("sample.lsm")
     assert loaded.grayscale.shape == (1, 4, 4)
     assert loaded.voxel_source == "default"
+    assert loaded.calibration.source_format == "lsm"
 
 
 def test_load_image_stack_records_metadata_voxel_source(monkeypatch):
     raw = np.arange(16, dtype=np.uint8).reshape(1, 4, 4)
-    detected = VoxelSize(x_um=0.5, y_um=0.5, z_um=2.0)
-    monkeypatch.setattr(io, "read_tiff", lambda _: (raw, detected))
+    from morphostack.core.rbc_models import CalibrationAssessment, CalibrationAxis
+
+    detected = CalibrationAssessment(
+        x=CalibrationAxis(0.5, "metadata", True),
+        y=CalibrationAxis(0.5, "metadata", True),
+        z=CalibrationAxis(2.0, "metadata", True),
+        source_format="tiff",
+    )
+    monkeypatch.setattr(io, "read_tiff_axes", lambda path, source_format=None: (raw, detected))
 
     loaded = load_image_stack("sample.tif")
 
-    assert loaded.voxel_size == detected
+    assert loaded.voxel_size == VoxelSize(x_um=0.5, y_um=0.5, z_um=2.0)
     assert loaded.voxel_source == "metadata"
+    assert loaded.calibration.all_axes_verified
 
 
 def test_file_sha256_hashes_file_bytes(tmp_path):
@@ -257,10 +275,21 @@ def test_inspect_image_stack_tiff(tmp_path, monkeypatch):
 
     import sys
     from types import ModuleType
+    from morphostack.core.rbc_models import CalibrationAssessment, CalibrationAxis
+
     mock_tiff = ModuleType("tifffile")
     mock_tiff.TiffFile = MockTiffFile
     monkeypatch.setitem(sys.modules, "tifffile", mock_tiff)
-    monkeypatch.setattr(io, "voxel_from_tiff", lambda _: VoxelSize(x_um=0.5, y_um=0.5, z_um=2.0))
+    monkeypatch.setattr(
+        io,
+        "calibration_from_tiff",
+        lambda tif, source_format="tiff": CalibrationAssessment(
+            x=CalibrationAxis(0.5, "metadata", True),
+            y=CalibrationAxis(0.5, "metadata", True),
+            z=CalibrationAxis(2.0, "metadata", True),
+            source_format=source_format,
+        ),
+    )
 
     info = io.inspect_image_stack(tiff_file)
     assert info["source_path"] == tiff_file
@@ -268,6 +297,7 @@ def test_inspect_image_stack_tiff(tmp_path, monkeypatch):
     assert info["color_shape"] == (5, 60, 60, 3)
     assert info["voxel_size"] == VoxelSize(0.5, 0.5, 2.0)
     assert info["voxel_source"] == "metadata"
+    assert info["calibration"].all_axes_verified
 
 
 def test_parse_czi_xml_metadata():
@@ -335,6 +365,11 @@ def test_tiff_resolution_unit_cm_scales_to_micrometers():
     )
     voxel = io.voxel_from_tiff(tif)
     assert voxel == VoxelSize(x_um=5000.0, y_um=5000.0, z_um=1.0)
+    axes = io.calibration_from_tiff(tif)
+    assert axes is not None
+    assert axes.x.verified and axes.y.verified
+    assert not axes.z.verified
+    assert axes.z.source == "placeholder"
 
 
 def test_tiff_resolution_unit_inch_scales_to_micrometers():

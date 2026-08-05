@@ -70,6 +70,7 @@ from morphostack.core.preview import (
     with_global_frame_index,
 )
 from morphostack.core.segmentation import apply_rect_roi, apply_z_range
+from morphostack.core.rbc_models import RbcInputRefused
 
 
 _PREVIEW_IMAGE_MAX_ENTRIES = 32
@@ -77,6 +78,21 @@ _PREVIEW_IMAGE_MAX_BYTES = 128 * 1024 * 1024
 _preview_image_lock = Lock()
 _preview_images: OrderedDict[str, bytes] = OrderedDict()
 _preview_image_total_bytes = 0
+
+
+def _rbc_context_kwargs(stack: ImageStack) -> dict[str, object]:
+    """Pass path and per-axis calibration into analyze_stack for RBC gates."""
+
+    return {
+        "source_path": stack.source_path,
+        "calibration": stack.calibration,
+    }
+
+
+def _http_for_exception(exc: Exception) -> HTTPException:
+    if isinstance(exc, RbcInputRefused):
+        return HTTPException(status_code=422, detail=exc.decision.to_dict())
+    return HTTPException(status_code=400, detail=str(exc))
 
 # Display-plane VolumeSource for provisional path-based previews (packet 10).
 # Exact analysis / full resolve_stack path remains the science reference.
@@ -475,7 +491,7 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
 
             if isinstance(exc, ActiveBuildLimitError):
                 raise HTTPException(status_code=429, detail=str(exc)) from exc
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise _http_for_exception(exc) from exc
 
     @app.post("/display-pyramid/status")
     def display_pyramid_status(request: DisplayPyramidStatusRequest) -> dict[str, object]:
@@ -535,7 +551,7 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
             payload["storage_decision"] = storage_decision_record()
             return payload
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise _http_for_exception(exc) from exc
 
     @app.post("/display-pyramid/level")
     def display_pyramid_level(request: DisplayPyramidLevelRequest) -> dict[str, object]:
@@ -583,7 +599,7 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise _http_for_exception(exc) from exc
 
     @app.post("/tracking/jobs/start")
     def tracking_job_start(request: TrackingJobStartRequest) -> dict[str, object]:
@@ -658,9 +674,9 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
             payload["process_local"] = True
             return payload
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise _http_for_exception(exc) from exc
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise _http_for_exception(exc) from exc
 
     @app.get("/tracking/jobs/{job_id}")
     def tracking_job_status(job_id: str) -> dict[str, object]:
@@ -695,7 +711,7 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise _http_for_exception(exc) from exc
         payload = snap.to_json_dict()
         payload["process_local"] = True
         return payload
@@ -907,23 +923,25 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
                 "process_local": True,
             }
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise _http_for_exception(exc) from exc
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise _http_for_exception(exc) from exc
 
     @app.post("/inspect")
     def inspect_stack(request: InspectRequest) -> dict[str, object]:
         try:
             info = inspect_image_stack(request.path, voxel_override=to_voxel_size(request.voxel))
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise _http_for_exception(exc) from exc
 
+        calibration = info.get("calibration")
         return {
             "source_path": str(info["source_path"]),
             "grayscale_shape": list(info["grayscale_shape"]),
             "color_shape": list(info["color_shape"]),
             "voxel_size": voxel_payload(info["voxel_size"]),
             "voxel_source": info["voxel_source"],
+            "calibration": calibration.to_dict() if calibration is not None else None,
         }
 
     @app.post("/analyze")
@@ -957,9 +975,12 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
                 skeleton_prune_pix=request.skeleton_prune_pix,
                 competitive_tracking=bool(request.competitive_tracking),
                 multiscale_consensus=bool(request.multiscale_consensus),
+                **_rbc_context_kwargs(stack),
             )
+        except RbcInputRefused as exc:
+            raise _http_for_exception(exc) from exc
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise _http_for_exception(exc) from exc
 
         mesh = None
         if analysis.mesh:
@@ -1032,7 +1053,7 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
                 **sample_kwargs,  # type: ignore[arg-type]
             )
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise _http_for_exception(exc) from exc
 
         return threshold_payload_from_report(meta)
 
@@ -1465,7 +1486,7 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
                 )
                 preview_image = with_global_frame_index(preview_image, request.frame_index)
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise _http_for_exception(exc) from exc
 
         payload = preview_payload(
             str(stack.source_path),
@@ -1534,6 +1555,7 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
                 object_seed=seed,
                 excluded_frames=request.excluded_frames,
                 active_surfaces_fast=True,
+                **_rbc_context_kwargs(stack),
             )
             filtered = apply_preview_filters(stack.grayscale, roi, z_range)
             geometry = contour_stack_mesh_geometry(
@@ -1550,7 +1572,7 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
                     else "Mesh preview produced no geometry. Check threshold, seed, and ROI."
                 )
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise _http_for_exception(exc) from exc
 
         return mesh_preview_payload(str(stack.source_path), geometry, downsample=request.downsample)
 
@@ -1577,6 +1599,7 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
                 object_seed=seed,
                 excluded_frames=request.excluded_frames,
                 active_surfaces_fast=True,
+                **_rbc_context_kwargs(stack),
             )
             filtered = apply_preview_filters(stack.grayscale, roi, z_range)
             # Full export defaults to complete scientific geometry (no face-stride,
@@ -1596,7 +1619,7 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
                 )
             export_format = write_mesh_file(geometry, request.destination)
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise _http_for_exception(exc) from exc
 
         return {
             "source_path": str(stack.source_path),
@@ -1632,6 +1655,7 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
                 include_mesh=False,
                 object_seed=to_object_seed(request.object_seed),
                 excluded_frames=request.excluded_frames,
+                **_rbc_context_kwargs(stack),
             )
             filtered = apply_preview_filters(stack.grayscale, roi, z_range)
             write_mask_stack_tiff(
@@ -1640,7 +1664,7 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
                 destination=request.destination,
             )
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise _http_for_exception(exc) from exc
 
         return {
             "source_path": str(stack.source_path),
@@ -1672,7 +1696,7 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
                 voxel_source=stack.voxel_source,
             )
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise _http_for_exception(exc) from exc
 
         return sweep_payload(
             source_path=str(stack.source_path),
@@ -1864,9 +1888,10 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
                 excluded_frames=parse_excluded_frames_text(excluded_frames),
                 enable_skeleton=enable_skeleton,
                 skeleton_prune_pix=skeleton_prune_pix,
+                **_rbc_context_kwargs(stack),
             )
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise _http_for_exception(exc) from exc
         finally:
             temp_path.unlink(missing_ok=True)
 
@@ -2275,7 +2300,7 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
                 )
                 preview_image = with_global_frame_index(preview_image, frame_index)
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise _http_for_exception(exc) from exc
         finally:
             if temp_path is not None:
                 temp_path.unlink(missing_ok=True)
@@ -2357,6 +2382,7 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
                 include_mesh=False,
                 object_seed=seed,
                 active_surfaces_fast=True,
+                **_rbc_context_kwargs(stack),
             )
             filtered = apply_preview_filters(stack.grayscale, roi, z_range)
             geometry = contour_stack_mesh_geometry(
@@ -2373,7 +2399,7 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
                     else "Mesh preview produced no geometry. Check threshold, seed, and ROI."
                 )
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise _http_for_exception(exc) from exc
         finally:
             temp_path.unlink(missing_ok=True)
 
@@ -2404,7 +2430,7 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
             roi = roi_from_optional_bounds(roi_xmin, roi_xmax, roi_ymin, roi_ymax)
             z_range = z_range_from_optional_bounds(z_min, z_max)
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise _http_for_exception(exc) from exc
 
         rows: list[dict[str, object]] = []
         for file in files:
@@ -2426,6 +2452,7 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
                     profile=profile,
                     prefer_opencv=prefer_opencv,
                     include_mesh=include_mesh,
+                    **_rbc_context_kwargs(stack),
                 )
                 rows.append(
                     analysis_summary_row(
@@ -2471,7 +2498,7 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
                 key_column=key_column,
             )
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise _http_for_exception(exc) from exc
         finally:
             expected_path.unlink(missing_ok=True)
             actual_path.unlink(missing_ok=True)
@@ -2529,7 +2556,7 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
                 ),
             )
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise _http_for_exception(exc) from exc
         finally:
             temp_path.unlink(missing_ok=True)
 
@@ -2574,7 +2601,7 @@ def create_app(*, static_dir: Path | None = None) -> FastAPI:
                 voxel_source=stack.voxel_source,
             )
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise _http_for_exception(exc) from exc
         finally:
             temp_path.unlink(missing_ok=True)
 
@@ -3286,7 +3313,7 @@ def validate_scientific_mesh_input(obj: object, *, context: str = "mesh measurem
                 role=getattr(obj, "role", None),
             )
     except ResultAuthorityError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_for_exception(exc) from exc
 
 
 def mesh_preview_payload(source_path: str, geometry: MeshGeometry | None, *, downsample: int) -> dict[str, object]:

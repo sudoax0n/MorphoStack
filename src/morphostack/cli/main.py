@@ -15,6 +15,7 @@ from pathlib import Path
 
 from morphostack import __version__
 from morphostack.cli.system_info import collect_diagnostics, format_diagnostics
+from morphostack.core.rbc_models import RbcInputRefused
 from morphostack.core import (
     PROFILE_CHOICES,
     ProjectSettings,
@@ -802,6 +803,8 @@ def run_analyze(
             include_mesh=resolved_mesh,
             object_seed=object_seed,
             excluded_frames=exclude_frames,
+            source_path=stack.source_path,
+            calibration=stack.calibration,
         )
         warnings = analysis_run_warnings(analysis, voxel_source=stack.voxel_source)
         summary = analysis_summary(analysis)
@@ -903,6 +906,13 @@ def run_analyze(
                 voxel_source=stack.voxel_source,
                 object_seed=object_seed,
             )
+    except RbcInputRefused as exc:
+        print(f"RBC analysis refused: {exc.decision.guidance}")
+        if exc.decision.primary_code is not None:
+            print(f"Code: {exc.decision.primary_code.value}")
+        for code in exc.decision.reasons:
+            print(f"Reason: {code.value}")
+        return 2
     except Exception as exc:
         print(f"Failed to analyze image stack: {exc}")
         return 1
@@ -1048,6 +1058,8 @@ def run_sweep(
             prefer_opencv=resolved_prefer_opencv,
             include_mesh=resolved_mesh,
             voxel_source=stack.voxel_source,
+            source_path=stack.source_path,
+            calibration=stack.calibration,
         )
         output_path = Path(out)
         output_path.parent.mkdir(parents=True, exist_ok=True)

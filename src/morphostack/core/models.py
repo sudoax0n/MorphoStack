@@ -51,6 +51,8 @@ class ImageStack:
     color: np.ndarray
     voxel_size: VoxelSize
     voxel_source: str = "unknown"
+    # Optional per-axis provenance (Phase 1 RBC gates). Legacy callers may omit it.
+    calibration: Any = None
 
     def __post_init__(self) -> None:
         if self.grayscale.ndim != 3:

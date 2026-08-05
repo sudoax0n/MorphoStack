@@ -57,6 +57,9 @@ def test_analyze_stack_uses_scalar_threshold_for_all_frames():
 
 
 def test_analyze_stack_accepts_rbc_profile():
+    from morphostack.core.pipeline import ObjectSeed
+    from morphostack.core.rbc_capabilities import calibration_from_override
+
     stack = np.zeros((1, 8, 8), dtype=np.uint8)
     stack[0, 2:5, 1:4] = 200
 
@@ -66,6 +69,9 @@ def test_analyze_stack_accepts_rbc_profile():
         voxel_size=VoxelSize(1.0, 1.0, 1.0),
         profile="rbc",
         prefer_opencv=False,
+        object_seed=ObjectSeed(x=2.5, y=3.5, frame_index=0, radius=3.0),
+        source_path="cell.tif",
+        calibration=calibration_from_override(1.0, 1.0, 1.0, source_format="tiff"),
     )
 
     assert result.profile == "rbc"

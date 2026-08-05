@@ -12,9 +12,72 @@ import numpy as np
 
 from morphostack.core.images import as_color_stack, as_grayscale_stack, color_stub_for_grayscale
 from morphostack.core.models import ImageStack, VoxelSize
+from morphostack.core.rbc_models import CalibrationAssessment, CalibrationAxis
 
 SUPPORTED_EXTENSIONS = {".tif", ".tiff", ".lsm", ".czi"}
 DEFAULT_VOXEL_SIZE = VoxelSize(x_um=1.0, y_um=1.0, z_um=1.0)
+
+
+def _source_format_for_path(file_path: Path) -> str:
+    suffix = file_path.suffix.lower()
+    name = file_path.name.lower()
+    if name.endswith(".ome.tif") or name.endswith(".ome.tiff"):
+        return "ome-tiff"
+    if suffix == ".lsm":
+        return "lsm"
+    if suffix in {".tif", ".tiff"}:
+        return "tiff"
+    if suffix == ".czi":
+        return "czi"
+    return suffix.lstrip(".") or "unknown"
+
+
+def _effective_voxel_from_axes(
+    x: CalibrationAxis,
+    y: CalibrationAxis,
+    z: CalibrationAxis,
+) -> VoxelSize:
+    """Legacy VoxelSize: keep positive placeholders for display/compat paths."""
+
+    return VoxelSize(
+        x_um=float(x.value_um) if x.value_um is not None else DEFAULT_VOXEL_SIZE.x_um,
+        y_um=float(y.value_um) if y.value_um is not None else DEFAULT_VOXEL_SIZE.y_um,
+        z_um=float(z.value_um) if z.value_um is not None else DEFAULT_VOXEL_SIZE.z_um,
+    )
+
+
+def _override_calibration(voxel: VoxelSize, *, source_format: str) -> CalibrationAssessment:
+    return CalibrationAssessment(
+        x=CalibrationAxis(float(voxel.x_um), "override", True),
+        y=CalibrationAxis(float(voxel.y_um), "override", True),
+        z=CalibrationAxis(float(voxel.z_um), "override", True),
+        source_format=source_format,
+    )
+
+
+def _default_calibration(*, source_format: str) -> CalibrationAssessment:
+    return CalibrationAssessment(
+        x=CalibrationAxis(DEFAULT_VOXEL_SIZE.x_um, "default", False),
+        y=CalibrationAxis(DEFAULT_VOXEL_SIZE.y_um, "default", False),
+        z=CalibrationAxis(DEFAULT_VOXEL_SIZE.z_um, "default", False),
+        source_format=source_format,
+    )
+
+
+def _resolve_voxel_and_calibration(
+    detected: CalibrationAssessment | None,
+    voxel_override: VoxelSize | None,
+    *,
+    source_format: str,
+) -> tuple[VoxelSize, str, CalibrationAssessment]:
+    if voxel_override is not None:
+        calibration = _override_calibration(voxel_override, source_format=source_format)
+        return voxel_override, "override", calibration
+    if detected is not None:
+        voxel = _effective_voxel_from_axes(detected.x, detected.y, detected.z)
+        return voxel, "metadata", detected
+    calibration = _default_calibration(source_format=source_format)
+    return DEFAULT_VOXEL_SIZE, "default", calibration
 
 
 def load_image_stack(
@@ -36,20 +99,17 @@ def load_image_stack(
         supported = ", ".join(sorted(SUPPORTED_EXTENSIONS))
         raise ValueError(f"Unsupported image format {ext!r}; expected one of {supported}")
 
+    source_format = _source_format_for_path(file_path)
     if ext in {".tif", ".tiff", ".lsm"}:
-        raw, detected = read_tiff(file_path)
+        raw, detected_axes = read_tiff_axes(file_path, source_format=source_format)
     else:
-        raw, detected = read_czi(file_path)
+        raw, detected_axes = read_czi_axes(file_path, source_format=source_format)
 
-    if voxel_override is not None:
-        voxel = voxel_override
-        voxel_source = "override"
-    elif detected is not None:
-        voxel = detected
-        voxel_source = "metadata"
-    else:
-        voxel = DEFAULT_VOXEL_SIZE
-        voxel_source = "default"
+    voxel, voxel_source, calibration = _resolve_voxel_and_calibration(
+        detected_axes,
+        voxel_override,
+        source_format=source_format,
+    )
     grayscale = as_grayscale_stack(raw)
     if include_color:
         color = as_color_stack(raw)
@@ -61,6 +121,7 @@ def load_image_stack(
         color=color,
         voxel_size=voxel,
         voxel_source=voxel_source,
+        calibration=calibration,
     )
 
 
@@ -75,28 +136,51 @@ def file_sha256(path: str | Path, *, chunk_size: int = 1024 * 1024) -> str:
 
 
 def read_tiff(path: Path) -> tuple[np.ndarray, VoxelSize | None]:
+    image, axes = read_tiff_axes(path, source_format=_source_format_for_path(path))
+    if axes is None:
+        return image, None
+    return image, _effective_voxel_from_axes(axes.x, axes.y, axes.z)
+
+
+def read_tiff_axes(
+    path: Path,
+    *,
+    source_format: str | None = None,
+) -> tuple[np.ndarray, CalibrationAssessment | None]:
     try:
         import tifffile
     except Exception as exc:  # pragma: no cover - dependency-specific branch
         raise RuntimeError("tifffile is required to load TIFF files") from exc
 
+    fmt = source_format or _source_format_for_path(path)
     with tifffile.TiffFile(path) as tif:
         image = tif.asarray()
-        voxel = voxel_from_tiff(tif)
-    return image, voxel
+        axes = calibration_from_tiff(tif, source_format=fmt)
+    return image, axes
 
 
 def read_czi(path: Path) -> tuple[np.ndarray, VoxelSize | None]:
+    image, axes = read_czi_axes(path, source_format=_source_format_for_path(path))
+    if axes is None:
+        return image, None
+    return image, _effective_voxel_from_axes(axes.x, axes.y, axes.z)
+
+
+def read_czi_axes(
+    path: Path,
+    *,
+    source_format: str | None = None,
+) -> tuple[np.ndarray, CalibrationAssessment | None]:
     try:
         import czifile
     except Exception as exc:  # pragma: no cover - dependency-specific branch
         raise RuntimeError("czifile is required to load CZI files") from exc
 
+    fmt = source_format or _source_format_for_path(path)
     with czifile.CziFile(path) as czi:
         image = czi.asarray()
-        voxel = voxel_from_czi_metadata(czi.metadata())
-    return image, voxel
-
+        axes = calibration_from_czi_metadata(czi.metadata(), source_format=fmt)
+    return image, axes
 
 def resolution_unit_um_scale(tag: Any) -> float | None:
     """TIFF ResolutionUnit → micrometres per resolution unit.
@@ -119,7 +203,9 @@ def resolution_unit_um_scale(tag: Any) -> float | None:
     return None
 
 
-def voxel_from_tiff(tif: Any) -> VoxelSize | None:
+def calibration_from_tiff(tif: Any, *, source_format: str = "tiff") -> CalibrationAssessment | None:
+    """Parse TIFF tags into per-axis calibration; None if no axis metadata found."""
+
     if not getattr(tif, "pages", None):
         return None
 
@@ -130,20 +216,43 @@ def voxel_from_tiff(tif: Any) -> VoxelSize | None:
     y_um = resolution_tag_to_um(tags.get("YResolution"), unit_um_per_res_unit=unit_scale)
     z_um = image_description_spacing_um(tags.get("ImageDescription"))
 
+    x_source = "metadata" if x_um is not None else None
+    y_source = "metadata" if y_um is not None else None
     # Mirror single XY axis like CZI / Fiji / Bio-Formats (do not invent 1.0 µm).
     if x_um is not None and y_um is None:
         y_um = x_um
+        y_source = "mirrored"
     elif y_um is not None and x_um is None:
         x_um = y_um
+        x_source = "mirrored"
 
     if x_um is None and y_um is None and z_um is None:
         return None
 
-    return VoxelSize(
-        x_um=x_um or DEFAULT_VOXEL_SIZE.x_um,
-        y_um=y_um or DEFAULT_VOXEL_SIZE.y_um,
-        z_um=z_um or DEFAULT_VOXEL_SIZE.z_um,
+    # Placeholder-filled axes keep legacy VoxelSize display values but stay unverified.
+    x_axis = (
+        CalibrationAxis(float(x_um), x_source, True)
+        if x_um is not None and x_source is not None
+        else CalibrationAxis(DEFAULT_VOXEL_SIZE.x_um, "placeholder", False)
     )
+    y_axis = (
+        CalibrationAxis(float(y_um), y_source, True)
+        if y_um is not None and y_source is not None
+        else CalibrationAxis(DEFAULT_VOXEL_SIZE.y_um, "placeholder", False)
+    )
+    z_axis = (
+        CalibrationAxis(float(z_um), "metadata", True)
+        if z_um is not None
+        else CalibrationAxis(DEFAULT_VOXEL_SIZE.z_um, "placeholder", False)
+    )
+    return CalibrationAssessment(x=x_axis, y=y_axis, z=z_axis, source_format=source_format)
+
+
+def voxel_from_tiff(tif: Any) -> VoxelSize | None:
+    axes = calibration_from_tiff(tif)
+    if axes is None:
+        return None
+    return _effective_voxel_from_axes(axes.x, axes.y, axes.z)
 
 
 def parse_czi_xml_metadata(metadata_str: str) -> dict[str, float]:
@@ -189,9 +298,13 @@ def parse_czi_xml_metadata(metadata_str: str) -> dict[str, float]:
     return result
 
 
-def voxel_from_czi_metadata(metadata: Any) -> VoxelSize | None:
+def calibration_from_czi_metadata(
+    metadata: Any,
+    *,
+    source_format: str = "czi",
+) -> CalibrationAssessment | None:
     text = str(metadata)
-    
+
     # Try XML parsing first
     parsed_voxels = parse_czi_xml_metadata(text)
     x = parsed_voxels.get("X")
@@ -214,11 +327,15 @@ def voxel_from_czi_metadata(metadata: Any) -> VoxelSize | None:
     if z is None:
         z = find_metadata_number(text, "ScalingZ")
 
+    x_source = "metadata" if x is not None else None
+    y_source = "metadata" if y is not None else None
     # If only one of X or Y is found, mirror the other (mirroring Fiji/Bio-Formats)
     if x is not None and y is None:
         y = x
+        y_source = "mirrored"
     elif y is not None and x is None:
         x = y
+        x_source = "mirrored"
 
     x_um = metadata_value_to_um(x)
     y_um = metadata_value_to_um(y)
@@ -227,11 +344,29 @@ def voxel_from_czi_metadata(metadata: Any) -> VoxelSize | None:
     if x_um is None and y_um is None and z_um is None:
         return None
 
-    return VoxelSize(
-        x_um=x_um or DEFAULT_VOXEL_SIZE.x_um,
-        y_um=y_um or DEFAULT_VOXEL_SIZE.y_um,
-        z_um=z_um or DEFAULT_VOXEL_SIZE.z_um,
+    x_axis = (
+        CalibrationAxis(float(x_um), x_source or "metadata", True)
+        if x_um is not None
+        else CalibrationAxis(DEFAULT_VOXEL_SIZE.x_um, "placeholder", False)
     )
+    y_axis = (
+        CalibrationAxis(float(y_um), y_source or "metadata", True)
+        if y_um is not None
+        else CalibrationAxis(DEFAULT_VOXEL_SIZE.y_um, "placeholder", False)
+    )
+    z_axis = (
+        CalibrationAxis(float(z_um), "metadata", True)
+        if z_um is not None
+        else CalibrationAxis(DEFAULT_VOXEL_SIZE.z_um, "placeholder", False)
+    )
+    return CalibrationAssessment(x=x_axis, y=y_axis, z=z_axis, source_format=source_format)
+
+
+def voxel_from_czi_metadata(metadata: Any) -> VoxelSize | None:
+    axes = calibration_from_czi_metadata(metadata)
+    if axes is None:
+        return None
+    return _effective_voxel_from_axes(axes.x, axes.y, axes.z)
 
 
 def find_czi_distance(text: str, dimension: str) -> float | None:
@@ -418,6 +553,7 @@ def inspect_image_stack(
         supported = ", ".join(sorted(SUPPORTED_EXTENSIONS))
         raise ValueError(f"Unsupported image format {ext!r}; expected one of {supported}")
 
+    source_format = _source_format_for_path(file_path)
     if ext in {".tif", ".tiff", ".lsm"}:
         try:
             import tifffile
@@ -425,7 +561,7 @@ def inspect_image_stack(
             raise RuntimeError("tifffile is required to load TIFF files") from exc
 
         with tifffile.TiffFile(file_path) as tif:
-            detected = voxel_from_tiff(tif)
+            detected_axes = calibration_from_tiff(tif, source_format=source_format)
             if tif.series:
                 raw_shape = tif.series[0].shape
             elif tif.pages:
@@ -441,18 +577,14 @@ def inspect_image_stack(
             raise RuntimeError("czifile is required to load CZI files") from exc
 
         with czifile.CziFile(file_path) as czi:
-            detected = voxel_from_czi_metadata(czi.metadata())
+            detected_axes = calibration_from_czi_metadata(czi.metadata(), source_format=source_format)
             raw_shape = czi.shape
 
-    if voxel_override is not None:
-        voxel = voxel_override
-        voxel_source = "override"
-    elif detected is not None:
-        voxel = detected
-        voxel_source = "metadata"
-    else:
-        voxel = DEFAULT_VOXEL_SIZE
-        voxel_source = "default"
+    voxel, voxel_source, calibration = _resolve_voxel_and_calibration(
+        detected_axes,
+        voxel_override,
+        source_format=source_format,
+    )
 
     g_shape, c_shape = standardize_shapes(raw_shape)
     return {
@@ -461,5 +593,6 @@ def inspect_image_stack(
         "color_shape": c_shape,
         "voxel_size": voxel,
         "voxel_source": voxel_source,
+        "calibration": calibration,
     }
 

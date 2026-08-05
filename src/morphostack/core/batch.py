@@ -382,6 +382,8 @@ def process_batch_stack_job(job: BatchStackJob) -> BatchStackResult:
             profile=job.profile,
             prefer_opencv=bool(job.prefer_opencv),
             include_mesh=bool(job.include_mesh),
+            source_path=stack.source_path,
+            calibration=stack.calibration,
         )
         row = analysis_summary_row(
             analysis,

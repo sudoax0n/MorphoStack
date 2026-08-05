@@ -65,6 +65,9 @@ def threshold_sweep(
     prefer_opencv: bool = True,
     include_mesh: bool = False,
     voxel_source: str = "unknown",
+    object_seed=None,
+    source_path=None,
+    calibration=None,
 ) -> tuple[ThresholdSweepResult, ...]:
     if not thresholds:
         raise ValueError("threshold sweep requires at least one threshold")
@@ -80,6 +83,9 @@ def threshold_sweep(
             profile=profile,
             prefer_opencv=prefer_opencv,
             include_mesh=include_mesh,
+            object_seed=object_seed,
+            source_path=source_path,
+            calibration=calibration,
         )
         results.append(
             ThresholdSweepResult(

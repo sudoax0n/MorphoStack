@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Sequence, Any
 
 import numpy as np
@@ -19,6 +20,8 @@ from morphostack.core.models import (
     accept_segmentation_candidate,
 )
 from morphostack.core.profiles import AnalysisProfile, DEFAULT_PROFILE, normalize_profile
+from morphostack.core.rbc_capabilities import evaluate_rbc_input, unverified_calibration_from_values
+from morphostack.core.rbc_models import CalibrationAssessment, RbcInputRefused
 from morphostack.core.segmentation import apply_rect_roi, apply_z_range
 
 
@@ -829,6 +832,8 @@ def analyze_stack(
     skeleton_prune_pix: float = 1.0,
     competitive_tracking: bool = False,
     multiscale_consensus: bool = False,
+    source_path: Path | str | None = None,
+    calibration: CalibrationAssessment | None = None,
 ) -> StackAnalysis:
     """Analyze a grayscale Z-stack.
 
@@ -839,10 +844,34 @@ def analyze_stack(
     ``active_surfaces_fast`` selects reduced relaxation/optimization steps
     (mesh preview). Full Analyze keeps the quality defaults unless step
     overrides are provided.
+
+    For ``profile="rbc"``, selection and calibration are evaluated before
+    segmentation via the shared RBC input gate. Pass ``source_path`` and
+    ``calibration`` from the loaded stack; missing calibration fails closed.
     """
     analysis_profile = normalize_profile(profile)
     if competitive_tracking and multiscale_consensus:
         raise ValueError("competitive and multi-scale consensus modes are mutually exclusive")
+
+    if analysis_profile == "rbc":
+        cal = calibration
+        if cal is None:
+            cal = unverified_calibration_from_values(
+                float(voxel_size.x_um),
+                float(voxel_size.y_um),
+                float(voxel_size.z_um),
+                source_format="unknown",
+                source="unknown",
+            )
+        path = Path(source_path) if source_path is not None else Path("synthetic.tif")
+        decision = evaluate_rbc_input(
+            source_path=path,
+            calibration=cal,
+            object_seed=object_seed,
+        )
+        if not decision.allowed:
+            raise RbcInputRefused(decision)
+
     arr = np.asarray(stack)
     if arr.ndim != 3:
         raise ValueError("analyze_stack expects a grayscale stack shaped as (z, y, x)")
